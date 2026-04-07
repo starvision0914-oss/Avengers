@@ -163,6 +163,31 @@ class GmarketSummaryView(views.APIView):
         total_usage = 0
         total_balance = 0
 
+        # 광고상태, AI, 등급 미리 조회
+        cpc_status_map = {}
+        for s in GmarketCpcAdStatus.objects.all():
+            cpc_status_map[s.gmarket_id] = {
+                'cpc1_on': s.cpc1_on, 'cpc1_off': s.cpc1_off,
+                'cpc2_on': s.cpc2_on, 'cpc2_off': s.cpc2_off,
+            }
+        ai_map = {}
+        for a in GmarketAiAdSummary.objects.all():
+            ai_map[a.gmarket_id] = {
+                'actual_status': a.actual_status,
+                'actual_reason': a.actual_reason,
+                'button_status': a.button_status,
+                'start_date': a.start_date,
+            }
+        grade_map = {}
+        for g in GmarketSellerGrade.objects.order_by('-collected_at'):
+            if g.gmarket_id not in grade_map:
+                grade_map[g.gmarket_id] = {
+                    'seller_grade': g.seller_grade,
+                    'max_item_count': g.max_item_count,
+                    'approval_status': g.approval_status,
+                    'contact_expiry': g.contact_expiry,
+                }
+
         for snap in GmarketDepositSnapshot.objects.filter(id__in=latest_ids).order_by('gmarket_id'):
             seller = {
                 'seller_id': snap.gmarket_id,
@@ -173,6 +198,9 @@ class GmarketSummaryView(views.APIView):
                 'ai_spend': snap.ai_usage,
                 'ad_total': snap.total_usage,
                 'collected_at': snap.collected_at.isoformat() if snap.collected_at else '',
+                'cpc_status': cpc_status_map.get(snap.gmarket_id),
+                'ai_status': ai_map.get(snap.gmarket_id),
+                'grade_info': grade_map.get(snap.gmarket_id),
             }
             sellers.append(seller)
             total_cpc += snap.gmarket_cpc

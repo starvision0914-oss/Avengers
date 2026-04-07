@@ -139,11 +139,13 @@ export default function CPCDashboard() {
                 <th className="px-3 py-[7px] text-left text-[#555] font-semibold min-w-[120px]">셀러명</th>
                 {platform === 'gmarket' ? (
                   <>
+                    <th className="px-3 py-[7px] text-center text-[#555] font-semibold">광고상태</th>
                     <th className="px-3 py-[7px] text-right text-[#555] font-semibold">잔액</th>
                     <th className="px-3 py-[7px] text-right text-[#555] font-semibold">CPC</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">AI</th>
+                    <th className="px-3 py-[7px] text-center text-[#555] font-semibold">AI</th>
                     <th className="px-3 py-[7px] text-right text-[#555] font-bold">광고비합</th>
-                    <th className="px-3 py-[7px] text-left text-[#999] font-normal">수집시간</th>
+                    <th className="px-3 py-[7px] text-left text-[#555] font-semibold">등급</th>
+                    <th className="px-3 py-[7px] text-left text-[#999] font-normal">수집</th>
                   </>
                 ) : (
                   <>
@@ -172,10 +174,41 @@ export default function CPCDashboard() {
                   </td>
                   {platform === 'gmarket' ? (
                     <>
+                      {/* 광고상태 */}
+                      <td className="px-3 py-[7px] text-center">
+                        {s.cpc_status ? (
+                          <div className="flex items-center justify-center gap-1 text-[10px]">
+                            <span className="px-1 py-0.5 rounded bg-blue-50 text-blue-700">간편 {s.cpc_status.cpc2_on}<span className="text-green-600">ON</span>/{s.cpc_status.cpc2_off}<span className="text-red-500">OFF</span></span>
+                          </div>
+                        ) : <span className="text-[#ccc] text-[10px]">-</span>}
+                      </td>
                       <td className="px-3 py-[7px] text-right text-[#00a651]">{fmt(s.balance)}</td>
                       <td className={`px-3 py-[7px] text-right ${s.cpc_spend ? 'text-[#1a73e8]' : 'text-[#ccc]'}`}>{fmt(s.cpc_spend)}</td>
-                      <td className={`px-3 py-[7px] text-right ${s.ai_spend ? 'text-[#7c3aed]' : 'text-[#ccc]'}`}>{fmt(s.ai_spend)}</td>
+                      {/* AI 상태 */}
+                      <td className="px-3 py-[7px] text-center">
+                        {s.ai_status ? (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${s.ai_status.actual_status === 'ON' ? 'bg-[#e8f5e9] text-[#00a651]' : 'bg-[#ffeef0] text-[#e04040]'}`}>
+                              {s.ai_status.actual_status}
+                            </span>
+                            {s.ai_status.start_date && <span className="text-[9px] text-[#999]">{s.ai_status.start_date}</span>}
+                          </div>
+                        ) : (
+                          <span className={`text-[10px] ${s.ai_spend ? 'text-[#7c3aed]' : 'text-[#ccc]'}`}>{fmt(s.ai_spend)}</span>
+                        )}
+                      </td>
                       <td className={`px-3 py-[7px] text-right font-bold ${s.ad_total ? 'text-[#1557b0]' : 'text-[#ccc]'}`}>{fmt(s.ad_total)}</td>
+                      {/* 등급 */}
+                      <td className="px-3 py-[7px] text-left text-[10px]">
+                        {s.grade_info ? (
+                          <div>
+                            <span className={`font-semibold ${(s.grade_info.max_item_count || 0) >= 10000 ? 'text-[#e04040]' : 'text-[#333]'}`}>
+                              {s.grade_info.seller_grade}
+                            </span>
+                            <span className="text-[#999] ml-1">({(s.grade_info.max_item_count || 0).toLocaleString()})</span>
+                          </div>
+                        ) : <span className="text-[#ccc]">-</span>}
+                      </td>
                       <td className="px-3 py-[7px] text-left text-[10px] text-[#aaa]">
                         {s.collected_at ? new Date(s.collected_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : ''}
                       </td>
@@ -191,7 +224,7 @@ export default function CPCDashboard() {
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={platform === 'gmarket' ? 7 : 5} className="px-4 py-12 text-center text-[#aaa]">
+                  <td colSpan={platform === 'gmarket' ? 9 : 6} className="px-4 py-12 text-center text-[#aaa]">
                     {date} 수집된 데이터가 없습니다. 수집 버튼을 클릭하세요.
                   </td>
                 </tr>
@@ -204,11 +237,13 @@ export default function CPCDashboard() {
                   <td className="px-3 py-[8px] text-left text-[#333]">합계 ({sellers.length})</td>
                   {platform === 'gmarket' ? (
                     <>
+                      <td className="px-3 py-[8px]"></td>{/* 광고상태 */}
                       <td className="px-3 py-[8px] text-right text-[#00a651]">{fmt(totals.balance)}</td>
                       <td className="px-3 py-[8px] text-right text-[#1a73e8]">{fmt(totals.cpc_spend)}</td>
-                      <td className="px-3 py-[8px] text-right text-[#7c3aed]">{fmt(totals.ai_spend)}</td>
+                      <td className="px-3 py-[8px] text-center text-[#7c3aed]">{fmt(totals.ai_spend)}</td>
                       <td className="px-3 py-[8px] text-right text-[#e04040]">{fmt(totals.ad_total)}</td>
-                      <td className="px-3 py-[8px]"></td>
+                      <td className="px-3 py-[8px]"></td>{/* 등급 */}
+                      <td className="px-3 py-[8px]"></td>{/* 수집 */}
                     </>
                   ) : (
                     <>
