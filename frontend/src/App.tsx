@@ -13,6 +13,7 @@ import ProjectListPage from './pages/Todos/ProjectListPage';
 import ChatPage from './pages/Messaging/ChatPage';
 import EmailPage from './pages/Email/EmailPage';
 import SettingsPage from './pages/Settings/SettingsPage';
+import CrawlerPage from './pages/Crawler/CrawlerPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Navigate to="/login" replace />;
@@ -37,6 +38,7 @@ export default function App() {
           <Route path="messaging" element={<ChatPage />} />
           <Route path="email" element={<EmailPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="crawler" element={<CrawlerPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -48,17 +48,21 @@ class CPCTransaction(models.Model):
 
 
 class CrawlerAccount(models.Model):
+    """크롤러 계정 - fail_count 30 이상이면 차단됨"""
     PLATFORM_CHOICES = [('gmarket', 'Gmarket'), ('11st', '11번가')]
     platform = models.CharField(max_length=20, choices=PLATFORM_CHOICES)
     login_id = models.CharField(max_length=50)
-    password = models.CharField(max_length=255)
+    password_enc = models.TextField(blank=True)
     seller_name = models.CharField(max_length=100, blank=True)
     is_active = models.BooleanField(default=True)
+    is_multi_id = models.BooleanField(default=False)
     fail_count = models.IntegerField(default=0)
     crawling_status = models.CharField(max_length=20, default='정상')
     last_crawled_at = models.DateTimeField(null=True, blank=True)
     cookie_data = models.TextField(blank=True)
     cookie_saved_at = models.DateTimeField(null=True, blank=True)
+    sub_accounts = models.TextField(default='[]', blank=True)
+    gmarket_origin_id = models.CharField(max_length=50, null=True, blank=True)
     display_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
@@ -81,6 +85,10 @@ class CrawlerLog(models.Model):
 class GmarketDepositSnapshot(models.Model):
     gmarket_id = models.CharField(max_length=50)
     total_balance = models.IntegerField(default=0)
+    cash_balance = models.IntegerField(default=0)
+    card_balance = models.IntegerField(default=0)
+    ad_balance = models.IntegerField(default=0)
+    event_balance = models.IntegerField(default=0)
     gmarket_cpc = models.IntegerField(default=0)
     auction_cpc = models.IntegerField(default=0)
     ai_usage = models.IntegerField(default=0)
@@ -100,7 +108,7 @@ class ElevenCostHistory(models.Model):
     balance = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
-        db_table = 'eleven_cost_history'
+        db_table = 'eleven_sellerpoint_history'
         unique_together = [('seller_id', 'transaction_datetime')]
         ordering = ['-transaction_datetime']
 

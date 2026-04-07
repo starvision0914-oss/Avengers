@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, BarChart3, Users, ShoppingCart, CheckSquare, MessageCircle, Mail, Settings, LogOut } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Users, ShoppingCart, CheckSquare, MessageCircle, Mail, Settings, LogOut, Bot } from 'lucide-react';
 import { logout } from '../../api/auth';
 
 const navItems = [
@@ -10,6 +10,7 @@ const navItems = [
   { to: '/todos', icon: CheckSquare, label: '할 일' },
   { to: '/messaging', icon: MessageCircle, label: '메시지' },
   { to: '/email', icon: Mail, label: '이메일' },
+  { to: '/crawler', icon: Bot, label: '크롤러' },
   { to: '/settings', icon: Settings, label: '설정' },
 ];
 

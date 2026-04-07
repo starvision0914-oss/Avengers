@@ -25,8 +25,8 @@ XPATHS = {
     'gmarket_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[1]/td[4]/div/strong',
     'auction_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[2]/td[4]/div/strong',
     'ai_usage': '//*[@id="spnGmktBillingMinusAmnt"]',
-    'login_btn': '//*[@id="lnkSellerLogin"]/img',
-    'site_radio': '//*[@id="rdoGMKT"]',
+    'login_btn': '//img[@alt="로그인"]',
+    'site_radio': '//input[@name="rdoSiteSelect" and @value="GMKT"]',
 }
 
 CPC_URL = 'https://ad.esmplus.com/cpc/bidmng/bidmanagement'
@@ -90,22 +90,32 @@ def _full_login(driver, login_id, password):
         pass
 
     try:
-        id_field = driver.find_element(By.ID, 'txtSellerId')
+        id_field = driver.find_element(By.ID, 'SellerId')
         id_field.clear()
         id_field.send_keys(login_id)
 
-        pw_field = driver.find_element(By.ID, 'txtSellerPw')
+        pw_field = driver.find_element(By.ID, 'SellerPassword')
         pw_field.clear()
         pw_field.send_keys(password)
 
         login_btn = driver.find_element(By.XPATH, XPATHS['login_btn'])
         login_btn.click()
 
-        WebDriverWait(driver, 15).until(
-            lambda d: 'signin' not in d.current_url.lower()
-        )
-        time.sleep(2)
-        return True
+        time.sleep(5)
+        url = driver.current_url.lower()
+
+        # 2단계 인증 체크
+        if 'logon' in url and 'signin' in url:
+            logger.warning(f'[{login_id}] 2단계 인증 필요')
+            # 페이지 소스에서 인증 타입 확인
+            page = driver.page_source
+            if '2차 인증' in page or '추가 인증' in page or 'captcha' in page.lower():
+                logger.warning(f'[{login_id}] 2단계 인증/캡차 감지')
+            return False
+
+        if 'logon' not in url and 'signin' not in url:
+            return True
+        return False
     except Exception as e:
         logger.error(f'로그인 실패 [{login_id}]: {e}')
         return False
@@ -123,7 +133,7 @@ def _save_cookies(driver, account):
 
 def collect_one_account(driver, account, log_fn=None):
     login_id = account.login_id
-    password = account.password
+    password = account.password_enc
 
     def log(msg):
         logger.info(f'[{login_id}] {msg}')
@@ -196,6 +206,10 @@ def run_all_accounts(log_fn=None, account_filter=None):
         driver = create_driver()
 
         for account in accounts:
+            if account.crawling_status == '차단됨':
+                if log_fn: log_fn(f'[GM:{account.login_id}] 차단됨 - 건너뜀')
+                continue
+
             for attempt in range(3):
                 try:
                     result = collect_one_account(driver, account, log_fn)
@@ -218,7 +232,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
                 except Exception as e:
                     if attempt == 2:
                         account.fail_count += 1
-                        if account.fail_count >= 5:
+                        if account.fail_count >= 30:
                             account.crawling_status = '차단됨'
                         account.save()
                         failed += 1

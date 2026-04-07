@@ -33,7 +33,7 @@ class CrawlerAccountSerializer(serializers.ModelSerializer):
     class Meta:
         model = CrawlerAccount
         fields = '__all__'
-        extra_kwargs = {'password': {'write_only': True}}
+        extra_kwargs = {'password_enc': {'write_only': True}}
 
 class CrawlerLogSerializer(serializers.ModelSerializer):
     class Meta:

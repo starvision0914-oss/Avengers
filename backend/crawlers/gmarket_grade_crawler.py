@@ -140,9 +140,13 @@ def run_all_accounts(log_fn=None, account_filter=None):
     try:
         driver = create_driver()
         for acct in qs:
+            if acct.crawling_status == '차단됨':
+                if log_fn: log_fn(f'[GM등급:{acct.login_id}] 차단됨 - 건너뜀')
+                continue
+
             try:
                 driver.delete_all_cookies()
-                if _login(driver, acct.login_id, acct.password):
+                if _login(driver, acct.login_id, acct.password_enc):
                     grades = _collect_grades(driver, acct.login_id, log_fn)
                     all_grades.extend(grades)
                 else:

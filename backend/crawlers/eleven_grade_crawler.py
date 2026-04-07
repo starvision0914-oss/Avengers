@@ -1,7 +1,10 @@
 """11번가 셀러 등급 크롤러 - soffice.11st.co.kr"""
+import os
 import re
+import json
 import time
 import logging
+import redis as redis_client
 from django.utils import timezone
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -11,6 +14,34 @@ from .browser import create_driver, create_headless_driver, stop_display
 logger = logging.getLogger('crawler')
 LOGIN_URL = 'https://login.11st.co.kr/auth/front/selleroffice/login.tmall'
 GRADE_URL = 'https://soffice.11st.co.kr/view/5004'
+
+def _wait_for_otp_redis(timeout=60):
+    """Redis에서 SMS OTP 코드 대기"""
+    r = redis_client.Redis(
+        host=os.environ.get('REDIS_HOST', 'localhost'),
+        port=int(os.environ.get('REDIS_PORT', 6379)),
+        db=int(os.environ.get('REDIS_DB', 0)),
+    )
+    channel = os.environ.get('REDIS_CHANNEL', 'sms:new')
+    ps = r.pubsub()
+    ps.subscribe(channel)
+
+    start = time.time()
+    while time.time() - start < timeout:
+        msg = ps.get_message(timeout=1)
+        if msg and msg['type'] == 'message':
+            try:
+                data = json.loads(msg['data'])
+                sms_text = data.get('message', '')
+                match = re.search(r'\[(\d{6})\]', sms_text)
+                if match:
+                    ps.unsubscribe()
+                    return match.group(1)
+            except Exception:
+                pass
+    ps.unsubscribe()
+    return None
+
 
 def _login(driver, login_id, password):
     driver.get(LOGIN_URL)
@@ -23,6 +54,29 @@ def _login(driver, login_id, password):
         driver.find_element(By.CSS_SELECTOR, 'button[type="submit"]').click()
         time.sleep(3)
         if 'otpLoginForm' in driver.current_url:
+            logger.info(f'[11st등급:{login_id}] OTP 인증 필요, Redis 대기...')
+            try:
+                kakao_btn = driver.find_element(By.XPATH, '//*[@id="auth_kakao_otp"]/button')
+                kakao_btn.click()
+                time.sleep(1)
+                try:
+                    alert = driver.switch_to.alert
+                    alert.accept()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            otp_code = _wait_for_otp_redis(timeout=60)
+            if otp_code:
+                otp_input = driver.find_element(By.XPATH, '//*[@id="auth_num_kakao"]')
+                otp_input.send_keys(otp_code)
+                confirm_btn = driver.find_element(By.XPATH, '//*[@id="auth_kakao_otp"]/div/button')
+                confirm_btn.click()
+                time.sleep(3)
+                if 'soffice.11st.co.kr' in driver.current_url:
+                    return True
+            logger.warning(f'[11st등급:{login_id}] OTP 인증 실패')
             return False
         return 'soffice.11st.co.kr' in driver.current_url
     except Exception as e:
@@ -125,9 +179,13 @@ def run_all_accounts(log_fn=None, account_filter=None):
     try:
         driver = create_driver()
         for acct in qs:
+            if acct.crawling_status == '차단됨':
+                if log_fn: log_fn(f'[11st등급:{acct.login_id}] 차단됨 - 건너뜀')
+                continue
+
             try:
                 driver.delete_all_cookies()
-                if _login(driver, acct.login_id, acct.password):
+                if _login(driver, acct.login_id, acct.password_enc):
                     result = _collect_grade(driver, acct.login_id, acct.seller_name, log_fn)
                     if result:
                         results.append(result)
