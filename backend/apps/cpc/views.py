@@ -1,7 +1,8 @@
 from rest_framework import viewsets, views, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from django.db.models import Sum, Count
+from django.db import models
+from django.db.models import Sum, Count, Max
 from django.db.models.functions import TruncDate
 from .models import CPCDailyCost, CPCDeposit, CPCTransaction
 from .serializers import CPCDailyCostSerializer, CPCDepositSerializer, CPCTransactionSerializer
@@ -87,14 +88,34 @@ class CrawlerLogViewSet(viewsets.ReadOnlyModelViewSet):
         return CrawlerLog.objects.all()[:200]
 
 class GmarketSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = GmarketDepositSnapshot.objects.all()
     serializer_class = GmarketDepositSnapshotSerializer
     filterset_fields = ['gmarket_id']
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = GmarketDepositSnapshot.objects.all()
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        if date_from:
+            qs = qs.filter(collected_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(collected_at__date__lte=date_to)
+        return qs
 
 class ElevenCostViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = ElevenCostHistory.objects.all()
     serializer_class = ElevenCostHistorySerializer
     filterset_fields = ['seller_id', 'transaction_type']
+    pagination_class = None
+
+    def get_queryset(self):
+        qs = ElevenCostHistory.objects.all()
+        date_from = self.request.query_params.get('date_from')
+        date_to = self.request.query_params.get('date_to')
+        if date_from:
+            qs = qs.filter(transaction_datetime__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(transaction_datetime__date__lte=date_to)
+        return qs
 
 class GmarketGradeViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketSellerGrade.objects.all()
@@ -105,6 +126,128 @@ class ElevenGradeViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = ElevenSellerGrade.objects.all()
     serializer_class = ElevenGradeSerializer
     filterset_fields = ['eleven_id']
+
+class GmarketSummaryView(views.APIView):
+    """지마켓 광고비 요약 - ai100 /api/cpc/summary/ 호환"""
+    def get(self, request):
+        from datetime import datetime, timedelta
+        import pytz
+        kst = pytz.timezone('Asia/Seoul')
+
+        date_str = request.query_params.get('date')
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+
+        if date_from and date_to:
+            start = kst.localize(datetime.strptime(date_from, '%Y-%m-%d'))
+            end = kst.localize(datetime.strptime(date_to, '%Y-%m-%d') + timedelta(days=1))
+        elif date_str:
+            start = kst.localize(datetime.strptime(date_str, '%Y-%m-%d'))
+            end = start + timedelta(days=1)
+        else:
+            from django.utils import timezone as tz
+            today = tz.localdate()
+            date_str = today.isoformat()
+            start = kst.localize(datetime.combine(today, datetime.min.time()))
+            end = start + timedelta(days=1)
+
+        latest_ids = GmarketDepositSnapshot.objects.filter(
+            collected_at__gte=start, collected_at__lt=end
+        ).values('gmarket_id').annotate(
+            latest_id=Max('id')
+        ).values_list('latest_id', flat=True)
+
+        sellers = []
+        total_cpc = 0
+        total_ai = 0
+        total_usage = 0
+        total_balance = 0
+
+        for snap in GmarketDepositSnapshot.objects.filter(id__in=latest_ids).order_by('gmarket_id'):
+            seller = {
+                'seller_id': snap.gmarket_id,
+                'seller_alias': snap.gmarket_id,
+                'balance': snap.total_balance,
+                'cpc_spend': snap.gmarket_cpc,
+                'auction_cpc': snap.auction_cpc,
+                'ai_spend': snap.ai_usage,
+                'ad_total': snap.total_usage,
+                'collected_at': snap.collected_at.isoformat() if snap.collected_at else '',
+            }
+            sellers.append(seller)
+            total_cpc += snap.gmarket_cpc
+            total_ai += snap.ai_usage
+            total_usage += snap.total_usage
+            total_balance += snap.total_balance
+
+        return Response({
+            'date': date_str or (date_from + '~' + date_to if date_from else ''),
+            'totals': {
+                'cpc_spend': total_cpc,
+                'ai_spend': total_ai,
+                'ad_total': total_usage,
+                'balance': total_balance,
+            },
+            'sellers': sellers,
+        })
+
+class ElevenSummaryView(views.APIView):
+    """11번가 광고비 요약"""
+    def get(self, request):
+        from datetime import datetime, timedelta
+        import pytz
+        kst = pytz.timezone('Asia/Seoul')
+
+        date_str = request.query_params.get('date')
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+
+        qs = ElevenCostHistory.objects.all()
+        if date_from and date_to:
+            start = kst.localize(datetime.strptime(date_from, '%Y-%m-%d'))
+            end = kst.localize(datetime.strptime(date_to, '%Y-%m-%d') + timedelta(days=1))
+            qs = qs.filter(transaction_datetime__gte=start, transaction_datetime__lt=end)
+        elif date_str:
+            start = kst.localize(datetime.strptime(date_str, '%Y-%m-%d'))
+            end = start + timedelta(days=1)
+            qs = qs.filter(transaction_datetime__gte=start, transaction_datetime__lt=end)
+        else:
+            from django.utils import timezone as tz
+            today = tz.localdate()
+            start = kst.localize(datetime.combine(today, datetime.min.time()))
+            end = start + timedelta(days=1)
+            qs = qs.filter(transaction_datetime__gte=start, transaction_datetime__lt=end)
+
+        # 계정별 집계
+        seller_stats = qs.values('seller_id').annotate(
+            cpc_total=Sum('amount', filter=models.Q(transaction_type='CPC')),
+            charge_total=Sum('amount', filter=models.Q(transaction_type='CHARGE')),
+            total_count=Count('id'),
+        ).order_by('seller_id')
+
+        # 계정별 최신 잔액
+        sellers = []
+        total_cpc = 0
+        for s in seller_stats:
+            cpc = abs(s['cpc_total'] or 0)
+            charge = abs(s['charge_total'] or 0)
+            # 최신 잔액
+            latest = ElevenCostHistory.objects.filter(seller_id=s['seller_id']).order_by('-transaction_datetime').first()
+            balance = latest.balance if latest else 0
+
+            sellers.append({
+                'seller_id': s['seller_id'],
+                'cpc_spend': cpc,
+                'charge': charge,
+                'balance': balance,
+                'tx_count': s['total_count'],
+            })
+            total_cpc += cpc
+
+        return Response({
+            'totals': {'cpc_spend': total_cpc, 'seller_count': len(sellers)},
+            'sellers': sellers,
+        })
 
 class CrawlTriggerView(views.APIView):
     def post(self, request):

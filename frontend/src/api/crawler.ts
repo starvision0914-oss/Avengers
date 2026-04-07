@@ -10,3 +10,5 @@ export const getGmarketSnapshots = (params?: Record<string, string>) => api.get(
 export const getElevenCosts = (params?: Record<string, string>) => api.get('/cpc/eleven-costs/', { params }).then(r => r.data);
 export const getGmarketGrades = (params?: Record<string, string>) => api.get('/cpc/gmarket-grades/', { params }).then(r => r.data);
 export const getElevenGrades = (params?: Record<string, string>) => api.get('/cpc/eleven-grades/', { params }).then(r => r.data);
+export const getGmarketSummary = (params?: Record<string, string>) => api.get('/cpc/gmarket-summary/', { params }).then(r => r.data);
+export const getElevenSummary = (params?: Record<string, string>) => api.get('/cpc/eleven-summary/', { params }).then(r => r.data);

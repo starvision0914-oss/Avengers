@@ -1,189 +1,262 @@
 import { useEffect, useState } from 'react';
-import { getDailyCosts, getDeposits, getChart, createDailyCost, createDeposit, createTransaction, getTransactions } from '../../api/cpc';
-import { getAccounts } from '../../api/accounts';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, Legend } from 'recharts';
-import { Plus, TrendingUp } from 'lucide-react';
-import dayjs from 'dayjs';
+import { getGmarketSummary, getElevenSummary, getGmarketSnapshots, getElevenCosts, triggerCrawl } from '../../api/crawler';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
+import { ChevronLeft, ChevronRight, Play, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { SellerAccount } from '../../types';
+import dayjs from 'dayjs';
+
+type PeriodMode = 'daily' | 'monthly';
 
 export default function CPCDashboard() {
-  const [costs, setCosts] = useState<any>({ results: [] });
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [accounts, setAccounts] = useState<SellerAccount[]>([]);
-  const [showForm, setShowForm] = useState(false);
-  const [showDepositForm, setShowDepositForm] = useState(false);
-  const [form, setForm] = useState({ seller: '', date: dayjs().format('YYYY-MM-DD'), cpc_cost: 0, ai_cost: 0, total_cost: 0, clicks: 0, impressions: 0, conversions: 0, roas: 0 });
-  const [depositForm, setDepositForm] = useState({ seller: '', deposit_date: dayjs().format('YYYY-MM-DD'), deposited_amount: 0, balance: 0, memo: '' });
+  const [platform, setPlatform] = useState<'gmarket' | '11st'>('gmarket');
+  const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('daily');
+  const [gmData, setGmData] = useState<any>({ totals: {}, sellers: [] });
+  const [elData, setElData] = useState<any>({ totals: {}, sellers: [] });
+  const [crawling, setCrawling] = useState('');
+  const [selectedSeller, setSelectedSeller] = useState<string | null>(null);
 
   const load = () => {
-    getDailyCosts().then(setCosts);
-    getChart().then(setChartData);
-    getAccounts().then(d => setAccounts(Array.isArray(d) ? d : d.results || []));
+    if (periodMode === 'daily') {
+      getGmarketSummary({ date }).then(setGmData).catch(() => {});
+      getElevenSummary({ date }).then(setElData).catch(() => {});
+    } else {
+      const from = dayjs(date).startOf('month').format('YYYY-MM-DD');
+      const to = dayjs(date).endOf('month').format('YYYY-MM-DD');
+      getGmarketSummary({ date_from: from, date_to: to }).then(setGmData).catch(() => {});
+      getElevenSummary({ date_from: from, date_to: to }).then(setElData).catch(() => {});
+    }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [date, periodMode]);
 
-  const handleSubmitCost = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await createDailyCost({ ...form, total_cost: Number(form.cpc_cost) + Number(form.ai_cost) });
-      toast.success('광고비 추가 완료');
-      setShowForm(false);
-      load();
-    } catch { toast.error('추가 실패'); }
+  const moveDate = (dir: number) => {
+    setDate(prev => dayjs(prev).add(dir, periodMode === 'daily' ? 'day' : 'month').format('YYYY-MM-DD'));
+  };
+  const goToday = () => setDate(dayjs().format('YYYY-MM-DD'));
+  const isToday = date === dayjs().format('YYYY-MM-DD');
+  const isFuture = dayjs(date).isAfter(dayjs(), 'day');
+
+  const dateLabel = periodMode === 'daily'
+    ? dayjs(date).format('YYYY-MM-DD (ddd)')
+    : dayjs(date).format('YYYY년 MM월');
+
+  const handleCrawl = async (p: string) => {
+    setCrawling(p);
+    await triggerCrawl({ platform: p, type: 'cost' });
+    toast.success(`${p === 'gmarket' ? '지마켓' : '11번가'} 크롤링 시작`);
+    setTimeout(() => { setCrawling(''); load(); }, 15000);
   };
 
-  const handleSubmitDeposit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await createDeposit(depositForm);
-      toast.success('입금 기록 추가 완료');
-      setShowDepositForm(false);
-      load();
-    } catch { toast.error('추가 실패'); }
-  };
+  const data = platform === 'gmarket' ? gmData : elData;
+  const sellers = data.sellers || [];
+  const totals = data.totals || {};
 
-  const costList = costs.results || costs;
+  const fmt = (v: number) => (v || 0).toLocaleString();
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">CPC 광고비 대시보드</h1>
-        <div className="flex gap-2">
-          <button onClick={() => setShowDepositForm(true)} className="flex items-center gap-1 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700">
-            <Plus size={16} /> 입금 기록
+    <div className="max-w-[1800px] mx-auto px-4 py-4 space-y-3">
+      {/* Header: Platform Tabs + Date Nav + Actions */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          {/* Platform Tabs */}
+          <div className="flex border border-[#e0e0e0] rounded overflow-hidden">
+            <button onClick={() => setPlatform('gmarket')}
+              className={`px-5 py-2 text-[13px] font-semibold ${platform === 'gmarket' ? 'bg-[#1a73e8] text-white' : 'bg-white text-[#555] hover:bg-gray-50'}`}>
+              지마켓
+            </button>
+            <button onClick={() => setPlatform('11st')}
+              className={`px-5 py-2 text-[13px] font-semibold border-l border-[#e0e0e0] ${platform === '11st' ? 'bg-[#e67700] text-white' : 'bg-white text-[#555] hover:bg-gray-50'}`}>
+              11번가
+            </button>
+          </div>
+
+          {/* Date Navigator */}
+          <div className="flex items-center gap-1">
+            <button onClick={() => moveDate(-1)} className="p-1.5 hover:bg-gray-100 rounded text-[#666]"><ChevronLeft size={18} /></button>
+            <div className="flex items-center gap-2">
+              <input type="date" value={date} max={dayjs().format('YYYY-MM-DD')}
+                onChange={e => setDate(e.target.value)}
+                className="text-[13px] font-semibold text-[#333] bg-transparent border-none cursor-pointer" />
+            </div>
+            <button onClick={() => moveDate(1)} disabled={isFuture}
+              className="p-1.5 hover:bg-gray-100 rounded text-[#666] disabled:opacity-20"><ChevronRight size={18} /></button>
+            <button onClick={goToday} disabled={isToday}
+              className="ml-1 px-3 py-1 text-[11px] border border-[#ddd] rounded hover:bg-gray-50 disabled:opacity-30">오늘</button>
+          </div>
+
+          {/* Period Mode */}
+          <div className="flex border border-[#e0e0e0] rounded overflow-hidden">
+            <button onClick={() => setPeriodMode('daily')}
+              className={`px-3 py-1 text-[11px] ${periodMode === 'daily' ? 'bg-[#333] text-white' : 'bg-white text-[#666]'}`}>일별</button>
+            <button onClick={() => setPeriodMode('monthly')}
+              className={`px-3 py-1 text-[11px] border-l border-[#e0e0e0] ${periodMode === 'monthly' ? 'bg-[#333] text-white' : 'bg-white text-[#666]'}`}>월별</button>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2">
+          <button onClick={() => handleCrawl(platform)} disabled={!!crawling}
+            className="flex items-center gap-1 px-3 py-1.5 bg-[#1a73e8] text-white rounded text-[12px] hover:bg-[#1557b0] disabled:opacity-50">
+            {crawling ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />}
+            수집
           </button>
-          <button onClick={() => setShowForm(true)} className="flex items-center gap-1 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">
-            <Plus size={16} /> 광고비 입력
-          </button>
+          <button onClick={load} className="p-1.5 hover:bg-gray-100 rounded text-[#666]"><RefreshCw size={14} /></button>
+        </div>
+      </div>
+
+      {/* Summary Bar */}
+      <div className="bg-white border border-[#e0e0e0] rounded-lg">
+        <div className="flex items-center justify-between px-5 py-3">
+          <div className="flex items-center gap-6 text-[13px]">
+            {platform === 'gmarket' ? (
+              <>
+                <div><span className="text-[#888]">총잔액: </span><span className="font-semibold text-[#00a651]">{fmt(totals.balance)}</span></div>
+                <div><span className="text-[#888]">총CPC: </span><span className="font-semibold text-[#1a73e8]">{fmt(totals.cpc_spend)}</span></div>
+                <div><span className="text-[#888]">총AI: </span><span className="font-semibold text-[#7c3aed]">{fmt(totals.ai_spend)}</span></div>
+                <div><span className="text-[#888]">총광고비: </span><span className="font-bold text-[#e04040]">{fmt(totals.ad_total)}</span></div>
+              </>
+            ) : (
+              <>
+                <div><span className="text-[#888]">총CPC: </span><span className="font-semibold text-[#e67700]">{fmt(totals.cpc_spend)}</span></div>
+                <div><span className="text-[#888]">계정수: </span><span className="font-semibold">{totals.seller_count || 0}</span></div>
+              </>
+            )}
+          </div>
+          <div className="text-[11px] text-[#aaa]">
+            {data.date && `기준일: ${data.date}`}
+          </div>
+        </div>
+      </div>
+
+      {/* Main Table */}
+      <div className="bg-white border border-[#e0e0e0] rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12px]" style={{ fontVariantNumeric: 'tabular-nums' }}>
+            <thead>
+              <tr className="bg-[#f7f7f7] border-b border-[#e0e0e0]">
+                <th className="px-3 py-[7px] text-center text-[#999] font-normal w-8">#</th>
+                <th className="px-3 py-[7px] text-left text-[#555] font-semibold min-w-[120px]">셀러명</th>
+                {platform === 'gmarket' ? (
+                  <>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">잔액</th>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">CPC</th>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">옥션CPC</th>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">AI</th>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-bold">광고비합</th>
+                    <th className="px-3 py-[7px] text-left text-[#999] font-normal">수집시간</th>
+                  </>
+                ) : (
+                  <>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">CPC</th>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">충전</th>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">잔액</th>
+                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">건수</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {sellers.length > 0 ? sellers.map((s: any, i: number) => (
+                <tr key={s.seller_id} onClick={() => setSelectedSeller(s.seller_id === selectedSeller ? null : s.seller_id)}
+                  className={`border-b border-[#eee] cursor-pointer transition-colors ${
+                    selectedSeller === s.seller_id ? 'bg-[#e8f5e9]' : i % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]'
+                  } hover:bg-[#f0f7f0]`}>
+                  <td className="px-3 py-[7px] text-center text-[#999]">{i + 1}</td>
+                  <td className="px-3 py-[7px] text-left font-semibold text-[#222]">
+                    <div className="flex items-center gap-1.5">
+                      {platform === 'gmarket' && s.balance < 100000 && (
+                        <span className="w-2 h-2 rounded-full bg-[#e04040] animate-pulse" title={`잔액: ${fmt(s.balance)}`} />
+                      )}
+                      {s.seller_id}
+                    </div>
+                  </td>
+                  {platform === 'gmarket' ? (
+                    <>
+                      <td className="px-3 py-[7px] text-right text-[#00a651]">{fmt(s.balance)}</td>
+                      <td className={`px-3 py-[7px] text-right ${s.cpc_spend ? 'text-[#1a73e8]' : 'text-[#ccc]'}`}>{fmt(s.cpc_spend)}</td>
+                      <td className={`px-3 py-[7px] text-right ${s.auction_cpc ? 'text-[#e08000]' : 'text-[#ccc]'}`}>{fmt(s.auction_cpc)}</td>
+                      <td className={`px-3 py-[7px] text-right ${s.ai_spend ? 'text-[#7c3aed]' : 'text-[#ccc]'}`}>{fmt(s.ai_spend)}</td>
+                      <td className={`px-3 py-[7px] text-right font-bold ${s.ad_total ? 'text-[#1557b0]' : 'text-[#ccc]'}`}>{fmt(s.ad_total)}</td>
+                      <td className="px-3 py-[7px] text-left text-[10px] text-[#aaa]">
+                        {s.collected_at ? new Date(s.collected_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : ''}
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className={`px-3 py-[7px] text-right ${s.cpc_spend ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}`}>{fmt(s.cpc_spend)}</td>
+                      <td className={`px-3 py-[7px] text-right ${s.charge ? 'text-[#00a651]' : 'text-[#ccc]'}`}>{fmt(s.charge)}</td>
+                      <td className="px-3 py-[7px] text-right text-[#333]">{fmt(s.balance)}</td>
+                      <td className="px-3 py-[7px] text-right text-[#999]">{s.tx_count || 0}</td>
+                    </>
+                  )}
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={platform === 'gmarket' ? 8 : 5} className="px-4 py-12 text-center text-[#aaa]">
+                    {date} 수집된 데이터가 없습니다. 수집 버튼을 클릭하세요.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+            {sellers.length > 0 && (
+              <tfoot>
+                <tr className="bg-[#f7f7f7] border-t-2 border-[#ddd] font-bold text-[12px]">
+                  <td className="px-3 py-[8px] text-center text-[#999]">#</td>
+                  <td className="px-3 py-[8px] text-left text-[#333]">합계 ({sellers.length})</td>
+                  {platform === 'gmarket' ? (
+                    <>
+                      <td className="px-3 py-[8px] text-right text-[#00a651]">{fmt(totals.balance)}</td>
+                      <td className="px-3 py-[8px] text-right text-[#1a73e8]">{fmt(totals.cpc_spend)}</td>
+                      <td className="px-3 py-[8px] text-right text-[#e08000]">{fmt(sellers.reduce((s: number, d: any) => s + (d.auction_cpc || 0), 0))}</td>
+                      <td className="px-3 py-[8px] text-right text-[#7c3aed]">{fmt(totals.ai_spend)}</td>
+                      <td className="px-3 py-[8px] text-right text-[#e04040]">{fmt(totals.ad_total)}</td>
+                      <td className="px-3 py-[8px]"></td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="px-3 py-[8px] text-right text-[#e67700]">{fmt(totals.cpc_spend)}</td>
+                      <td className="px-3 py-[8px] text-right text-[#00a651]">{fmt(sellers.reduce((s: number, d: any) => s + (d.charge || 0), 0))}</td>
+                      <td className="px-3 py-[8px] text-right">{fmt(sellers.reduce((s: number, d: any) => s + (d.balance || 0), 0))}</td>
+                      <td className="px-3 py-[8px] text-right text-[#999]">{sellers.reduce((s: number, d: any) => s + (d.tx_count || 0), 0)}</td>
+                    </>
+                  )}
+                </tr>
+              </tfoot>
+            )}
+          </table>
         </div>
       </div>
 
       {/* Chart */}
-      <div className="bg-white rounded-lg shadow p-6 mb-6">
-        <h2 className="text-lg font-semibold mb-4 flex items-center gap-2"><TrendingUp size={20} /> 일별 광고비 추이</h2>
-        {chartData.length > 0 ? (
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" />
-              <YAxis tickFormatter={(v) => `${(v/10000).toFixed(0)}만`} />
+      {sellers.length > 0 && (
+        <div className="bg-white border border-[#e0e0e0] rounded-lg p-5">
+          <h3 className="text-[13px] font-semibold text-[#333] mb-3">계정별 광고비</h3>
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={sellers.map((s: any) => ({
+              name: s.seller_id,
+              CPC: s.cpc_spend || 0,
+              ...(platform === 'gmarket' ? { AI: s.ai_spend || 0, 옥션: s.auction_cpc || 0 } : { 충전: s.charge || 0 }),
+            }))}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis tickFormatter={(v) => `${(v / 10000).toFixed(0)}만`} tick={{ fontSize: 11 }} />
               <Tooltip formatter={(v: number) => `${v.toLocaleString()}원`} />
-              <Legend />
-              <Bar dataKey="total_cpc" name="CPC" fill="#3B82F6" />
-              <Bar dataKey="total_ai" name="AI" fill="#8B5CF6" />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {platform === 'gmarket' ? (
+                <>
+                  <Bar dataKey="CPC" fill="#1a73e8" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="AI" fill="#7c3aed" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="옥션" fill="#e08000" radius={[2, 2, 0, 0]} />
+                </>
+              ) : (
+                <>
+                  <Bar dataKey="CPC" fill="#e67700" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="충전" fill="#00a651" radius={[2, 2, 0, 0]} />
+                </>
+              )}
             </BarChart>
           </ResponsiveContainer>
-        ) : (
-          <div className="text-center text-gray-400 py-12">데이터를 입력하면 차트가 표시됩니다.</div>
-        )}
-      </div>
-
-      {/* Cost Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left">날짜</th>
-              <th className="px-4 py-3 text-left">셀러</th>
-              <th className="px-4 py-3 text-right">CPC</th>
-              <th className="px-4 py-3 text-right">AI</th>
-              <th className="px-4 py-3 text-right">합계</th>
-              <th className="px-4 py-3 text-right">클릭</th>
-              <th className="px-4 py-3 text-right">ROAS</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Array.isArray(costList) && costList.length > 0 ? costList.map((c: any) => (
-              <tr key={c.id} className="border-t hover:bg-gray-50">
-                <td className="px-4 py-3">{c.date}</td>
-                <td className="px-4 py-3">{c.seller_name || c.seller_id_display}</td>
-                <td className="px-4 py-3 text-right">{c.cpc_cost?.toLocaleString()}</td>
-                <td className="px-4 py-3 text-right">{c.ai_cost?.toLocaleString()}</td>
-                <td className="px-4 py-3 text-right font-semibold">{c.total_cost?.toLocaleString()}</td>
-                <td className="px-4 py-3 text-right">{c.clicks?.toLocaleString()}</td>
-                <td className="px-4 py-3 text-right">{c.roas}%</td>
-              </tr>
-            )) : (
-              <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">광고비 데이터가 없습니다. 위의 버튼으로 입력하세요.</td></tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Add Cost Modal */}
-      {showForm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <form onSubmit={handleSubmitCost} className="bg-white rounded-lg p-6 w-[480px] max-h-[90vh] overflow-y-auto">
-            <h2 className="text-lg font-bold mb-4">광고비 입력</h2>
-            <div className="space-y-3">
-              <select value={form.seller} onChange={e => setForm({...form, seller: e.target.value})} className="w-full border rounded px-3 py-2" required>
-                <option value="">셀러 선택</option>
-                {accounts.map(a => <option key={a.id} value={a.id}>{a.seller_name} ({a.seller_id})</option>)}
-              </select>
-              <input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})} className="w-full border rounded px-3 py-2" />
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-gray-500">CPC 비용</label>
-                  <input type="number" value={form.cpc_cost} onChange={e => setForm({...form, cpc_cost: +e.target.value})} className="w-full border rounded px-3 py-2" />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">AI 비용</label>
-                  <input type="number" value={form.ai_cost} onChange={e => setForm({...form, ai_cost: +e.target.value})} className="w-full border rounded px-3 py-2" />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">클릭수</label>
-                  <input type="number" value={form.clicks} onChange={e => setForm({...form, clicks: +e.target.value})} className="w-full border rounded px-3 py-2" />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">노출수</label>
-                  <input type="number" value={form.impressions} onChange={e => setForm({...form, impressions: +e.target.value})} className="w-full border rounded px-3 py-2" />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">전환수</label>
-                  <input type="number" value={form.conversions} onChange={e => setForm({...form, conversions: +e.target.value})} className="w-full border rounded px-3 py-2" />
-                </div>
-                <div>
-                  <label className="text-xs text-gray-500">ROAS (%)</label>
-                  <input type="number" step="0.01" value={form.roas} onChange={e => setForm({...form, roas: +e.target.value})} className="w-full border rounded px-3 py-2" />
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 border rounded-lg">취소</button>
-              <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg">저장</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* Add Deposit Modal */}
-      {showDepositForm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <form onSubmit={handleSubmitDeposit} className="bg-white rounded-lg p-6 w-[400px]">
-            <h2 className="text-lg font-bold mb-4">입금 기록</h2>
-            <div className="space-y-3">
-              <select value={depositForm.seller} onChange={e => setDepositForm({...depositForm, seller: e.target.value})} className="w-full border rounded px-3 py-2" required>
-                <option value="">셀러 선택</option>
-                {accounts.map(a => <option key={a.id} value={a.id}>{a.seller_name} ({a.seller_id})</option>)}
-              </select>
-              <input type="date" value={depositForm.deposit_date} onChange={e => setDepositForm({...depositForm, deposit_date: e.target.value})} className="w-full border rounded px-3 py-2" />
-              <div>
-                <label className="text-xs text-gray-500">입금액</label>
-                <input type="number" value={depositForm.deposited_amount} onChange={e => setDepositForm({...depositForm, deposited_amount: +e.target.value})} className="w-full border rounded px-3 py-2" />
-              </div>
-              <div>
-                <label className="text-xs text-gray-500">잔액</label>
-                <input type="number" value={depositForm.balance} onChange={e => setDepositForm({...depositForm, balance: +e.target.value})} className="w-full border rounded px-3 py-2" />
-              </div>
-              <textarea value={depositForm.memo} onChange={e => setDepositForm({...depositForm, memo: e.target.value})} placeholder="메모" className="w-full border rounded px-3 py-2" rows={2} />
-            </div>
-            <div className="flex justify-end gap-2 mt-4">
-              <button type="button" onClick={() => setShowDepositForm(false)} className="px-4 py-2 border rounded-lg">취소</button>
-              <button type="submit" className="px-4 py-2 bg-green-600 text-white rounded-lg">저장</button>
-            </div>
-          </form>
         </div>
       )}
     </div>
