@@ -16,6 +16,7 @@ import SettingsPage from './pages/Settings/SettingsPage';
 import CrawlerPage from './pages/Crawler/CrawlerPage';
 import TelegramPage from './pages/Telegram/TelegramPage';
 import AnalysisPage from './pages/Analysis/AnalysisPage';
+import AdSettingsPage from './pages/AdSettings/AdSettingsPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Navigate to="/login" replace />;
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="crawler" element={<CrawlerPage />} />
           <Route path="telegram" element={<TelegramPage />} />
           <Route path="analysis" element={<AnalysisPage />} />
+          <Route path="ad-settings" element={<AdSettingsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
