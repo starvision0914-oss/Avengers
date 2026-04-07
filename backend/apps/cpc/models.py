@@ -316,3 +316,17 @@ class SellerGroup(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'seller_groups'
+
+class CronSchedule(models.Model):
+    """자동 수집 스케줄 설정"""
+    name = models.CharField(max_length=50, unique=True)
+    display_name = models.CharField(max_length=100)
+    command = models.CharField(max_length=200)
+    cron_expr = models.CharField(max_length=50, blank=True)
+    is_active = models.BooleanField(default=False)
+    description = models.CharField(max_length=255, blank=True)
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'cron_schedules'
+        ordering = ['name']

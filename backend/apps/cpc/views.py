@@ -380,3 +380,49 @@ class CrawlTriggerView(views.APIView):
 
         threading.Thread(target=run, daemon=True).start()
         return Response({'status': 'started', 'platform': platform, 'type': crawl_type})
+
+from .models import CronSchedule
+
+class CronScheduleViewSet(viewsets.ModelViewSet):
+    queryset = CronSchedule.objects.all()
+    serializer_class = None  # inline below
+
+    def get_serializer_class(self):
+        from rest_framework import serializers as sz
+        class S(sz.ModelSerializer):
+            class Meta:
+                model = CronSchedule
+                fields = '__all__'
+        return S
+
+class CronApplyView(views.APIView):
+    """CronSchedule 테이블 기반으로 실제 crontab 적용"""
+    def post(self, request):
+        import subprocess
+        schedules = CronSchedule.objects.all()
+        lines = ['# Avengers 자동 수집 스케줄 (UI에서 관리)\n']
+        for s in schedules:
+            prefix = '' if s.is_active else '#'
+            lines.append(f'{prefix}{s.cron_expr} {s.command}  # {s.display_name}\n')
+
+        cron_content = ''.join(lines)
+        proc = subprocess.run(['crontab', '-'], input=cron_content, capture_output=True, text=True)
+        if proc.returncode != 0:
+            return Response({'error': proc.stderr}, status=500)
+        return Response({'applied': len(schedules), 'content': cron_content})
+
+class AccountUnblockView(views.APIView):
+    """차단된 계정 해제"""
+    def post(self, request):
+        from .models import CrawlerAccount
+        account_id = request.data.get('id')
+        if not account_id:
+            return Response({'error': 'id 필요'}, status=400)
+        try:
+            acct = CrawlerAccount.objects.get(id=account_id)
+            acct.crawling_status = '정상'
+            acct.fail_count = 0
+            acct.save()
+            return Response({'unblocked': acct.login_id})
+        except CrawlerAccount.DoesNotExist:
+            return Response({'error': '계정 없음'}, status=404)

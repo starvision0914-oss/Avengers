@@ -34,3 +34,7 @@ export const getSellerGroups = () => api.get('/cpc/seller-groups/').then(r => r.
 export const createSellerGroup = (data: any) => api.post('/cpc/seller-groups/', data).then(r => r.data);
 export const updateSellerGroup = (id: number, data: any) => api.put(`/cpc/seller-groups/${id}/`, data).then(r => r.data);
 export const deleteSellerGroup = (id: number) => api.delete(`/cpc/seller-groups/${id}/`);
+export const getCronSchedules = () => api.get('/cpc/cron-schedules/').then(r => r.data);
+export const updateCronSchedule = (id: number, data: any) => api.patch(`/cpc/cron-schedules/${id}/`, data).then(r => r.data);
+export const applyCron = () => api.post('/cpc/cron/apply/').then(r => r.data);
+export const unblockAccount = (id: number) => api.post('/cpc/crawler/unblock/', { id }).then(r => r.data);

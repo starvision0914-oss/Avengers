@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import {
   getCrawlerAccounts, createCrawlerAccount, updateCrawlerAccount, deleteCrawlerAccount,
   getCrawlerLogs, triggerCrawl, getGmarketSnapshots, getElevenCosts,
-  getGmarketGrades, getElevenGrades, getGmarketAi, getSt11Campaigns
+  getGmarketGrades, getElevenGrades, getGmarketAi, getSt11Campaigns,
+  getCronSchedules, updateCronSchedule, applyCron, unblockAccount
 } from '../../api/crawler';
-import { Plus, Play, Trash2, Edit2, RefreshCw, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { Plus, Play, Trash2, Edit2, RefreshCw, AlertTriangle, CheckCircle, XCircle, Clock, Volume2, ShieldOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -26,9 +27,21 @@ export default function CrawlerPage() {
   const [editing, setEditing] = useState<any>(null);
   const [form, setForm] = useState({ platform: 'gmarket', login_id: '', password_enc: '', seller_name: '', display_order: 0 });
   const [crawling, setCrawling] = useState('');
+  const [cronSchedules, setCronSchedules] = useState<any[]>([]);
+  const [blockedAlert, setBlockedAlert] = useState<any>(null);
   const [platformFilter, setPlatformFilter] = useState('all');
 
-  const loadAccounts = () => getCrawlerAccounts().then(d => setAccounts(Array.isArray(d) ? d : d.results || []));
+  const loadAccounts = () => getCrawlerAccounts().then(d => {
+    const list = Array.isArray(d) ? d : d.results || [];
+    setAccounts(list);
+    // 차단 경고
+    const blocked = list.filter((a: any) => a.crawling_status === '차단됨');
+    if (blocked.length > 0 && !blockedAlert) {
+      setBlockedAlert(blocked);
+      try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1sbWtxeIF/gH2AfHmBg4eIi4uJhoGChH2AgoJ/gH2BfIKDhIaGhoWDgoKBgIB/gH+Af3+Af4B/gH+Af4B/gH+Af4CAf4B/gH+Af4B/gH+Af4B/gH+Af4B/').play().catch(() => {}); } catch {}
+    }
+  });
+  const loadCron = () => getCronSchedules().then(d => setCronSchedules(Array.isArray(d) ? d : d.results || []));
   const loadLogs = () => getCrawlerLogs().then(d => setLogs(Array.isArray(d) ? d : d.results || []));
   const loadSnapshots = () => getGmarketSnapshots().then(d => setSnapshots(Array.isArray(d) ? d : d.results || []));
   const loadElevenCosts = () => getElevenCosts().then(d => setElevenCosts(Array.isArray(d) ? d : d.results || []));
@@ -48,6 +61,7 @@ export default function CrawlerPage() {
     loadElevenCosts();
     loadGrades();
     loadAi();
+    loadCron();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -95,11 +109,30 @@ export default function CrawlerPage() {
 
   const tabs = [
     { key: 'accounts', label: '계정 관리' },
+    { key: 'schedule', label: '자동 수집' },
     { key: 'data', label: '수집 데이터' },
     { key: 'ai', label: 'AI 광고' },
     { key: 'grades', label: '등급 현황' },
     { key: 'logs', label: '로그' },
   ];
+
+  const handleUnblock = async (id: number) => {
+    await unblockAccount(id);
+    toast.success('차단 해제됨');
+    setBlockedAlert(null);
+    loadAccounts();
+  };
+
+  const handleToggleCron = async (sched: any) => {
+    await updateCronSchedule(sched.id, { is_active: !sched.is_active });
+    toast.success(`${sched.display_name} ${sched.is_active ? '중지' : '활성화'}`);
+    loadCron();
+  };
+
+  const handleApplyCron = async () => {
+    const result = await applyCron();
+    toast.success(`crontab 적용 완료 (${result.applied}개)`);
+  };
 
   return (
     <div>
@@ -204,6 +237,37 @@ export default function CrawlerPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* === 자동 수집 탭 === */}
+          {tab === 'schedule' && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold flex items-center gap-2"><Clock size={16} /> 자동 수집 스케줄</h3>
+                <button onClick={handleApplyCron} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">crontab 적용</button>
+              </div>
+              <p className="text-xs text-gray-500 mb-4">스케줄을 활성화/비활성화한 후 'crontab 적용' 버튼을 눌러야 실제 반영됩니다.</p>
+              <div className="space-y-3">
+                {cronSchedules.map((s: any) => (
+                  <div key={s.id} className={`border rounded-lg p-4 flex items-center justify-between ${s.is_active ? 'border-green-300 bg-green-50' : 'border-gray-200 bg-gray-50'}`}>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2.5 h-2.5 rounded-full ${s.is_active ? 'bg-green-500' : 'bg-gray-300'}`} />
+                        <span className="font-semibold">{s.display_name}</span>
+                        <span className={`px-2 py-0.5 rounded text-xs ${s.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>{s.is_active ? '활성' : '중지'}</span>
+                      </div>
+                      <p className="text-sm text-gray-600 mt-1">{s.description}</p>
+                      <p className="text-xs text-gray-400 mt-1 font-mono">cron: {s.cron_expr}</p>
+                    </div>
+                    <button onClick={() => handleToggleCron(s)}
+                      className={`px-4 py-2 rounded-lg text-sm font-medium ${s.is_active ? 'bg-red-100 text-red-700 hover:bg-red-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}>
+                      {s.is_active ? '중지' : '활성화'}
+                    </button>
+                  </div>
+                ))}
+                {cronSchedules.length === 0 && <p className="text-center py-8 text-gray-400">스케줄이 없습니다.</p>}
+              </div>
             </div>
           )}
 
@@ -475,6 +539,43 @@ export default function CrawlerPage() {
               <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg">저장</button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* 차단 경고 모달 */}
+      {blockedAlert && blockedAlert.length > 0 && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl p-6 w-[450px] shadow-2xl border-2 border-red-400">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                <Volume2 size={24} className="text-red-600 animate-pulse" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-red-700">계정 차단 경고</h2>
+                <p className="text-sm text-red-500">{blockedAlert.length}개 계정이 차단되었습니다 (30회 이상 실패)</p>
+              </div>
+            </div>
+            <div className="space-y-2 mb-4 max-h-[300px] overflow-y-auto">
+              {blockedAlert.map((a: any) => (
+                <div key={a.id} className="flex items-center justify-between border border-red-200 rounded-lg p-3 bg-red-50">
+                  <div>
+                    <span className={`px-2 py-0.5 rounded text-xs mr-2 ${a.platform === 'gmarket' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>
+                      {a.platform === 'gmarket' ? '지마켓' : '11번가'}
+                    </span>
+                    <span className="font-semibold">{a.login_id}</span>
+                    <span className="text-xs text-red-500 ml-2">실패 {a.fail_count}회</span>
+                  </div>
+                  <button onClick={() => handleUnblock(a.id)}
+                    className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white rounded text-xs hover:bg-green-700">
+                    <ShieldOff size={12} /> 차단 해제
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end">
+              <button onClick={() => setBlockedAlert(null)} className="px-4 py-2 bg-gray-200 rounded-lg text-sm hover:bg-gray-300">닫기</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -11,6 +11,7 @@ from .views import (
     CpcAdStatusViewSet, Cpc2ScheduleViewSet, Cpc2HistoryViewSet,
     AiScheduleViewSet, TelegramConfigViewSet, TelegramRecipientViewSet,
     SellerGroupViewSet, TelegramSendView, Cpc2ControlView,
+    CronScheduleViewSet, CronApplyView, AccountUnblockView,
 )
 
 router = DefaultRouter()
@@ -32,6 +33,7 @@ router.register(r'ai-schedule', AiScheduleViewSet)
 router.register(r'telegram/config', TelegramConfigViewSet)
 router.register(r'telegram/recipients', TelegramRecipientViewSet)
 router.register(r'seller-groups', SellerGroupViewSet)
+router.register(r'cron-schedules', CronScheduleViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -42,4 +44,6 @@ urlpatterns = [
     path('eleven-summary/', ElevenSummaryView.as_view()),
     path('telegram/send/', TelegramSendView.as_view()),
     path('cpc2/control/', Cpc2ControlView.as_view()),
+    path('cron/apply/', CronApplyView.as_view()),
+    path('crawler/unblock/', AccountUnblockView.as_view()),
 ]
