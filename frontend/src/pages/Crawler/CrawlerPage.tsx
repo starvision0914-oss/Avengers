@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   getCrawlerAccounts, createCrawlerAccount, updateCrawlerAccount, deleteCrawlerAccount,
   getCrawlerLogs, triggerCrawl, getGmarketSnapshots, getElevenCosts,
-  getGmarketGrades, getElevenGrades
+  getGmarketGrades, getElevenGrades, getGmarketAi, getSt11Campaigns
 } from '../../api/crawler';
 import { Plus, Play, Trash2, Edit2, RefreshCw, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -20,6 +20,8 @@ export default function CrawlerPage() {
   const [elevenCosts, setElevenCosts] = useState<any[]>([]);
   const [gmGrades, setGmGrades] = useState<any[]>([]);
   const [elGrades, setElGrades] = useState<any[]>([]);
+  const [gmAi, setGmAi] = useState<any[]>([]);
+  const [st11Campaigns, setSt11Campaigns] = useState<any[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [form, setForm] = useState({ platform: 'gmarket', login_id: '', password_enc: '', seller_name: '', display_order: 0 });
@@ -30,6 +32,10 @@ export default function CrawlerPage() {
   const loadLogs = () => getCrawlerLogs().then(d => setLogs(Array.isArray(d) ? d : d.results || []));
   const loadSnapshots = () => getGmarketSnapshots().then(d => setSnapshots(Array.isArray(d) ? d : d.results || []));
   const loadElevenCosts = () => getElevenCosts().then(d => setElevenCosts(Array.isArray(d) ? d : d.results || []));
+  const loadAi = () => {
+    getGmarketAi().then(d => setGmAi(Array.isArray(d) ? d : d.results || []));
+    getSt11Campaigns().then(d => setSt11Campaigns(Array.isArray(d) ? d : d.results || []));
+  };
   const loadGrades = () => {
     getGmarketGrades().then(d => setGmGrades(Array.isArray(d) ? d : d.results || []));
     getElevenGrades().then(d => setElGrades(Array.isArray(d) ? d : d.results || []));
@@ -41,6 +47,7 @@ export default function CrawlerPage() {
     loadSnapshots();
     loadElevenCosts();
     loadGrades();
+    loadAi();
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -77,7 +84,7 @@ export default function CrawlerPage() {
     setCrawling(key);
     try {
       await triggerCrawl({ platform, type });
-      toast.success(`${platform} ${type === 'cost' ? '광고비' : '등급'} 크롤링 시작됨`);
+      toast.success(`${platform} ${type === 'cost' ? '광고비' : type === 'ai' ? 'AI' : '등급'} 크롤링 시작됨`);
     } catch { toast.error('크롤링 시작 실패'); }
     setTimeout(() => setCrawling(''), 3000);
   };
@@ -89,6 +96,7 @@ export default function CrawlerPage() {
   const tabs = [
     { key: 'accounts', label: '계정 관리' },
     { key: 'data', label: '수집 데이터' },
+    { key: 'ai', label: 'AI 광고' },
     { key: 'grades', label: '등급 현황' },
     { key: 'logs', label: '로그' },
   ];
@@ -113,6 +121,14 @@ export default function CrawlerPage() {
           <button onClick={() => handleCrawl('11st', 'grade')} disabled={!!crawling}
             className="flex items-center gap-1 bg-pink-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-pink-700 disabled:opacity-50">
             <Play size={14} /> {crawling === '11st_grade' ? '실행중...' : '11번가 등급'}
+          </button>
+          <button onClick={() => handleCrawl('gmarket', 'ai')} disabled={!!crawling}
+            className="flex items-center gap-1 bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-indigo-700 disabled:opacity-50">
+            <Play size={14} /> {crawling === 'gmarket_ai' ? '실행중...' : '지마켓 AI'}
+          </button>
+          <button onClick={() => handleCrawl('11st', 'ai')} disabled={!!crawling}
+            className="flex items-center gap-1 bg-teal-600 text-white px-3 py-2 rounded-lg text-sm hover:bg-teal-700 disabled:opacity-50">
+            <Play size={14} /> {crawling === '11st_ai' ? '실행중...' : '11번가 AI'}
           </button>
         </div>
       </div>
@@ -258,6 +274,90 @@ export default function CrawlerPage() {
                       </tr>
                     ))}
                     {elevenCosts.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-400">수집된 데이터가 없습니다.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* === AI 광고 탭 === */}
+          {tab === 'ai' && (
+            <div className="space-y-6">
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-semibold">지마켓 AI 광고 상태</h3>
+                  <button onClick={loadAi} className="text-sm text-blue-600"><RefreshCw size={14} /></button>
+                </div>
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left">계정</th>
+                      <th className="px-3 py-2 text-left">셀러ID</th>
+                      <th className="px-3 py-2 text-left">그룹명</th>
+                      <th className="px-3 py-2 text-center">버튼</th>
+                      <th className="px-3 py-2 text-center">실제상태</th>
+                      <th className="px-3 py-2 text-left">사유</th>
+                      <th className="px-3 py-2 text-left">시작일</th>
+                      <th className="px-3 py-2 text-left">운영상태</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {gmAi.length > 0 ? gmAi.map((a: any) => (
+                      <tr key={a.id} className="border-t hover:bg-gray-50">
+                        <td className="px-3 py-2">{a.gmarket_id}</td>
+                        <td className="px-3 py-2">{a.seller_id}</td>
+                        <td className="px-3 py-2 text-xs">{a.group_name}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${a.button_status === 'ON' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{a.button_status}</span>
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${a.actual_status === 'ON' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{a.actual_status}</span>
+                        </td>
+                        <td className="px-3 py-2 text-xs">{a.actual_reason}</td>
+                        <td className="px-3 py-2 text-xs">{a.start_date}</td>
+                        <td className="px-3 py-2 text-xs">{a.operation_status}</td>
+                      </tr>
+                    )) : <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">AI 데이터가 없습니다. 지마켓 AI 수집을 실행하세요.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+
+              <div>
+                <h3 className="font-semibold mb-3">11번가 캠페인 (AI 포함)</h3>
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left">계정</th>
+                      <th className="px-3 py-2 text-left">캠페인명</th>
+                      <th className="px-3 py-2 text-center">AI</th>
+                      <th className="px-3 py-2 text-center">상태</th>
+                      <th className="px-3 py-2 text-right">일예산</th>
+                      <th className="px-3 py-2 text-right">목표ROAS</th>
+                      <th className="px-3 py-2 text-right">노출</th>
+                      <th className="px-3 py-2 text-right">클릭</th>
+                      <th className="px-3 py-2 text-right">비용</th>
+                      <th className="px-3 py-2 text-right">ROAS</th>
+                      <th className="px-3 py-2 text-left">수집일</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {st11Campaigns.length > 0 ? st11Campaigns.map((c: any) => (
+                      <tr key={c.id} className={`border-t hover:bg-gray-50 ${c.is_ai ? 'bg-purple-50' : ''}`}>
+                        <td className="px-3 py-2">{c.eleven_id}</td>
+                        <td className="px-3 py-2 text-xs">{c.campaign_name}</td>
+                        <td className="px-3 py-2 text-center">{c.is_ai ? <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs">AI</span> : ''}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`px-2 py-0.5 rounded text-xs font-bold ${c.onoff ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{c.onoff ? 'ON' : 'OFF'}</span>
+                        </td>
+                        <td className="px-3 py-2 text-right">{c.daily_budget?.toLocaleString() || '-'}</td>
+                        <td className="px-3 py-2 text-right">{c.target_roas ? `${c.target_roas}%` : '-'}</td>
+                        <td className="px-3 py-2 text-right text-xs">{c.impressions?.toLocaleString() || '-'}</td>
+                        <td className="px-3 py-2 text-right text-xs">{c.clicks?.toLocaleString() || '-'}</td>
+                        <td className="px-3 py-2 text-right font-semibold">{c.total_cost?.toLocaleString() || '-'}</td>
+                        <td className="px-3 py-2 text-right">{c.total_roas_pct || '-'}</td>
+                        <td className="px-3 py-2 text-xs text-gray-400">{c.collected_at ? new Date(c.collected_at).toLocaleString('ko-KR') : ''}</td>
+                      </tr>
+                    )) : <tr><td colSpan={11} className="px-3 py-8 text-center text-gray-400">캠페인 데이터가 없습니다. 11번가 AI 수집을 실행하세요.</td></tr>}
                   </tbody>
                 </table>
               </div>

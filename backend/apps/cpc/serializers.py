@@ -59,3 +59,25 @@ class ElevenGradeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ElevenSellerGrade
         fields = '__all__'
+
+from .models import GmarketAiAdSummary, GmarketAiAdHistory, St11AdofficeCampaign, St11AiAdHistory
+
+class GmarketAiSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GmarketAiAdSummary
+        fields = '__all__'
+
+class GmarketAiHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GmarketAiAdHistory
+        fields = '__all__'
+
+class St11CampaignSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = St11AdofficeCampaign
+        fields = '__all__'
+
+class St11AiHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = St11AiAdHistory
+        fields = '__all__'

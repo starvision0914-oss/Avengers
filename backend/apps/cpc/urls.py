@@ -6,6 +6,7 @@ from .views import (
     CrawlerAccountViewSet, CrawlerLogViewSet, GmarketSnapshotViewSet,
     ElevenCostViewSet, GmarketGradeViewSet, ElevenGradeViewSet,
     GmarketSummaryView, ElevenSummaryView,
+    GmarketAiViewSet, St11CampaignViewSet,
     CrawlTriggerView,
 )
 
@@ -19,6 +20,8 @@ router.register(r'gmarket-snapshots', GmarketSnapshotViewSet, basename='gmarkets
 router.register(r'eleven-costs', ElevenCostViewSet, basename='elevencost')
 router.register(r'gmarket-grades', GmarketGradeViewSet)
 router.register(r'eleven-grades', ElevenGradeViewSet)
+router.register(r'gmarket-ai', GmarketAiViewSet)
+router.register(r'st11-campaigns', St11CampaignViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),

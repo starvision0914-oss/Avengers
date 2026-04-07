@@ -136,3 +136,88 @@ class ElevenSellerGrade(models.Model):
     class Meta:
         db_table = 'eleven_seller_grades'
         ordering = ['-collected_at']
+
+
+class GmarketAiAdSummary(models.Model):
+    """지마켓 AI 광고 상태 요약"""
+    gmarket_id = models.CharField(max_length=50)
+    seller_id = models.CharField(max_length=50)
+    group_name = models.CharField(max_length=200, blank=True)
+    button_status = models.CharField(max_length=10, default='OFF')
+    actual_status = models.CharField(max_length=10, default='OFF')
+    actual_reason = models.CharField(max_length=100, blank=True)
+    start_date = models.CharField(max_length=20, blank=True)
+    end_date = models.CharField(max_length=20, blank=True)
+    operation_status = models.CharField(max_length=200, blank=True)
+    budget_mgmt = models.CharField(max_length=200, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'gmarket_ai_ad_summary'
+        ordering = ['-updated_at']
+
+class GmarketAiAdHistory(models.Model):
+    """지마켓 AI 광고 ON/OFF 이력"""
+    gmarket_id = models.CharField(max_length=50)
+    seller_id = models.CharField(max_length=50)
+    group_name = models.CharField(max_length=200, blank=True)
+    event_time = models.DateTimeField()
+    history_type = models.CharField(max_length=100, blank=True)
+    detail = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'gmarket_ai_ad_history'
+        ordering = ['-event_time']
+
+class St11AdofficeCampaign(models.Model):
+    """11번가 Adoffice 캠페인 데이터"""
+    eleven_id = models.CharField(max_length=50)
+    campaign_name = models.CharField(max_length=200)
+    is_ai = models.BooleanField(default=False)
+    onoff = models.BooleanField(default=False)
+    status = models.CharField(max_length=50, blank=True)
+    daily_budget = models.IntegerField(null=True, blank=True)
+    target_roas = models.IntegerField(null=True, blank=True)
+    exposure_period = models.CharField(max_length=100, blank=True)
+    impressions = models.IntegerField(null=True, blank=True)
+    clicks = models.IntegerField(null=True, blank=True)
+    ctr = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    avg_rank = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
+    avg_cpc = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    total_cost = models.IntegerField(null=True, blank=True)
+    total_conversions = models.IntegerField(null=True, blank=True)
+    cost_per_conversion = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    total_conv_amount = models.IntegerField(null=True, blank=True)
+    total_conv_rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    total_roas_pct = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    direct_conversions = models.IntegerField(null=True, blank=True)
+    direct_conv_rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    direct_conv_amount = models.IntegerField(null=True, blank=True)
+    direct_cost_per_conv = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    direct_roas = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    indirect_conversions = models.IntegerField(null=True, blank=True)
+    indirect_cost_per_conv = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    indirect_conv_amount = models.IntegerField(null=True, blank=True)
+    indirect_conv_rate = models.DecimalField(max_digits=8, decimal_places=4, null=True, blank=True)
+    indirect_roas = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    campaign_registered_at = models.CharField(max_length=50, blank=True)
+    collected_at = models.DateTimeField()
+    class Meta:
+        db_table = 'st11_adoffice_campaign'
+        ordering = ['-collected_at']
+        indexes = [
+            models.Index(fields=['eleven_id']),
+            models.Index(fields=['collected_at']),
+        ]
+
+class St11AiAdHistory(models.Model):
+    """11번가 AI 광고 ON/OFF 이력"""
+    seller_id = models.CharField(max_length=50)
+    action = models.CharField(max_length=20, blank=True)
+    campaign_name = models.CharField(max_length=200, blank=True)
+    before_status = models.CharField(max_length=10, blank=True)
+    after_status = models.CharField(max_length=10, blank=True)
+    source = models.CharField(max_length=50, blank=True)
+    event_time = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'st11_ai_ad_history'
+        ordering = ['-event_time']

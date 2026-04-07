@@ -249,14 +249,32 @@ class ElevenSummaryView(views.APIView):
             'sellers': sellers,
         })
 
+from .models import GmarketAiAdSummary, St11AdofficeCampaign
+from .serializers import GmarketAiSummarySerializer, St11CampaignSerializer
+
+class GmarketAiViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = GmarketAiAdSummary.objects.all()
+    serializer_class = GmarketAiSummarySerializer
+    filterset_fields = ['gmarket_id', 'actual_status']
+
+class St11CampaignViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = St11AdofficeCampaign.objects.all()
+    serializer_class = St11CampaignSerializer
+    filterset_fields = ['eleven_id', 'is_ai']
+
 class CrawlTriggerView(views.APIView):
     def post(self, request):
         platform = request.data.get('platform', 'gmarket')
-        crawl_type = request.data.get('type', 'cost')  # cost or grade
+        crawl_type = request.data.get('type', 'cost')  # cost, grade, or ai
         accounts_filter = request.data.get('accounts')
 
         def run():
-            if crawl_type == 'grade':
+            if crawl_type == 'ai':
+                if platform == 'gmarket':
+                    from crawlers.gmarket_ai_crawler import run_all_accounts
+                else:
+                    from crawlers.eleven_ai_crawler import run_all_accounts
+            elif crawl_type == 'grade':
                 if platform == 'gmarket':
                     from crawlers.gmarket_grade_crawler import run_all_accounts
                 else:
