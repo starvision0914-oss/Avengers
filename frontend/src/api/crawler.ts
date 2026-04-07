@@ -38,3 +38,4 @@ export const getCronSchedules = () => api.get('/cpc/cron-schedules/').then(r => 
 export const updateCronSchedule = (id: number, data: any) => api.patch(`/cpc/cron-schedules/${id}/`, data).then(r => r.data);
 export const applyCron = () => api.post('/cpc/cron/apply/').then(r => r.data);
 export const unblockAccount = (id: number) => api.post('/cpc/crawler/unblock/', { id }).then(r => r.data);
+export const controlAi = (data: any) => api.post('/cpc/ai/control/', data).then(r => r.data);

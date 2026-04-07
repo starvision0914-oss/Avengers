@@ -11,9 +11,16 @@ logger = logging.getLogger('crawler')
 BID_URL = 'https://ad.esmplus.com/cpc/bidmng/bidmanagement'
 
 def _login(driver, login_id, password):
-    driver.get('https://ad.esmplus.com/Member/SignIn/LogOn')
-    time.sleep(2)
+    driver.get('https://ad.esmplus.com/')
+    time.sleep(3)
     try:
+        # GMKT 라디오 선택
+        try:
+            radio = driver.find_element(By.XPATH, '//input[@name="rdoSiteSelect" and @value="GMKT"]')
+            radio.click()
+            time.sleep(0.5)
+        except:
+            pass
         driver.find_element(By.ID, 'SellerId').clear()
         driver.find_element(By.ID, 'SellerId').send_keys(login_id)
         driver.find_element(By.ID, 'SellerPassword').clear()
@@ -22,9 +29,11 @@ def _login(driver, login_id, password):
             driver.find_element(By.XPATH, '//img[@alt="로그인"]').click()
         except:
             driver.find_element(By.XPATH, '//*[@id="lnkSellerLogin"]/img').click()
-        WebDriverWait(driver, 15).until(lambda d: 'SignIn' not in d.current_url and 'LogOn' not in d.current_url)
-        time.sleep(2)
-        return True
+        time.sleep(5)
+        url = driver.current_url.lower()
+        if 'logon' not in url and 'signin' not in url:
+            return True
+        return False
     except Exception as e:
         logger.error(f'로그인 실패 [{login_id}]: {e}')
         return False

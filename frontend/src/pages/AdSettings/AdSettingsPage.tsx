@@ -3,9 +3,9 @@ import {
   getCpc2Schedule, updateCpc2Schedule,
   getAiSchedule, updateAiSchedule, createAiSchedule,
   getSellerGroups, createSellerGroup, updateSellerGroup, deleteSellerGroup,
-  getCrawlerAccounts, controlCpc2, triggerCrawl, getCpc2History
+  getCrawlerAccounts, controlCpc2, triggerCrawl, getCpc2History, controlAi
 } from '../../api/crawler';
-import { Save, Play, Plus, Trash2, Clock, Users } from 'lucide-react';
+import { Save, Play, Plus, Trash2, Clock, Users, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function AdSettingsPage() {
@@ -42,6 +42,11 @@ export default function AdSettingsPage() {
     toast.success(`간편광고 ${action.toUpperCase()} 실행 시작`);
   };
 
+  const handleAiControl = async (action: string) => {
+    await controlAi({ action, source: 'manual' });
+    toast.success(`AI 광고 ${action.toUpperCase()} 실행 시작`);
+  };
+
   const addGroup = async () => {
     if (!groupForm.name) return;
     await createSellerGroup({ name: groupForm.name, seller_ids: groupForm.seller_ids.split(',').map(s => s.trim()).filter(Boolean) });
@@ -61,7 +66,8 @@ export default function AdSettingsPage() {
       <div className="bg-white rounded-lg shadow">
         <div className="border-b flex">
           {[
-            { key: 'cpc2', label: '간편광고 예약' },
+            { key: 'cpc2', label: '간편광고 제어' },
+            { key: 'ai', label: 'AI 광고 제어' },
             { key: 'groups', label: '집중관리 그룹' },
             { key: 'history', label: '제어 이력' },
           ].map(t => (
@@ -159,6 +165,34 @@ export default function AdSettingsPage() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {tab === 'ai' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="font-semibold mb-3 flex items-center gap-2"><Zap size={16} /> AI 광고 ON/OFF 제어</h3>
+                <p className="text-sm text-gray-500 mb-4">지마켓 전체 계정의 AI 광고를 한번에 ON/OFF 합니다. ESM+ API를 통해 실행됩니다.</p>
+                <div className="flex gap-3">
+                  <button onClick={() => handleAiControl('on')} className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">
+                    <Play size={16} /> AI 전체 ON
+                  </button>
+                  <button onClick={() => handleAiControl('off')} className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700">
+                    <Play size={16} /> AI 전체 OFF
+                  </button>
+                </div>
+              </div>
+
+              <div className="border-t pt-4">
+                <h3 className="font-semibold mb-3">AI 예약 설정</h3>
+                <p className="text-sm text-gray-500 mb-3">자동 수집 탭에서 크롤링 스케줄을 설정하면, 예약된 시간에 AI ON/OFF가 실행됩니다.</p>
+                <div className="bg-gray-50 rounded-lg p-4 text-sm">
+                  <p>예시: 크롤러 → 자동 수집 탭에서</p>
+                  <p className="mt-1">- 매일 08:45에 AI ON (간편광고와 함께)</p>
+                  <p>- 매일 16:45에 AI OFF</p>
+                  <p className="mt-2 text-gray-400">cron 스케줄에 AI 제어 명령을 추가하여 구현합니다.</p>
+                </div>
+              </div>
             </div>
           )}
 

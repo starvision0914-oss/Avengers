@@ -342,6 +342,18 @@ class Cpc2ControlView(views.APIView):
         th.Thread(target=run, daemon=True).start()
         return Response({'status': 'started', 'action': action})
 
+class AiControlView(views.APIView):
+    def post(self, request):
+        import threading as th
+        action = request.data.get('action', 'on')
+        accounts = request.data.get('accounts')
+        source = request.data.get('source', 'manual')
+        def run():
+            from crawlers.gmarket_ai_control_crawler import run_control
+            run_control(action, source, account_filter=accounts)
+        th.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'action': action})
+
 class GmarketAiViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketAiAdSummary.objects.all()
     serializer_class = GmarketAiSummarySerializer

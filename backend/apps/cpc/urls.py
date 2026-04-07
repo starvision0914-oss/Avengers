@@ -12,6 +12,7 @@ from .views import (
     AiScheduleViewSet, TelegramConfigViewSet, TelegramRecipientViewSet,
     SellerGroupViewSet, TelegramSendView, Cpc2ControlView,
     CronScheduleViewSet, CronApplyView, AccountUnblockView,
+    AiControlView,
 )
 
 router = DefaultRouter()
@@ -45,5 +46,6 @@ urlpatterns = [
     path('telegram/send/', TelegramSendView.as_view()),
     path('cpc2/control/', Cpc2ControlView.as_view()),
     path('cron/apply/', CronApplyView.as_view()),
+    path('ai/control/', AiControlView.as_view()),
     path('crawler/unblock/', AccountUnblockView.as_view()),
 ]
