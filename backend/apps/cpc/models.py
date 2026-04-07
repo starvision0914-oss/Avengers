@@ -221,3 +221,98 @@ class St11AiAdHistory(models.Model):
     class Meta:
         db_table = 'st11_ai_ad_history'
         ordering = ['-event_time']
+
+
+class GmarketCpcAdStatus(models.Model):
+    """간편광고/일반광고 ON/OFF 현황"""
+    gmarket_id = models.CharField(max_length=50, unique=True)
+    cpc1_on = models.IntegerField(default=0)
+    cpc1_off = models.IntegerField(default=0)
+    cpc2_on = models.IntegerField(default=0)
+    cpc2_off = models.IntegerField(default=0)
+    collected_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'gmarket_cpc_ad_status'
+
+class Cpc2Schedule(models.Model):
+    """간편광고 ON/OFF 예약 설정 (싱글톤)"""
+    on_time = models.TimeField(null=True, blank=True)
+    off_time = models.TimeField(null=True, blank=True)
+    skip_holidays = models.BooleanField(default=True)
+    selected_accounts = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'gmarket_cpc2_schedule'
+
+class Cpc2History(models.Model):
+    """간편광고 ON/OFF 이력"""
+    gmarket_id = models.CharField(max_length=50)
+    action = models.CharField(max_length=5)
+    cpc2_before = models.IntegerField(default=0)
+    cpc2_after = models.IntegerField(default=0)
+    source = models.CharField(max_length=20, default='manual')
+    event_time = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'gmarket_cpc2_history'
+        ordering = ['-event_time']
+
+class CppSchedule(models.Model):
+    """프라임 입찰기간 변경 예약 (싱글톤)"""
+    enabled = models.BooleanField(default=False)
+    weekday_num = models.IntegerField(default=3)
+    run_time = models.TimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'gmarket_cpp_schedule'
+
+class CppBidHistory(models.Model):
+    """프라임 입찰기간 변경 이력"""
+    gmarket_id = models.CharField(max_length=50)
+    keyword_count = models.IntegerField(default=0)
+    bid_start_date = models.DateField(null=True, blank=True)
+    bid_end_date = models.DateField(null=True, blank=True)
+    source = models.CharField(max_length=20, default='manual')
+    success = models.BooleanField(default=False)
+    detail = models.TextField(blank=True)
+    event_time = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'gmarket_cpp_bid_history'
+        ordering = ['-event_time']
+
+class AiSchedule(models.Model):
+    """AI 광고 ON/OFF 예약 설정"""
+    platform = models.CharField(max_length=20, choices=[('gmarket','Gmarket'),('11st','11번가')])
+    on_time = models.TimeField(null=True, blank=True)
+    off_time = models.TimeField(null=True, blank=True)
+    skip_holidays = models.BooleanField(default=True)
+    selected_accounts = models.JSONField(default=list, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'ai_schedule'
+        unique_together = [('platform',)]
+
+class TelegramConfig(models.Model):
+    """텔레그램 알림 설정 (싱글톤)"""
+    bot_token = models.CharField(max_length=200, blank=True)
+    mode = models.CharField(max_length=10, default='off', choices=[('off','OFF'),('change','변동감지'),('15m','15분'),('1h','1시간')])
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'telegram_config'
+
+class TelegramRecipient(models.Model):
+    """텔레그램 수신자"""
+    chat_id = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=100, blank=True)
+    is_active = models.BooleanField(default=True)
+    auto_send = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'telegram_recipients'
+
+class SellerGroup(models.Model):
+    """집중관리 셀러 그룹"""
+    name = models.CharField(max_length=100, default='집중')
+    seller_ids = models.JSONField(default=list)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'seller_groups'

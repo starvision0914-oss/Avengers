@@ -252,6 +252,68 @@ class ElevenSummaryView(views.APIView):
 from .models import GmarketAiAdSummary, St11AdofficeCampaign
 from .serializers import GmarketAiSummarySerializer, St11CampaignSerializer
 
+from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup
+from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer
+
+class CpcAdStatusViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = GmarketCpcAdStatus.objects.all()
+    serializer_class = CpcAdStatusSerializer
+
+class Cpc2ScheduleViewSet(viewsets.ModelViewSet):
+    queryset = Cpc2Schedule.objects.all()
+    serializer_class = Cpc2ScheduleSerializer
+
+class Cpc2HistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Cpc2History.objects.all()[:100]
+    serializer_class = Cpc2HistorySerializer
+
+class AiScheduleViewSet(viewsets.ModelViewSet):
+    queryset = AiSchedule.objects.all()
+    serializer_class = AiScheduleSerializer
+
+class TelegramConfigViewSet(viewsets.ModelViewSet):
+    queryset = TelegramConfig.objects.all()
+    serializer_class = TelegramConfigSerializer
+
+class TelegramRecipientViewSet(viewsets.ModelViewSet):
+    queryset = TelegramRecipient.objects.all()
+    serializer_class = TelegramRecipientSerializer
+
+class SellerGroupViewSet(viewsets.ModelViewSet):
+    queryset = SellerGroup.objects.all()
+    serializer_class = SellerGroupSerializer
+
+class TelegramSendView(views.APIView):
+    def post(self, request):
+        import requests as req
+        config = TelegramConfig.objects.first()
+        if not config or not config.bot_token:
+            return Response({'error': '텔레그램 봇 토큰이 설정되지 않았습니다.'}, status=400)
+
+        message = request.data.get('message', '')
+        recipients = TelegramRecipient.objects.filter(is_active=True)
+        sent = 0
+        for r in recipients:
+            try:
+                req.post(f'https://api.telegram.org/bot{config.bot_token}/sendMessage',
+                    json={'chat_id': r.chat_id, 'text': message, 'parse_mode': 'HTML'}, timeout=10)
+                sent += 1
+            except:
+                pass
+        return Response({'sent': sent})
+
+class Cpc2ControlView(views.APIView):
+    def post(self, request):
+        import threading as th
+        action = request.data.get('action', 'on')
+        accounts = request.data.get('accounts')
+        source = request.data.get('source', 'manual')
+        def run():
+            from crawlers.gmarket_cpc2_control_crawler import run_control
+            run_control(action, source, account_filter=accounts)
+        th.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'action': action})
+
 class GmarketAiViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketAiAdSummary.objects.all()
     serializer_class = GmarketAiSummarySerializer
@@ -269,7 +331,9 @@ class CrawlTriggerView(views.APIView):
         accounts_filter = request.data.get('accounts')
 
         def run():
-            if crawl_type == 'ai':
+            if crawl_type == 'cpc_status':
+                from crawlers.gmarket_cpc_status_crawler import run_all_accounts
+            elif crawl_type == 'ai':
                 if platform == 'gmarket':
                     from crawlers.gmarket_ai_crawler import run_all_accounts
                 else:

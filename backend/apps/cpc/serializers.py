@@ -81,3 +81,50 @@ class St11AiHistorySerializer(serializers.ModelSerializer):
     class Meta:
         model = St11AiAdHistory
         fields = '__all__'
+
+from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, CppSchedule, CppBidHistory, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup
+
+class CpcAdStatusSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GmarketCpcAdStatus
+        fields = '__all__'
+
+class Cpc2ScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cpc2Schedule
+        fields = '__all__'
+
+class Cpc2HistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cpc2History
+        fields = '__all__'
+
+class CppScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CppSchedule
+        fields = '__all__'
+
+class CppBidHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CppBidHistory
+        fields = '__all__'
+
+class AiScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AiSchedule
+        fields = '__all__'
+
+class TelegramConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TelegramConfig
+        fields = '__all__'
+
+class TelegramRecipientSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TelegramRecipient
+        fields = '__all__'
+
+class SellerGroupSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SellerGroup
+        fields = '__all__'

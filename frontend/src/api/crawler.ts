@@ -14,3 +14,23 @@ export const getGmarketSummary = (params?: Record<string, string>) => api.get('/
 export const getElevenSummary = (params?: Record<string, string>) => api.get('/cpc/eleven-summary/', { params }).then(r => r.data);
 export const getGmarketAi = (params?: Record<string, string>) => api.get('/cpc/gmarket-ai/', { params }).then(r => r.data);
 export const getSt11Campaigns = (params?: Record<string, string>) => api.get('/cpc/st11-campaigns/', { params }).then(r => r.data);
+
+export const getCpcStatus = () => api.get('/cpc/cpc-status/').then(r => r.data);
+export const getCpc2Schedule = () => api.get('/cpc/cpc2-schedule/').then(r => r.data);
+export const updateCpc2Schedule = (id: number, data: any) => api.put(`/cpc/cpc2-schedule/${id}/`, data).then(r => r.data);
+export const getCpc2History = () => api.get('/cpc/cpc2-history/').then(r => r.data);
+export const controlCpc2 = (data: any) => api.post('/cpc/cpc2/control/', data).then(r => r.data);
+export const getAiSchedule = () => api.get('/cpc/ai-schedule/').then(r => r.data);
+export const updateAiSchedule = (id: number, data: any) => api.put(`/cpc/ai-schedule/${id}/`, data).then(r => r.data);
+export const createAiSchedule = (data: any) => api.post('/cpc/ai-schedule/', data).then(r => r.data);
+export const getTelegramConfig = () => api.get('/cpc/telegram/config/').then(r => r.data);
+export const updateTelegramConfig = (id: number, data: any) => api.put(`/cpc/telegram/config/${id}/`, data).then(r => r.data);
+export const createTelegramConfig = (data: any) => api.post('/cpc/telegram/config/', data).then(r => r.data);
+export const getTelegramRecipients = () => api.get('/cpc/telegram/recipients/').then(r => r.data);
+export const createTelegramRecipient = (data: any) => api.post('/cpc/telegram/recipients/', data).then(r => r.data);
+export const deleteTelegramRecipient = (id: number) => api.delete(`/cpc/telegram/recipients/${id}/`);
+export const sendTelegram = (message: string) => api.post('/cpc/telegram/send/', { message }).then(r => r.data);
+export const getSellerGroups = () => api.get('/cpc/seller-groups/').then(r => r.data);
+export const createSellerGroup = (data: any) => api.post('/cpc/seller-groups/', data).then(r => r.data);
+export const updateSellerGroup = (id: number, data: any) => api.put(`/cpc/seller-groups/${id}/`, data).then(r => r.data);
+export const deleteSellerGroup = (id: number) => api.delete(`/cpc/seller-groups/${id}/`);

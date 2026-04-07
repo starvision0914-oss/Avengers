@@ -8,6 +8,9 @@ from .views import (
     GmarketSummaryView, ElevenSummaryView,
     GmarketAiViewSet, St11CampaignViewSet,
     CrawlTriggerView,
+    CpcAdStatusViewSet, Cpc2ScheduleViewSet, Cpc2HistoryViewSet,
+    AiScheduleViewSet, TelegramConfigViewSet, TelegramRecipientViewSet,
+    SellerGroupViewSet, TelegramSendView, Cpc2ControlView,
 )
 
 router = DefaultRouter()
@@ -22,6 +25,13 @@ router.register(r'gmarket-grades', GmarketGradeViewSet)
 router.register(r'eleven-grades', ElevenGradeViewSet)
 router.register(r'gmarket-ai', GmarketAiViewSet)
 router.register(r'st11-campaigns', St11CampaignViewSet)
+router.register(r'cpc-status', CpcAdStatusViewSet)
+router.register(r'cpc2-schedule', Cpc2ScheduleViewSet)
+router.register(r'cpc2-history', Cpc2HistoryViewSet, basename='cpc2history')
+router.register(r'ai-schedule', AiScheduleViewSet)
+router.register(r'telegram/config', TelegramConfigViewSet)
+router.register(r'telegram/recipients', TelegramRecipientViewSet)
+router.register(r'seller-groups', SellerGroupViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
@@ -30,4 +40,6 @@ urlpatterns = [
     path('crawler/trigger/', CrawlTriggerView.as_view()),
     path('gmarket-summary/', GmarketSummaryView.as_view()),
     path('eleven-summary/', ElevenSummaryView.as_view()),
+    path('telegram/send/', TelegramSendView.as_view()),
+    path('cpc2/control/', Cpc2ControlView.as_view()),
 ]
