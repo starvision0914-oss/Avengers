@@ -1,0 +1,247 @@
+"""
+지마켓 ESM+ 광고비 크롤러
+- ad.esmplus.com 로그인
+- CPC/AI/잔액 데이터 수집
+- 쿠키 기반 세션 재사용 (24시간)
+"""
+import json
+import logging
+import time
+from datetime import timedelta
+from django.utils import timezone
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+from .browser import create_driver, stop_display
+from .utils import parse_int
+
+logger = logging.getLogger('crawler')
+
+# XPath 상수
+XPATHS = {
+    'gmarket_balance': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[1]/td[2]/div/strong',
+    'auction_balance': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[2]/td[2]/div/strong',
+    'gmarket_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[1]/td[4]/div/strong',
+    'auction_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[2]/td[4]/div/strong',
+    'ai_usage': '//*[@id="spnGmktBillingMinusAmnt"]',
+    'login_btn': '//*[@id="lnkSellerLogin"]/img',
+    'site_radio': '//*[@id="rdoGMKT"]',
+}
+
+CPC_URL = 'https://ad.esmplus.com/cpc/bidmng/bidmanagement'
+AI_URL = 'https://ad.esmplus.com/Remarketing/Management'
+LOGIN_URL = 'https://ad.esmplus.com/'
+
+COOKIE_TTL_HOURS = 24
+
+
+def _safe_text(driver, xpath, timeout=10):
+    try:
+        el = WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.XPATH, xpath))
+        )
+        return el.text.strip()
+    except Exception:
+        return '0'
+
+
+def _try_cookie_login(driver, account):
+    if not account.cookie_data or not account.cookie_saved_at:
+        return False
+    if timezone.now() - account.cookie_saved_at > timedelta(hours=COOKIE_TTL_HOURS):
+        return False
+
+    try:
+        driver.get(LOGIN_URL)
+        time.sleep(1)
+
+        cookies = json.loads(account.cookie_data)
+        for cookie in cookies:
+            cookie.pop('sameSite', None)
+            cookie.pop('expiry', None)
+            try:
+                driver.add_cookie(cookie)
+            except Exception:
+                pass
+
+        driver.get(CPC_URL)
+        time.sleep(2)
+
+        url = driver.current_url.lower()
+        if 'signin' in url or 'login' in url or 'logon' in url:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _full_login(driver, login_id, password):
+    driver.get(LOGIN_URL)
+    time.sleep(2)
+
+    try:
+        radio = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, XPATHS['site_radio']))
+        )
+        radio.click()
+        time.sleep(0.5)
+    except Exception:
+        pass
+
+    try:
+        id_field = driver.find_element(By.ID, 'txtSellerId')
+        id_field.clear()
+        id_field.send_keys(login_id)
+
+        pw_field = driver.find_element(By.ID, 'txtSellerPw')
+        pw_field.clear()
+        pw_field.send_keys(password)
+
+        login_btn = driver.find_element(By.XPATH, XPATHS['login_btn'])
+        login_btn.click()
+
+        WebDriverWait(driver, 15).until(
+            lambda d: 'signin' not in d.current_url.lower()
+        )
+        time.sleep(2)
+        return True
+    except Exception as e:
+        logger.error(f'로그인 실패 [{login_id}]: {e}')
+        return False
+
+
+def _save_cookies(driver, account):
+    try:
+        cookies = driver.get_cookies()
+        account.cookie_data = json.dumps(cookies)
+        account.cookie_saved_at = timezone.now()
+        account.save(update_fields=['cookie_data', 'cookie_saved_at'])
+    except Exception as e:
+        logger.warning(f'쿠키 저장 실패: {e}')
+
+
+def collect_one_account(driver, account, log_fn=None):
+    login_id = account.login_id
+    password = account.password
+
+    def log(msg):
+        logger.info(f'[{login_id}] {msg}')
+        if log_fn:
+            log_fn(f'[{login_id}] {msg}')
+
+    driver.delete_all_cookies()
+
+    # 쿠키 로그인 시도
+    if _try_cookie_login(driver, account):
+        log('쿠키 로그인 성공')
+    else:
+        log('일반 로그인 시도...')
+        if not _full_login(driver, login_id, password):
+            return None
+        log('로그인 성공')
+        _save_cookies(driver, account)
+
+    # CPC 페이지 데이터 수집
+    driver.get(CPC_URL)
+    time.sleep(5)
+
+    gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance']))
+    auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
+    gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
+    auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
+
+    # AI 페이지 데이터 수집
+    driver.get(AI_URL)
+    time.sleep(1.5)
+
+    ai_usage = parse_int(_safe_text(driver, XPATHS['ai_usage']))
+
+    # AI 비용 차감 계산
+    gmarket_cpc = max(gmarket_cpc_raw - ai_usage, 0)
+    total_usage = gmarket_cpc + auction_cpc + ai_usage
+
+    result = {
+        'gmarket_id': login_id,
+        'total_balance': gmarket_balance,
+        'gmarket_cpc': gmarket_cpc,
+        'auction_cpc': auction_cpc,
+        'ai_usage': ai_usage,
+        'total_usage': total_usage,
+        'collected_at': timezone.now(),
+    }
+
+    log(f'잔액={gmarket_balance:,} CPC={gmarket_cpc:,} AI={ai_usage:,} 합계={total_usage:,}')
+    return result
+
+
+def run_all_accounts(log_fn=None, account_filter=None):
+    from apps.cpc.models import CrawlerAccount, GmarketDepositSnapshot, CrawlerLog
+
+    accounts = CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
+    if account_filter:
+        accounts = accounts.filter(login_id__in=account_filter)
+
+    if not accounts.exists():
+        msg = '활성 지마켓 계정이 없습니다.'
+        logger.info(msg)
+        if log_fn:
+            log_fn(msg)
+        return {'collected': 0, 'failed': 0}
+
+    collected, failed = 0, 0
+    driver = None
+
+    try:
+        driver = create_driver()
+
+        for account in accounts:
+            for attempt in range(3):
+                try:
+                    result = collect_one_account(driver, account, log_fn)
+                    if result:
+                        GmarketDepositSnapshot.objects.create(**result)
+                        account.fail_count = 0
+                        account.crawling_status = '정상'
+                        account.last_crawled_at = timezone.now()
+                        account.save()
+                        collected += 1
+
+                        CrawlerLog.objects.create(
+                            platform='gmarket', level='success',
+                            message=f'수집 완료: 합계={result["total_usage"]:,}원',
+                            account_id=account.login_id
+                        )
+                        break
+                    else:
+                        raise Exception('수집 결과 없음')
+                except Exception as e:
+                    if attempt == 2:
+                        account.fail_count += 1
+                        if account.fail_count >= 5:
+                            account.crawling_status = '차단됨'
+                        account.save()
+                        failed += 1
+
+                        CrawlerLog.objects.create(
+                            platform='gmarket', level='error',
+                            message=f'수집 실패: {str(e)}',
+                            account_id=account.login_id
+                        )
+                        logger.error(f'[{account.login_id}] 3회 시도 실패: {e}')
+                    else:
+                        time.sleep(2)
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        stop_display()
+
+    summary = f'지마켓 수집 완료: 성공={collected} 실패={failed}'
+    logger.info(summary)
+    if log_fn:
+        log_fn(summary)
+
+    return {'collected': collected, 'failed': failed}

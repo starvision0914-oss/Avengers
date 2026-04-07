@@ -68,3 +68,62 @@ class CPCChartView(views.APIView):
             total_cost=Sum('total_cost'),
         ).order_by('date')
         return Response(list(data))
+
+
+from .models import CrawlerAccount, CrawlerLog, GmarketDepositSnapshot, ElevenCostHistory, GmarketSellerGrade, ElevenSellerGrade
+from .serializers import CrawlerAccountSerializer, CrawlerLogSerializer, GmarketDepositSnapshotSerializer, ElevenCostHistorySerializer, GmarketGradeSerializer, ElevenGradeSerializer
+import threading
+
+class CrawlerAccountViewSet(viewsets.ModelViewSet):
+    queryset = CrawlerAccount.objects.all()
+    serializer_class = CrawlerAccountSerializer
+    filterset_fields = ['platform', 'is_active', 'crawling_status']
+
+class CrawlerLogViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = CrawlerLogSerializer
+    filterset_fields = ['platform', 'level', 'account_id']
+
+    def get_queryset(self):
+        return CrawlerLog.objects.all()[:200]
+
+class GmarketSnapshotViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = GmarketDepositSnapshot.objects.all()
+    serializer_class = GmarketDepositSnapshotSerializer
+    filterset_fields = ['gmarket_id']
+
+class ElevenCostViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = ElevenCostHistory.objects.all()
+    serializer_class = ElevenCostHistorySerializer
+    filterset_fields = ['seller_id', 'transaction_type']
+
+class GmarketGradeViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = GmarketSellerGrade.objects.all()
+    serializer_class = GmarketGradeSerializer
+    filterset_fields = ['gmarket_id']
+
+class ElevenGradeViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = ElevenSellerGrade.objects.all()
+    serializer_class = ElevenGradeSerializer
+    filterset_fields = ['eleven_id']
+
+class CrawlTriggerView(views.APIView):
+    def post(self, request):
+        platform = request.data.get('platform', 'gmarket')
+        crawl_type = request.data.get('type', 'cost')  # cost or grade
+        accounts_filter = request.data.get('accounts')
+
+        def run():
+            if crawl_type == 'grade':
+                if platform == 'gmarket':
+                    from crawlers.gmarket_grade_crawler import run_all_accounts
+                else:
+                    from crawlers.eleven_grade_crawler import run_all_accounts
+            else:
+                if platform == 'gmarket':
+                    from crawlers.gmarket_crawler import run_all_accounts
+                else:
+                    from crawlers.eleven_crawler import run_all_accounts
+            run_all_accounts(account_filter=accounts_filter)
+
+        threading.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'platform': platform, 'type': crawl_type})

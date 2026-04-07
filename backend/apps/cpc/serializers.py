@@ -25,3 +25,37 @@ class CPCTransactionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CPCTransaction
         fields = '__all__'
+
+
+from .models import CrawlerAccount, CrawlerLog, GmarketDepositSnapshot, ElevenCostHistory, GmarketSellerGrade, ElevenSellerGrade
+
+class CrawlerAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CrawlerAccount
+        fields = '__all__'
+        extra_kwargs = {'password': {'write_only': True}}
+
+class CrawlerLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CrawlerLog
+        fields = '__all__'
+
+class GmarketDepositSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GmarketDepositSnapshot
+        fields = '__all__'
+
+class ElevenCostHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ElevenCostHistory
+        fields = '__all__'
+
+class GmarketGradeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GmarketSellerGrade
+        fields = '__all__'
+
+class ElevenGradeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ElevenSellerGrade
+        fields = '__all__'
