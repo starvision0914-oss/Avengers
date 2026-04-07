@@ -177,8 +177,9 @@ export default function CPCDashboard() {
                       {/* 광고상태 */}
                       <td className="px-3 py-[7px] text-center">
                         {s.cpc_status ? (
-                          <div className="flex items-center justify-center gap-1 text-[10px]">
-                            <span className="px-1 py-0.5 rounded bg-blue-50 text-blue-700">간편 {s.cpc_status.cpc2_on}<span className="text-green-600">ON</span>/{s.cpc_status.cpc2_off}<span className="text-red-500">OFF</span></span>
+                          <div className="flex flex-col items-center gap-0.5 text-[10px]">
+                            <span className="px-1 py-0.5 rounded bg-gray-50 text-gray-700">일반 <span className="text-green-600 font-bold">{s.cpc_status.cpc1_on}</span>ON/<span className="text-red-500 font-bold">{s.cpc_status.cpc1_off}</span>OFF</span>
+                            <span className="px-1 py-0.5 rounded bg-blue-50 text-blue-700">간편 <span className="text-green-600 font-bold">{s.cpc_status.cpc2_on}</span>ON/<span className="text-red-500 font-bold">{s.cpc_status.cpc2_off}</span>OFF</span>
                           </div>
                         ) : <span className="text-[#ccc] text-[10px]">-</span>}
                       </td>
