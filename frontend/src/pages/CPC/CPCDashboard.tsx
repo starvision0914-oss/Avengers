@@ -141,7 +141,6 @@ export default function CPCDashboard() {
                   <>
                     <th className="px-3 py-[7px] text-right text-[#555] font-semibold">잔액</th>
                     <th className="px-3 py-[7px] text-right text-[#555] font-semibold">CPC</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">옥션CPC</th>
                     <th className="px-3 py-[7px] text-right text-[#555] font-semibold">AI</th>
                     <th className="px-3 py-[7px] text-right text-[#555] font-bold">광고비합</th>
                     <th className="px-3 py-[7px] text-left text-[#999] font-normal">수집시간</th>
@@ -175,7 +174,6 @@ export default function CPCDashboard() {
                     <>
                       <td className="px-3 py-[7px] text-right text-[#00a651]">{fmt(s.balance)}</td>
                       <td className={`px-3 py-[7px] text-right ${s.cpc_spend ? 'text-[#1a73e8]' : 'text-[#ccc]'}`}>{fmt(s.cpc_spend)}</td>
-                      <td className={`px-3 py-[7px] text-right ${s.auction_cpc ? 'text-[#e08000]' : 'text-[#ccc]'}`}>{fmt(s.auction_cpc)}</td>
                       <td className={`px-3 py-[7px] text-right ${s.ai_spend ? 'text-[#7c3aed]' : 'text-[#ccc]'}`}>{fmt(s.ai_spend)}</td>
                       <td className={`px-3 py-[7px] text-right font-bold ${s.ad_total ? 'text-[#1557b0]' : 'text-[#ccc]'}`}>{fmt(s.ad_total)}</td>
                       <td className="px-3 py-[7px] text-left text-[10px] text-[#aaa]">
@@ -193,7 +191,7 @@ export default function CPCDashboard() {
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={platform === 'gmarket' ? 8 : 5} className="px-4 py-12 text-center text-[#aaa]">
+                  <td colSpan={platform === 'gmarket' ? 7 : 5} className="px-4 py-12 text-center text-[#aaa]">
                     {date} 수집된 데이터가 없습니다. 수집 버튼을 클릭하세요.
                   </td>
                 </tr>
@@ -208,7 +206,6 @@ export default function CPCDashboard() {
                     <>
                       <td className="px-3 py-[8px] text-right text-[#00a651]">{fmt(totals.balance)}</td>
                       <td className="px-3 py-[8px] text-right text-[#1a73e8]">{fmt(totals.cpc_spend)}</td>
-                      <td className="px-3 py-[8px] text-right text-[#e08000]">{fmt(sellers.reduce((s: number, d: any) => s + (d.auction_cpc || 0), 0))}</td>
                       <td className="px-3 py-[8px] text-right text-[#7c3aed]">{fmt(totals.ai_spend)}</td>
                       <td className="px-3 py-[8px] text-right text-[#e04040]">{fmt(totals.ad_total)}</td>
                       <td className="px-3 py-[8px]"></td>
@@ -236,7 +233,7 @@ export default function CPCDashboard() {
             <BarChart data={sellers.map((s: any) => ({
               name: s.seller_id,
               CPC: s.cpc_spend || 0,
-              ...(platform === 'gmarket' ? { AI: s.ai_spend || 0, 옥션: s.auction_cpc || 0 } : { 충전: s.charge || 0 }),
+              ...(platform === 'gmarket' ? { AI: s.ai_spend || 0 } : { 충전: s.charge || 0 }),
             }))}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
@@ -247,7 +244,6 @@ export default function CPCDashboard() {
                 <>
                   <Bar dataKey="CPC" fill="#1a73e8" radius={[2, 2, 0, 0]} />
                   <Bar dataKey="AI" fill="#7c3aed" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="옥션" fill="#e08000" radius={[2, 2, 0, 0]} />
                 </>
               ) : (
                 <>
