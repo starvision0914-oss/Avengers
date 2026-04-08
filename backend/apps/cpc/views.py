@@ -277,8 +277,8 @@ class ElevenSummaryView(views.APIView):
             'sellers': sellers,
         })
 
-from .models import GmarketAiAdSummary, St11AdofficeCampaign
-from .serializers import GmarketAiSummarySerializer, St11CampaignSerializer
+from .models import GmarketAiAdSummary, GmarketAiAdHistory, St11AdofficeCampaign
+from .serializers import GmarketAiSummarySerializer, GmarketAiHistorySerializer, St11CampaignSerializer
 
 from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup
 from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer
@@ -298,6 +298,41 @@ class Cpc2HistoryViewSet(viewsets.ReadOnlyModelViewSet):
 class AiScheduleViewSet(viewsets.ModelViewSet):
     queryset = AiSchedule.objects.all()
     serializer_class = AiScheduleSerializer
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        self._update_cron(instance)
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        self._update_cron(instance)
+
+    def _update_cron(self, schedule):
+        """AI 스케줄 저장 시 crontab 자동 업데이트"""
+        import subprocess
+        tag = 'AI_AD_SCHEDULE'
+        script = '/home/rejoice888/Avengers/backend/scripts/cron_ai_schedule.sh'
+
+        # 현재 crontab 읽기
+        try:
+            result = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
+            lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
+        except Exception:
+            lines = []
+
+        # 기존 AI 스케줄 라인 제거
+        lines = [l for l in lines if tag not in l]
+
+        # off_on_time이 있으면 새 라인 추가
+        t = schedule.off_on_time
+        if t and schedule.selected_accounts:
+            mm, hh = t.minute, t.hour
+            new_line = f'{mm} {hh} * * 1-5 {script} # {tag}'
+            lines.append(new_line)
+
+        # crontab 업데이트
+        cron_text = '\n'.join(lines) + '\n'
+        subprocess.run(['crontab', '-'], input=cron_text, text=True)
 
 class TelegramConfigViewSet(viewsets.ModelViewSet):
     queryset = TelegramConfig.objects.all()
@@ -358,6 +393,12 @@ class GmarketAiViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketAiAdSummary.objects.all()
     serializer_class = GmarketAiSummarySerializer
     filterset_fields = ['gmarket_id', 'actual_status']
+
+class GmarketAiHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = GmarketAiHistorySerializer
+    filterset_fields = ['gmarket_id']
+    def get_queryset(self):
+        return GmarketAiAdHistory.objects.all()[:200]
 
 class St11CampaignViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = St11AdofficeCampaign.objects.all()

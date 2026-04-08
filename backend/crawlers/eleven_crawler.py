@@ -340,18 +340,37 @@ def run_all_accounts(log_fn=None, account_filter=None):
                     log_fn(f'[11st:{login_id}] {msg}')
 
             try:
-                # 쿠키 삭제 전 about:blank으로 이동하여 기존 세션 alert 방지
+                # 이전 세션 완전 정리
                 try:
-                    driver.get('about:blank')
-                    time.sleep(0.5)
+                    # 11번가 셀러오피스 로그아웃
+                    driver.get('https://soffice.11st.co.kr/auth/api/v1/logout')
+                    time.sleep(1)
                 except Exception:
                     pass
                 try:
-                    alert = driver.switch_to.alert
-                    alert.accept()
+                    driver.get('https://login.11st.co.kr/auth/front/logout.tmall')
+                    time.sleep(1)
                 except Exception:
                     pass
+                # about:blank으로 도메인 초기화 후 모든 쿠키 삭제
+                driver.get('about:blank')
+                time.sleep(0.5)
                 driver.delete_all_cookies()
+                # 11st 도메인 쿠키도 별도 삭제
+                try:
+                    driver.get('https://login.11st.co.kr')
+                    time.sleep(0.5)
+                    driver.delete_all_cookies()
+                except Exception:
+                    pass
+                try:
+                    driver.get('https://soffice.11st.co.kr')
+                    time.sleep(0.5)
+                    driver.delete_all_cookies()
+                except Exception:
+                    pass
+                driver.get('about:blank')
+                time.sleep(0.5)
 
                 log('로그인 시도...')
                 if not _do_login(driver, login_id, account.password_enc):

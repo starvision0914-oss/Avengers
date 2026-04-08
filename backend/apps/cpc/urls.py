@@ -6,7 +6,7 @@ from .views import (
     CrawlerAccountViewSet, CrawlerLogViewSet, GmarketSnapshotViewSet,
     ElevenCostViewSet, GmarketGradeViewSet, ElevenGradeViewSet,
     GmarketSummaryView, ElevenSummaryView,
-    GmarketAiViewSet, St11CampaignViewSet,
+    GmarketAiViewSet, GmarketAiHistoryViewSet, St11CampaignViewSet,
     CrawlTriggerView,
     CpcAdStatusViewSet, Cpc2ScheduleViewSet, Cpc2HistoryViewSet,
     AiScheduleViewSet, TelegramConfigViewSet, TelegramRecipientViewSet,
@@ -27,6 +27,7 @@ router.register(r'eleven-costs', ElevenCostViewSet, basename='elevencost')
 router.register(r'gmarket-grades', GmarketGradeViewSet)
 router.register(r'eleven-grades', ElevenGradeViewSet)
 router.register(r'gmarket-ai', GmarketAiViewSet)
+router.register(r'ai-history', GmarketAiHistoryViewSet, basename='aihistory')
 router.register(r'st11-campaigns', St11CampaignViewSet)
 router.register(r'cpc-status', CpcAdStatusViewSet)
 router.register(r'cpc2-schedule', Cpc2ScheduleViewSet)

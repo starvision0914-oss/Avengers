@@ -284,8 +284,11 @@ class AiSchedule(models.Model):
     platform = models.CharField(max_length=20, choices=[('gmarket','Gmarket'),('11st','11번가')])
     on_time = models.TimeField(null=True, blank=True)
     off_time = models.TimeField(null=True, blank=True)
+    off_on_time = models.TimeField(null=True, blank=True)
     skip_holidays = models.BooleanField(default=True)
     selected_accounts = models.JSONField(default=list, blank=True)
+    enabled_holidays = models.JSONField(default=list, blank=True)
+    custom_holidays = models.JSONField(default=list, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         db_table = 'ai_schedule'
