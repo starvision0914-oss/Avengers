@@ -3,6 +3,7 @@ import { getGmarketSummary, getElevenSummary, getGmarketSnapshots, getElevenCost
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 import { ChevronLeft, ChevronRight, Play, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
+import AdCostModal from '../../components/AdCostModal';
 import dayjs from 'dayjs';
 
 type PeriodMode = 'daily' | 'monthly';
@@ -15,6 +16,7 @@ export default function CPCDashboard() {
   const [elData, setElData] = useState<any>({ totals: {}, sellers: [] });
   const [crawling, setCrawling] = useState('');
   const [selectedSeller, setSelectedSeller] = useState<string | null>(null);
+  const [modal, setModal] = useState<{ sellerId: string; sellerAlias: string; category?: string } | null>(null);
 
   const load = () => {
     if (periodMode === 'daily') {
@@ -184,7 +186,8 @@ export default function CPCDashboard() {
                         ) : <span className="text-[#ccc] text-[10px]">-</span>}
                       </td>
                       <td className="px-3 py-[7px] text-right text-[#00a651]">{fmt(s.balance)}</td>
-                      <td className={`px-3 py-[7px] text-right ${s.cpc_spend ? 'text-[#1a73e8]' : 'text-[#ccc]'}`}>{fmt(s.cpc_spend)}</td>
+                      <td className={`px-3 py-[7px] text-right cursor-pointer hover:underline ${s.cpc_spend ? 'text-[#1a73e8]' : 'text-[#ccc]'}`}
+                        onClick={(e) => { e.stopPropagation(); setModal({ sellerId: s.seller_id, sellerAlias: s.seller_id, category: 'CPC' }); }}>{fmt(s.cpc_spend)}</td>
                       {/* AI 상태 */}
                       <td className="px-3 py-[7px] text-center">
                         {s.ai_status ? (
@@ -198,7 +201,8 @@ export default function CPCDashboard() {
                           <span className={`text-[10px] ${s.ai_spend ? 'text-[#7c3aed]' : 'text-[#ccc]'}`}>{fmt(s.ai_spend)}</span>
                         )}
                       </td>
-                      <td className={`px-3 py-[7px] text-right font-bold ${s.ad_total ? 'text-[#1557b0]' : 'text-[#ccc]'}`}>{fmt(s.ad_total)}</td>
+                      <td className={`px-3 py-[7px] text-right font-bold cursor-pointer hover:underline ${s.ad_total ? 'text-[#1557b0]' : 'text-[#ccc]'}`}
+                        onClick={(e) => { e.stopPropagation(); setModal({ sellerId: s.seller_id, sellerAlias: s.seller_id }); }}>{fmt(s.ad_total)}</td>
                       {/* 등급 */}
                       <td className="px-3 py-[7px] text-left text-[10px]">
                         {s.grade_info ? (
@@ -216,7 +220,8 @@ export default function CPCDashboard() {
                     </>
                   ) : (
                     <>
-                      <td className={`px-3 py-[7px] text-right ${s.cpc_spend ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}`}>{fmt(s.cpc_spend)}</td>
+                      <td className={`px-3 py-[7px] text-right cursor-pointer hover:underline ${s.cpc_spend ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}`}
+                        onClick={(e) => { e.stopPropagation(); setModal({ sellerId: s.seller_id, sellerAlias: s.seller_id, category: 'CPC' }); }}>{fmt(s.cpc_spend)}</td>
                       <td className={`px-3 py-[7px] text-right ${s.charge ? 'text-[#00a651]' : 'text-[#ccc]'}`}>{fmt(s.charge)}</td>
                       <td className="px-3 py-[7px] text-right text-[#333]">{fmt(s.balance)}</td>
                       <td className="px-3 py-[7px] text-right text-[#999]">{s.tx_count || 0}</td>
@@ -290,6 +295,18 @@ export default function CPCDashboard() {
             </BarChart>
           </ResponsiveContainer>
         </div>
+      )}
+
+      {/* 광고비 상세 모달 */}
+      {modal && (
+        <AdCostModal
+          sellerId={modal.sellerId}
+          sellerAlias={modal.sellerAlias}
+          platform={platform}
+          date={date}
+          category={modal.category}
+          onClose={() => setModal(null)}
+        />
       )}
     </div>
   );

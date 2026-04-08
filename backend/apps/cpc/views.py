@@ -277,6 +277,77 @@ class ElevenSummaryView(views.APIView):
             'sellers': sellers,
         })
 
+class AdDetailView(views.APIView):
+    """광고비 상세 내역 - CPC/AI 클릭 시 모달용"""
+    def get(self, request):
+        from datetime import datetime, timedelta
+        import pytz
+        kst = pytz.timezone('Asia/Seoul')
+
+        seller_id = request.query_params.get('seller_id')
+        platform = request.query_params.get('platform', 'gmarket')
+        date_str = request.query_params.get('date')
+        category = request.query_params.get('category')
+
+        if not seller_id:
+            return Response({'error': 'seller_id 필요'}, status=400)
+
+        if date_str:
+            start = kst.localize(datetime.strptime(date_str, '%Y-%m-%d'))
+            end = start + timedelta(days=1)
+        else:
+            from django.utils import timezone as tz
+            today = tz.localdate()
+            start = kst.localize(datetime.combine(today, datetime.min.time()))
+            end = start + timedelta(days=1)
+
+        if platform == '11st':
+            qs = ElevenCostHistory.objects.filter(
+                seller_id=seller_id,
+                transaction_datetime__gte=start,
+                transaction_datetime__lt=end,
+            )
+            if category:
+                qs = qs.filter(transaction_type=category)
+
+            rows = []
+            for r in qs.order_by('-transaction_datetime'):
+                rows.append({
+                    'time': r.transaction_datetime.astimezone(kst).strftime('%H:%M:%S'),
+                    'category': r.transaction_type,
+                    'description': r.raw_description,
+                    'amount': r.amount,
+                })
+        else:
+            # 지마켓 - 스냅샷 이력
+            qs = GmarketDepositSnapshot.objects.filter(
+                gmarket_id=seller_id,
+                collected_at__gte=start,
+                collected_at__lt=end,
+            )
+            rows = []
+            for s in qs.order_by('-collected_at'):
+                if category == 'CPC':
+                    rows.append({'time': s.collected_at.astimezone(kst).strftime('%H:%M:%S'), 'category': 'CPC', 'description': 'CPC 광고비', 'amount': -s.gmarket_cpc})
+                elif category == 'AI':
+                    rows.append({'time': s.collected_at.astimezone(kst).strftime('%H:%M:%S'), 'category': 'AI', 'description': 'AI 광고비', 'amount': -s.ai_usage})
+                else:
+                    if s.gmarket_cpc:
+                        rows.append({'time': s.collected_at.astimezone(kst).strftime('%H:%M:%S'), 'category': 'CPC', 'description': 'CPC 광고비', 'amount': -s.gmarket_cpc})
+                    if s.ai_usage:
+                        rows.append({'time': s.collected_at.astimezone(kst).strftime('%H:%M:%S'), 'category': 'AI', 'description': 'AI 광고비', 'amount': -s.ai_usage})
+
+        # 요약
+        summary = {}
+        for r in rows:
+            cat = r['category']
+            if cat not in summary:
+                summary[cat] = {'count': 0, 'total': 0}
+            summary[cat]['count'] += 1
+            summary[cat]['total'] += r['amount']
+
+        return Response({'rows': rows, 'summary': summary})
+
 from .models import GmarketAiAdSummary, GmarketAiAdHistory, St11AdofficeCampaign
 from .serializers import GmarketAiSummarySerializer, GmarketAiHistorySerializer, St11CampaignSerializer
 

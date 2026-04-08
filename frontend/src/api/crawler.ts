@@ -44,3 +44,4 @@ export const getSmsPhones = () => api.get('/cpc/sms/phones/').then(r => r.data);
 export const addSmsPhone = (data: any) => api.post('/cpc/sms/phones/', data).then(r => r.data);
 export const removeSmsPhone = (id: number) => api.delete('/cpc/sms/phones/', { data: { id } }).then(r => r.data);
 export const getLatestSms = (params?: Record<string, string>) => api.get('/cpc/sms/latest/', { params }).then(r => r.data);
+export const getAdDetail = (params: Record<string, string>) => api.get('/cpc/ad-detail/', { params }).then(r => r.data);
