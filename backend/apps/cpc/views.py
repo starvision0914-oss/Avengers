@@ -507,3 +507,48 @@ class SmsOtpTestView(views.APIView):
                     pass
         ps.unsubscribe()
         return Response({'code': None, 'timeout': True})
+
+from .models import SmsPhoneSetting
+
+class SmsPhoneSettingView(views.APIView):
+    permission_classes = []
+
+    def get(self, request):
+        phones = SmsPhoneSetting.objects.all()
+        data = [{'id': p.id, 'phone_number': p.phone_number, 'name': p.name, 'is_active': p.is_active} for p in phones]
+        return Response(data)
+
+    def post(self, request):
+        phone = request.data.get('phone_number', '')
+        name = request.data.get('name', '')
+        if not phone:
+            return Response({'error': '전화번호 필요'}, status=400)
+        obj, created = SmsPhoneSetting.objects.get_or_create(
+            phone_number=phone, defaults={'name': name}
+        )
+        if not created:
+            obj.name = name
+            obj.save()
+        return Response({'id': obj.id, 'created': created})
+
+    def delete(self, request):
+        pid = request.data.get('id')
+        SmsPhoneSetting.objects.filter(id=pid).delete()
+        return Response({'deleted': True})
+
+class SmsLatestView(views.APIView):
+    """최근 SMS 목록 (위젯용, 인증 불필요)"""
+    permission_classes = []
+
+    def get(self, request):
+        limit = int(request.query_params.get('limit', 30))
+        since_id = request.query_params.get('since_id')
+        qs = ReceivedSmsMessage.objects.all()
+        if since_id:
+            qs = qs.filter(id__gt=since_id)
+        msgs = qs[:limit]
+        data = [{
+            'id': m.id, 'csphone': m.csphone_number, 'phone': m.checkphone_number,
+            'message': m.message, 'received_at': m.received_at.isoformat()
+        } for m in msgs]
+        return Response(data)

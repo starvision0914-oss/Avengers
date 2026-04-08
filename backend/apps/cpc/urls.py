@@ -13,6 +13,7 @@ from .views import (
     SellerGroupViewSet, TelegramSendView, Cpc2ControlView,
     CronScheduleViewSet, CronApplyView, AccountUnblockView,
     AiControlView, SmsReceiveView, SmsOtpTestView,
+    SmsPhoneSettingView, SmsLatestView,
 )
 
 router = DefaultRouter()
@@ -50,4 +51,6 @@ urlpatterns = [
     path('sms/receive/', SmsReceiveView.as_view()),
     path('sms/otp-test/', SmsOtpTestView.as_view()),
     path('crawler/unblock/', AccountUnblockView.as_view()),
+    path('sms/phones/', SmsPhoneSettingView.as_view()),
+    path('sms/latest/', SmsLatestView.as_view()),
 ]

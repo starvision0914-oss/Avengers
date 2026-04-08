@@ -341,3 +341,14 @@ class ReceivedSmsMessage(models.Model):
     class Meta:
         db_table = 'received_sms_message'
         ordering = ['-received_at']
+
+
+class SmsPhoneSetting(models.Model):
+    """SMS 수신 전화번호 설정"""
+    phone_number = models.CharField(max_length=20, unique=True)
+    name = models.CharField(max_length=50, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'sms_phone_settings'
+        ordering = ['phone_number']

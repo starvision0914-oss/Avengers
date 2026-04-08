@@ -17,6 +17,7 @@ import CrawlerPage from './pages/Crawler/CrawlerPage';
 import TelegramPage from './pages/Telegram/TelegramPage';
 import AnalysisPage from './pages/Analysis/AnalysisPage';
 import AdSettingsPage from './pages/AdSettings/AdSettingsPage';
+import SmsWidget from './components/SmsWidget';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Navigate to="/login" replace />;
@@ -27,6 +28,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Toaster position="top-right" />
+      <SmsWidget />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
