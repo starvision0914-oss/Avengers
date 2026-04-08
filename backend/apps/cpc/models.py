@@ -63,6 +63,7 @@ class CrawlerAccount(models.Model):
     cookie_saved_at = models.DateTimeField(null=True, blank=True)
     sub_accounts = models.TextField(default='[]', blank=True)
     gmarket_origin_id = models.CharField(max_length=50, null=True, blank=True)
+    cost_type = models.CharField(max_length=20, default='sellerpoint', choices=[('sellerpoint','셀러포인트'),('sellercash','셀러캐시')])
     display_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:

@@ -24,7 +24,8 @@ from .utils import parse_int, classify_11st_description, wait_for_download
 logger = logging.getLogger('crawler')
 
 LOGIN_URL = 'https://login.11st.co.kr/auth/front/selleroffice/login.tmall'
-COST_URL = 'https://soffice.11st.co.kr/view/8201'
+COST_URL_SELLERPOINT = 'https://soffice.11st.co.kr/view/8201'
+COST_URL_SELLERCASH = 'https://soffice.11st.co.kr/view/8301'
 DOWNLOAD_BASE = Path('/tmp/avengers_11st_downloads')
 
 EXCEL_XPATHS = [
@@ -156,19 +157,21 @@ def _do_login(driver, login_id, password):
         return False
 
 
-def _download_cost_xls(driver, download_dir, login_id):
+def _download_cost_xls(driver, download_dir, login_id, cost_type='sellerpoint'):
     # CDP 명령으로 다운로드 경로 설정
     driver.execute_cdp_cmd('Page.setDownloadBehavior', {
         'behavior': 'allow', 'downloadPath': str(download_dir)
     })
 
-    driver.get(COST_URL)
+    cost_url = COST_URL_SELLERCASH if cost_type == 'sellercash' else COST_URL_SELLERPOINT
+    iframe_id = '8301' if cost_type == 'sellercash' else '8201'
+    driver.get(cost_url)
     time.sleep(3)
 
     try:
         # iframe 전환
         iframe = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.XPATH, "//iframe[contains(@id,'8201')]"))
+            EC.presence_of_element_located((By.XPATH, f"//iframe[contains(@id,'{iframe_id}')]"))
         )
         driver.switch_to.frame(iframe)
         time.sleep(2)
@@ -218,7 +221,7 @@ def _download_cost_xls(driver, download_dir, login_id):
         return None
 
 
-def _parse_and_save_xls(filepath, seller_id):
+def _parse_and_save_xls(filepath, seller_id, cost_type='sellerpoint'):
     from apps.cpc.models import ElevenCostHistory
 
     # .xls는 xlrd, .xlsx는 openpyxl
@@ -250,7 +253,7 @@ def _parse_and_save_xls(filepath, seller_id):
             break
 
     if header_idx is None:
-        header_idx = 1
+        header_idx = 5 if cost_type == 'sellercash' else 1
 
     headers = [str(c or '').strip() for c in rows[header_idx]]
 
@@ -385,12 +388,13 @@ def run_all_accounts(log_fn=None, account_filter=None):
                     f.unlink(missing_ok=True)
 
                 # XLS 다운로드
-                log('광고비 내역 다운로드 중...')
-                filepath = _download_cost_xls(driver, str(dl_dir), login_id)
+                ct = account.cost_type or 'sellerpoint'
+                log(f'광고비 내역 다운로드 중... ({ct})')
+                filepath = _download_cost_xls(driver, str(dl_dir), login_id, cost_type=ct)
 
                 if filepath:
                     log(f'파싱 중: {filepath.name}')
-                    saved = _parse_and_save_xls(filepath, login_id)
+                    saved = _parse_and_save_xls(filepath, login_id, cost_type=ct)
                     log(f'{saved}건 저장 완료')
 
                     account.fail_count = 0

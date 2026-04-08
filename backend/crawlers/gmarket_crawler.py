@@ -208,14 +208,86 @@ def collect_one_account(driver, account, log_fn=None):
     return result
 
 
+def _get_sub_accounts(main_login_id):
+    """메인 계정의 서브 계정 목록 반환"""
+    from apps.cpc.models import CrawlerAccount
+    return list(CrawlerAccount.objects.filter(
+        platform='gmarket', is_active=True,
+        gmarket_origin_id=main_login_id
+    ).exclude(login_id=main_login_id))
+
+
+def _collect_sub_account(driver, sub_account, log_fn=None):
+    """메인 로그인 세션에서 서브 계정 데이터 수집 (이미 로그인된 상태)"""
+    login_id = sub_account.login_id
+
+    def log(msg):
+        logger.info(f'[서브:{login_id}] {msg}')
+        if log_fn:
+            log_fn(f'[서브:{login_id}] {msg}')
+
+    # CPC 페이지 — 메인 로그인 세션에서 서브 데이터도 표에 포함됨
+    driver.get(CPC_URL)
+    time.sleep(3)
+
+    gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
+    auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
+    gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
+    auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
+
+    if gmarket_balance == 0 and gmarket_cpc_raw == 0:
+        log('CPC 페이지 데이터 미로드, 새로고침 후 재시도...')
+        driver.refresh()
+        time.sleep(5)
+        gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
+        auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
+        gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
+        auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
+
+    # AI 페이지
+    driver.get(AI_URL)
+    time.sleep(2)
+    ai_usage = parse_int(_safe_text(driver, XPATHS['ai_usage']))
+
+    gmarket_cpc = max(gmarket_cpc_raw - ai_usage, 0)
+    total_usage = gmarket_cpc + auction_cpc + ai_usage
+
+    result = {
+        'gmarket_id': login_id,
+        'total_balance': gmarket_balance,
+        'gmarket_cpc': gmarket_cpc,
+        'auction_cpc': auction_cpc,
+        'ai_usage': ai_usage,
+        'total_usage': total_usage,
+        'collected_at': timezone.now(),
+    }
+
+    log(f'잔액={gmarket_balance:,} CPC={gmarket_cpc:,} AI={ai_usage:,} 합계={total_usage:,}')
+    return result
+
+
 def run_all_accounts(log_fn=None, account_filter=None):
     from apps.cpc.models import CrawlerAccount, GmarketDepositSnapshot, CrawlerLog
 
     accounts = CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
     if account_filter:
         accounts = accounts.filter(login_id__in=account_filter)
+    else:
+        # 서브 계정은 제외 (메인 로그인 시 같이 수집)
+        accounts = accounts.exclude(
+            is_multi_id=True,
+        ) | accounts.filter(
+            is_multi_id=True, gmarket_origin_id__isnull=True,
+        ) | accounts.filter(
+            is_multi_id=True, gmarket_origin_id='',
+        ) | accounts.filter(
+            is_multi_id=True, gmarket_origin_id__in=['', None],
+        )
+        # 위 복잡한 쿼리 대신 간단히 리스트로 필터
+        accounts = [a for a in CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
+                     if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
 
-    if not accounts.exists():
+    if not accounts:
         msg = '활성 지마켓 계정이 없습니다.'
         logger.info(msg)
         if log_fn:
@@ -233,6 +305,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
                 if log_fn: log_fn(f'[GM:{account.login_id}] 차단됨 - 건너뜀')
                 continue
 
+            # 메인 계정 수집
             for attempt in range(3):
                 try:
                     result = collect_one_account(driver, account, log_fn)
@@ -249,6 +322,29 @@ def run_all_accounts(log_fn=None, account_filter=None):
                             message=f'수집 완료: 합계={result["total_usage"]:,}원',
                             account_id=account.login_id
                         )
+
+                        # 서브 계정 수집 (같은 로그인 세션 재사용)
+                        sub_accounts = _get_sub_accounts(account.login_id)
+                        for sub in sub_accounts:
+                            try:
+                                sub_result = _collect_sub_account(driver, sub, log_fn)
+                                if sub_result:
+                                    GmarketDepositSnapshot.objects.create(**sub_result)
+                                    sub.fail_count = 0
+                                    sub.crawling_status = '정상'
+                                    sub.last_crawled_at = timezone.now()
+                                    sub.save()
+                                    collected += 1
+                                    CrawlerLog.objects.create(
+                                        platform='gmarket', level='success',
+                                        message=f'서브계정 수집 완료: 합계={sub_result["total_usage"]:,}원',
+                                        account_id=sub.login_id
+                                    )
+                            except Exception as e:
+                                logger.error(f'[서브:{sub.login_id}] 수집 실패: {e}')
+                                if log_fn:
+                                    log_fn(f'[서브:{sub.login_id}] 수집 실패: {e}')
+
                         break
                     else:
                         raise Exception('수집 결과 없음')
