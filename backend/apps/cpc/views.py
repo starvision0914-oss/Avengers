@@ -438,3 +438,72 @@ class AccountUnblockView(views.APIView):
             return Response({'unblocked': acct.login_id})
         except CrawlerAccount.DoesNotExist:
             return Response({'error': '계정 없음'}, status=404)
+
+from .models import ReceivedSmsMessage
+
+class SmsReceiveView(views.APIView):
+    """SMS 수신 API - 외부에서 SMS 전달받아 DB 저장 + Redis publish"""
+    permission_classes = []  # 인증 불필요 (외부 연동)
+
+    def post(self, request):
+        import redis as redis_client
+        import json
+
+        phone = request.data.get('phone', '')
+        message = request.data.get('message', '')
+        csphone = request.data.get('csphone', '')
+
+        if not message:
+            return Response({'error': 'message 필요'}, status=400)
+
+        sms = ReceivedSmsMessage.objects.create(
+            csphone_number=csphone,
+            checkphone_number=phone,
+            message=message,
+        )
+
+        # Redis publish
+        try:
+            r = redis_client.Redis(host='localhost', port=6379, db=0)
+            r.publish('sms:new', json.dumps({'last_id': sms.id}))
+        except Exception:
+            pass
+
+        return Response({'id': sms.id, 'received': True})
+
+    def get(self, request):
+        """최근 SMS 조회"""
+        msgs = ReceivedSmsMessage.objects.all()[:50]
+        data = [{'id': m.id, 'phone': m.checkphone_number, 'message': m.message,
+                 'received_at': m.received_at.isoformat()} for m in msgs]
+        return Response(data)
+
+class SmsOtpTestView(views.APIView):
+    """SMS OTP 테스트 - Redis에서 OTP 수신 대기"""
+    def post(self, request):
+        import redis as redis_client
+        import json, re, time
+
+        timeout = int(request.data.get('timeout', 30))
+        r = redis_client.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+        ps = r.pubsub()
+        ps.subscribe('sms:new')
+
+        start = time.time()
+        while time.time() - start < timeout:
+            msg = ps.get_message(timeout=1)
+            if msg and msg['type'] == 'message':
+                try:
+                    payload = json.loads(msg['data'])
+                    last_id = payload.get('last_id')
+                    if last_id:
+                        sms = ReceivedSmsMessage.objects.filter(id=last_id).first()
+                        if sms:
+                            match = re.search(r'\[(\d{6})\]', sms.message)
+                            if match:
+                                ps.unsubscribe()
+                                return Response({'code': match.group(1), 'message': sms.message})
+                except Exception:
+                    pass
+        ps.unsubscribe()
+        return Response({'code': None, 'timeout': True})

@@ -36,12 +36,24 @@ LOGIN_URL = 'https://ad.esmplus.com/'
 COOKIE_TTL_HOURS = 24
 
 
-def _safe_text(driver, xpath, timeout=10):
+def _safe_text(driver, xpath, timeout=15):
+    """요소가 존재하고 텍스트가 비어있지 않을 때까지 대기"""
     try:
-        el = WebDriverWait(driver, timeout).until(
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            try:
+                el = driver.find_element(By.XPATH, xpath)
+                text = el.text.strip()
+                if text and text != '0' and text != '-':
+                    return text
+            except Exception:
+                pass
+            time.sleep(0.5)
+        # 타임아웃 시 마지막으로 한번 더 시도
+        el = WebDriverWait(driver, 3).until(
             EC.presence_of_element_located((By.XPATH, xpath))
         )
-        return el.text.strip()
+        return el.text.strip() or '0'
     except Exception:
         return '0'
 
@@ -154,16 +166,27 @@ def collect_one_account(driver, account, log_fn=None):
 
     # CPC 페이지 데이터 수집
     driver.get(CPC_URL)
-    time.sleep(5)
+    time.sleep(3)
 
-    gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance']))
+    # 잔액 요소가 로드될 때까지 대기
+    gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
     auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
     gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
     auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
 
+    # 주요 값이 모두 0이면 페이지 로딩 실패로 판단하고 재시도
+    if gmarket_balance == 0 and gmarket_cpc_raw == 0:
+        log('CPC 페이지 데이터 미로드, 새로고침 후 재시도...')
+        driver.refresh()
+        time.sleep(5)
+        gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
+        auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
+        gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
+        auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
+
     # AI 페이지 데이터 수집
     driver.get(AI_URL)
-    time.sleep(1.5)
+    time.sleep(2)
 
     ai_usage = parse_int(_safe_text(driver, XPATHS['ai_usage']))
 

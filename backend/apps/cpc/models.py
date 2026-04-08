@@ -330,3 +330,14 @@ class CronSchedule(models.Model):
     class Meta:
         db_table = 'cron_schedules'
         ordering = ['name']
+
+class ReceivedSmsMessage(models.Model):
+    """SMS 수신 메시지 (OTP 인증용)"""
+    csphone_number = models.CharField(max_length=20, blank=True)
+    checkphone_number = models.CharField(max_length=20, blank=True)
+    message = models.TextField(blank=True)
+    received_at = models.DateTimeField(auto_now_add=True)
+    setting_id = models.IntegerField(default=1)
+    class Meta:
+        db_table = 'received_sms_message'
+        ordering = ['-received_at']

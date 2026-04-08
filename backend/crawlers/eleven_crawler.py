@@ -37,11 +37,12 @@ SEARCH_BTN_XPATH = '//*[@id="frmSearch"]/div/div[1]/div[3]/div[1]/div[2]/div[2]/
 
 
 def _wait_for_otp_redis(timeout=60):
-    """Redis에서 SMS OTP 코드 대기"""
+    """Redis pub/sub → DB 조회로 OTP 코드 추출 (ai100 방식)"""
     r = redis_client.Redis(
         host=os.environ.get('REDIS_HOST', 'localhost'),
         port=int(os.environ.get('REDIS_PORT', 6379)),
         db=int(os.environ.get('REDIS_DB', 0)),
+        decode_responses=True,
     )
     channel = os.environ.get('REDIS_CHANNEL', 'sms:new')
     ps = r.pubsub()
@@ -52,14 +53,31 @@ def _wait_for_otp_redis(timeout=60):
         msg = ps.get_message(timeout=1)
         if msg and msg['type'] == 'message':
             try:
-                data = json.loads(msg['data'])
-                sms_text = data.get('message', '')
-                match = re.search(r'\[(\d{6})\]', sms_text)
-                if match:
-                    ps.unsubscribe()
-                    return match.group(1)
-            except Exception:
-                pass
+                payload = json.loads(msg['data'])
+                last_id = payload.get('last_id')
+                if not last_id:
+                    continue
+
+                # DB에서 SMS 내용 조회
+                import django
+                django.setup()
+                from apps.cpc.models import ReceivedSmsMessage
+                sms = ReceivedSmsMessage.objects.filter(id=last_id).first()
+                if not sms:
+                    continue
+
+                sms_text = sms.message or ''
+                logger.info(f'[OTP] SMS 수신 (id={last_id}): {sms_text[:50]}...')
+
+                # 11번가 인증번호 필터
+                if '인증' in sms_text or '인증번호' in sms_text:
+                    match = re.search(r'\[(\d{6})\]', sms_text)
+                    if match:
+                        ps.unsubscribe()
+                        logger.info(f'[OTP] 코드 추출: {match.group(1)}')
+                        return match.group(1)
+            except Exception as e:
+                logger.warning(f'[OTP] 처리 오류: {e}')
     ps.unsubscribe()
     return None
 
