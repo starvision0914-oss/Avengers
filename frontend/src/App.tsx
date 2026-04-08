@@ -28,10 +28,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <Toaster position="top-right" />
-      <SmsWidget />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
+        <Route path="/" element={<ProtectedRoute><><MainLayout /><SmsWidget /></></ProtectedRoute>}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="cpc" element={<CPCDashboard />} />

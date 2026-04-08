@@ -78,22 +78,25 @@ export default function SmsWidget() {
 
   return (
     <>
-      {/* Minimized icon */}
+      {/* 최소화 아이콘 - 우측 하단 */}
       {!open && (
         <button onClick={() => setOpen(true)}
-          className="fixed top-[90px] right-4 z-50 w-[52px] h-[52px] bg-[#1a1a2e] rounded-xl flex items-center justify-center shadow-lg hover:shadow-xl transition-all hover:scale-105 border border-[#2a2a4a]">
-          <MessageSquare size={22} className="text-[#4cc9f0]" />
+          className="fixed bottom-6 right-6 z-50 w-[56px] h-[56px] bg-[#1a1a2e] rounded-full flex items-center justify-center shadow-2xl hover:shadow-xl transition-all hover:scale-110 border-2 border-[#4cc9f0]">
+          <MessageSquare size={24} className="text-[#4cc9f0]" />
           {badge > 0 && (
-            <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1 animate-pulse">
+            <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[11px] font-bold rounded-full min-w-[22px] h-[22px] flex items-center justify-center px-1 animate-bounce">
               {badge > 99 ? '99+' : badge}
             </span>
+          )}
+          {messages.length > 0 && badge === 0 && (
+            <span className="absolute -top-1 -right-1 w-3 h-3 bg-[#4cc9f0] rounded-full" />
           )}
         </button>
       )}
 
-      {/* Smartphone UI */}
+      {/* 스마트폰 UI - 우측 하단 */}
       {open && (
-        <div className="fixed top-[72px] right-3 z-50 w-[230px] h-[480px] bg-[#1a1a2e] rounded-[28px] shadow-2xl flex flex-col overflow-hidden border border-[#2a2a4a]">
+        <div className="fixed bottom-6 right-6 z-50 w-[240px] h-[500px] bg-[#1a1a2e] rounded-[28px] shadow-2xl flex flex-col overflow-hidden border-2 border-[#2a2a4a]" style={{ animation: 'slideUp 0.3s ease-out' }}>
           {/* Notch + status bar */}
           <div className="flex items-center justify-between px-4 pt-2 pb-1 text-[10px] text-[#c8c8e0]">
             <span>{timeStr}</span>
