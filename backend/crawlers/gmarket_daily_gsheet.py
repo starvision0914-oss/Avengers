@@ -160,6 +160,45 @@ def _build_daily_matrix(path, year, month):
     return data
 
 
+def _merge_auction(data, login_id, ad_type, year, month):
+    """dailyReport는 지마켓만 줌 → 거래원장(market='auction') 옥션 광고비를 일자별 '총비용'에 합산.
+    data(일자별 매트릭스)를 in-place 수정. 더한 총액 반환. (매일 새 data라 멱등)"""
+    import calendar
+    from datetime import date
+    from django.db.models import Sum
+    from apps.cpc.models import GmarketCostHistory
+    tt = 'CPC' if ad_type == 'cpc' else 'AI매출업'
+    me = calendar.monthrange(year, month)[1]
+    auc = {}
+    for r in (GmarketCostHistory.objects
+              .filter(seller_id=login_id, market='auction', transaction_type=tt,
+                      use_date__gte=date(year, month, 1), use_date__lte=date(year, month, me))
+              .values('use_date').annotate(s=Sum('amount'))):
+        v = abs(r['s'] or 0)
+        if v:
+            auc[str(r['use_date'])] = v
+    if not auc:
+        return 0
+    hdr = data[0]
+    if '총비용' not in hdr:
+        return 0
+    ci = hdr.index('총비용')
+    added = 0
+    for row in data[1:]:
+        if not row or str(row[0]).strip() == '합계':
+            continue
+        dt = str(row[0])[:10]
+        if dt in auc and ci < len(row):
+            cur = int(str(row[ci]).replace(',', '') or 0) if row[ci] else 0
+            row[ci] = str(cur + auc[dt]); added += auc[dt]
+    if added:
+        for row in data[1:]:
+            if row and str(row[0]).strip() == '합계' and ci < len(row):
+                cur = int(str(row[ci]).replace(',', '') or 0) if row[ci] else 0
+                row[ci] = str(cur + added)
+    return added
+
+
 def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                     driver=None, ss_cpc=None, ss_ai=None):
     """한 계정의 CPC+AI 일자별 다운로드 → 시트 업로드. driver/ss가 주어지면 재사용(세션 통합)."""
@@ -198,6 +237,13 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                 if not data:
                     res[ad_type] = {'ok': False, 'error': '빈데이터'}
                     continue
+                # dailyReport는 지마켓만 → 거래원장 옥션을 총비용에 합산(지마켓+옥션)
+                try:
+                    _add = _merge_auction(data, login_id, ad_type, year, month)
+                    if _add:
+                        _log(log_fn, f'  [{login_id}/{ad_type}] 옥션 +{_add:,}원 합산')
+                except Exception as _e:
+                    _log(log_fn, f'  [{login_id}/{ad_type}] 옥션합산 오류 {str(_e)[:80]}')
                 if gsheet:
                     ok = gsheet_upload.upload_rows(data, login_id, ss, log=lambda m: _log(log_fn, m))
                     res[ad_type] = {'ok': ok, 'rows': len(data) - 2}

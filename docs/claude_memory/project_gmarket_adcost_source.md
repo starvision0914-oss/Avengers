@@ -1,6 +1,6 @@
 ---
 name: project_gmarket_adcost_source
-description: "지마켓 광고비는 광고센터 스냅샷이 신뢰값(거래내역과 다름), 대시보드 CPC/AI 출처와 계정 정렬 기준"
+description: "지마켓 광고비 3소스(today=스냅샷/month·일자별=거래원장/ROAS=상품별), 옥션 site=A, seller_id 'G'정규화로 공유ESM 서브분리"
 metadata: 
   node_type: memory
   type: project
@@ -10,6 +10,14 @@ metadata:
 지마켓 광고비 출처가 2가지이고 값이 다름.
 
 ⚠️ **정정(2026-06-11)**: 스냅샷은 "오늘 실시간 사용액/잔액" 표시엔 신뢰값이지만 **월별 집계엔 부적합**. total_usage는 당일 누적(자정 리셋)인데 크롤이 8~19시에만 찍히고 저녁(20~23시)·누락일은 0 → 그날 마지막 스냅샷이 하루치를 다 못 담음. 실측 5월: 스냅샷합산 34,287 vs 거래내역 268,323 = **스냅샷이 8배 과소**. views.py:159-172(april_snaps)가 이 스냅샷합산으로 월광고비를 내서 "집계 엉망". → **월/과거 광고비는 GmarketCostHistory(use_date 기준 CPC+AI매출업 amount합)로 집계해야 정확.** 단 거래내역은 셀러캐시 결제분 누락 갭 있음(아래) → '기타'유형·셀러캐시분 감사 필요. 매출 자체는 광고비의 1%↓라 수익성 이슈 아님(진짜는 매출 -66% 트래픽붕괴, 3월66.9M→5월22.5M).
+
+✅ **확정·정정(2026-06-17)**: 광고비 데이터 **3소스** 역할 명확.
+- **스냅샷**(GmarketDepositSnapshot, crawl_gmarket_cost=gmarket_crawler): 당일 누적 광고비(0시~현재, 자정리셋)·잔액. 대시보드 ProfitDashboardView **today_***. 09~19시+07:40 매시 수집(7분, 화면 숫자만 read). cost_hourly 다른크롤 겹치면 **스킵→대기후수집**으로 변경(최대50분).
+- **거래원장**(GmarketCostHistory, use_date별=일자별 광고비): 대시보드 **month_*** = "이번달 광고비"(당월 use_date 합). **일자별 광고비 정리의 근본**(=/gmarket ad-daily 화면, GmarketAdDailyView). 채우는 건 **gmkt_today**(orch_gmkt_today.sh, 오늘만 빠르게 멱등), **20시 cron(cron_gmarket_adcost_17check.sh)이 호출**+마감체크. crawl_gmarket_adcost는 --from/--to로 전체(기본 올해1월~오늘) 멱등.
+- **상품별**(GmarketProductAdCost, crawl_gmarket_ad_report 08시): ROAS·상품별. period=당월전체 멱등(일자별 스킵돼도 1회 크롤로 메워짐).
+- **정합성**: 광고센터(상품별) vs ESM(거래원장) 6/1~16 = **0.1%차**(거래원장 최신시). 스냅샷 당일누적 vs 거래원장 당일 ≈1.5%(시점차).
+- **옥션**: 상품별/거래원장 모두 집계됨. CPC리포트 **site='A'**(지마켓=G), **AI는 site=''(옥션·지마켓 통합)**. 거래원장은 market='auction'. 옥션 월 5천~1.5만(전체 0.1~0.25%, 거의 안함). ⚠️**일자별 구글시트(gmarket_daily_gsheet)는 dailyReport 기본=지마켓만→옥션 미포함**(합산하려면 수정 필요).
+- **공유ESM 서브 광고비**: 대표 로그인 1회로 리포트에 판매자ID로 같이 나옴(별도로그인 불필요). AI리포트 seller_id에 **'G '접두사**('G starvisi')라 조회0이던 것 → **접두제거 정규화 완료**(starvisi/223/224 분리표시). 일자별 시트는 대표탭에 대표+서브 **합산**(starvisi 별도탭 없음). 235/236은 6월 광고 미집행(실제0).
 
 --- 이하 종전 기록(실시간 스냅샷 맥락) ---
 

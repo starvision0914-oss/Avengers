@@ -56,15 +56,17 @@ class Command(BaseCommand):
         def sd(v):   # 증가분 표기: +n / -n / 0
             return f'+{v:,}' if v > 0 else (f'{v:,}' if v < 0 else '+0')
 
+        # 전체 광고비(괄호에 증가분)를 메인으로 + 계정마다 줄바꿈(모든 계정 표시).
+        grand = tot['cpc'] + tot['ai']
+        grand_d = tot['cpc_d'] + tot['ai_d']
+        head = f"📊 [지마켓 시간별 광고비] {now.strftime('%m/%d %H:%M')}"
+        total = (f"전체 {grand:,}원({sd(grand_d)})  ·  "
+                 f"CPC {tot['cpc']:,}({sd(tot['cpc_d'])}) / AI {tot['ai']:,}({sd(tot['ai_d'])})  · {len(rows)}계정")
         lines = [f"{lid}  CPC {cpc_c:,}({sd(cpc_d)}) / AI {ai_c:,}({sd(ai_d)})"
                  for _, lid, cpc_c, cpc_d, ai_c, ai_d in rows]
-
-        head = f"📊 [지마켓 시간별 광고비] {now.strftime('%m/%d %H:%M')}  현재(직전대비)"
-        total = (f"합계  CPC {tot['cpc']:,}({sd(tot['cpc_d'])}) / "
-                 f"AI {tot['ai']:,}({sd(tot['ai_d'])})  · {len(rows)}계정")
         body = head + "\n" + total + "\n" + "\n".join(lines)
         if no_data:
-            body += f"\n(스냅샷없음 {len(no_data)}: {', '.join(no_data[:10])})"
+            body += f"\n(스냅샷없음 {len(no_data)})"
 
         if not o.get('no_telegram'):
             try:
