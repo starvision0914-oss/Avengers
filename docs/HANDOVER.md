@@ -63,3 +63,8 @@
 - `scripts/backup_all.sh` 매일 23:00: DB덤프(~/backups, gzip 7일) + 메모리→docs/claude_memory + git push.
 - DB(2.4GB)는 용량상 GitHub 제외, 서버 ~/backups 보관(서버는 Claude계정 무관).
 - 새 계정에서 컨텍스트 복원: 이 문서 + docs/claude_memory/*.md 읽기.
+
+## 7. 새 계정/PC에서 복원하는 법 (계정 인식)
+- **같은 서버에서 Claude 계정만 변경**: 메모리는 `~/.claude/projects/-home-rejoice888/memory/`(OS사용자 폴더, 계정무관)에 있어 **자동 로드**됨. 별도 작업 불필요.
+- **새 PC/초기화 시**: ① `git clone https://github.com/starvision0914-oss/Avengers.git` ② `bash scripts/restore_memory.sh` (GitHub 메모리→로컬 복사) ③ 새 세션에 "docs/HANDOVER.md 읽고 이어서 작업해줘".
+- DB 복원: `gunzip < ~/backups/avengers_db_*.sql.gz | mysql -u<user> -p Avengers`
