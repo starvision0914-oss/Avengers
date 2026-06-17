@@ -1,0 +1,17 @@
+"""지마켓/옥션(ESM) 나의 상품 수집 — GmarketMyProduct에 누적 저장(상품번호 기준 중복제거)."""
+from django.core.management.base import BaseCommand
+
+
+class Command(BaseCommand):
+    help = '지마켓/옥션 ESM 나의 상품 수집 (엑셀 다운로드 파싱)'
+
+    def add_arguments(self, parser):
+        parser.add_argument('--accounts', nargs='*', help='특정 계정만 수집')
+
+    def handle(self, *args, **options):
+        from crawlers.gmarket_product_crawler import run_all_accounts
+        result = run_all_accounts(
+            log_fn=lambda msg: self.stdout.write(msg),
+            account_filter=options.get('accounts'),
+        )
+        self.stdout.write(self.style.SUCCESS(f'완료: {result}'))

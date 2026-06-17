@@ -7,7 +7,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoAlertPresentException
-from .browser import create_driver, stop_display
+from .browser import stop_display
 from .utils import parse_int
 
 logger = logging.getLogger('crawler')
@@ -232,40 +232,115 @@ def run_all_accounts(log_fn=None, account_filter=None):
     qs = CrawlerAccount.objects.filter(platform='11st', is_active=True)
     if account_filter:
         qs = qs.filter(login_id__in=account_filter)
-    qs = qs.exclude(crawling_status='차단됨')
+    qs = qs.exclude(crawling_status__in=['차단됨', '실패'])
 
     if not qs.exists():
         if log_fn: log_fn('활성 11번가 계정 없음')
         return {'collected': 0, 'failed': 0}
 
-    all_results, driver = [], None
-    try:
-        driver = create_driver()
-        for acct in qs:
+    all_results = []
+    failed = 0
+    import random
+    MAX_CONNECT_ATTEMPTS = 3  # 계정당 접속 최대 3회, 3회 실패 시 중지→다음 계정
+    from .browser import _kill_stale_chrome, _ensure_display
+    from apps.cpc import eleven_block_guard as guard
+    import subprocess as _sp
+    CHROME_BIN = '/usr/bin/google-chrome'   # 시스템 크롬 (browser.py 리팩터로 상수 제거됨)
+
+    def _get_ver():
+        try:
+            out = _sp.check_output([CHROME_BIN, '--version'], text=True, stderr=_sp.DEVNULL)
+            return int(out.strip().split()[-1].split('.')[0])
+        except: return 146
+
+    def _make_driver():
+        _kill_stale_chrome()
+        time.sleep(1)
+        _ensure_display()
+        # adoffice는 봇 탐지 → UC 드라이버 필수 (ai100 패턴)
+        try:
+            import undetected_chromedriver as uc
+            opts = uc.ChromeOptions()
+            opts.binary_location = CHROME_BIN
+            opts.add_argument('--disable-gpu')
+            opts.add_argument('--window-size=1920x1080')
+            opts.add_argument('--disable-dev-shm-usage')
+            opts.add_argument('--no-sandbox')
+            d = uc.Chrome(options=opts, headless=False, version_main=_get_ver())
+            d.implicitly_wait(10)
+            return d
+        except Exception as uce:
+            logger.warning(f'UC 실패, 표준 driver: {uce}')
+            from .browser import create_driver
+            return create_driver()
+
+    for acct in qs:
+        if acct.crawling_status in ('차단됨', '실패'):
+            if log_fn: log_fn(f'[11st-AI:{acct.login_id}] {acct.crawling_status} - 건너뜀')
+            continue
+
+        # ── 접속(로그인) 단계: 최대 3회 시도. 3회 실패 시 중지→다음 계정 ──
+        driver = None
+        logged_in = False
+        for attempt in range(1, MAX_CONNECT_ATTEMPTS + 1):
             try:
-                _logout(driver)
-                driver.delete_all_cookies()
+                driver = _make_driver()
+                if _do_login(driver, acct.login_id, acct.password_enc):
+                    logged_in = True
+                    break
+                raise Exception('로그인 실패')
+            except Exception as le:
+                if log_fn: log_fn(f'[11st-AI:{acct.login_id}] 접속 실패 {attempt}/{MAX_CONNECT_ATTEMPTS}: {str(le)[:120]}')
+                if driver:
+                    try: driver.quit()
+                    except: pass
+                    driver = None
+                if attempt < MAX_CONNECT_ATTEMPTS:
+                    time.sleep(random.uniform(2.0, 4.0))
 
-                if not _do_login(driver, acct.login_id, acct.password_enc):
-                    if log_fn: log_fn(f'[11st-AI:{acct.login_id}] 로그인 실패')
-                    continue
+        if not logged_in:
+            # ── 접속 3회 실패 → 반드시 중지하고 다음 계정으로 ──
+            failed += 1
+            acct.fail_count = (acct.fail_count or 0) + 1
+            acct.save(update_fields=['fail_count'])
+            acct.mark_connect_failed()
+            CrawlerLog.objects.create(
+                platform='11st', level='error',
+                message=f'[AI] 접속 {MAX_CONNECT_ATTEMPTS}회 실패 → 중지(다음 계정), 상태={acct.crawling_status}',
+                account_id=acct.login_id)
+            if log_fn: log_fn(f'[11st-AI:{acct.login_id}] ⛔ 접속 {MAX_CONNECT_ATTEMPTS}회 실패 — 다음 계정 (상태={acct.crawling_status})')
+            try:
+                guard._send_telegram_alert(
+                    f'⚠️ [11번가 AI 접속실패]\n계정: {acct.login_id} ({acct.seller_name})\n'
+                    f'접속 {MAX_CONNECT_ATTEMPTS}회 연속 실패 → 다음 계정. 상태: {acct.crawling_status}')
+            except Exception:
+                pass
+            continue
 
-                if not _navigate_to_campaigns(driver):
-                    continue
-
-                results = _collect_campaigns(driver, acct.login_id, log_fn)
-                all_results.extend(results)
-            except Exception as e:
-                if log_fn: log_fn(f'[11st-AI:{acct.login_id}] 오류: {e}')
-    finally:
-        if driver:
-            try: driver.quit()
-            except: pass
-        stop_display()
+        # ── 접속 성공 → 캠페인 수집 ──
+        acct.reset_connect_fail()
+        try:
+            if not _navigate_to_campaigns(driver):
+                raise Exception('캠페인 페이지 진입 실패')
+            results = _collect_campaigns(driver, acct.login_id, log_fn)
+            all_results.extend(results)
+        except Exception as e:
+            failed += 1
+            if log_fn: log_fn(f'[11st-AI:{acct.login_id}] 수집 오류: {e}')
+            try:
+                guard._send_telegram_alert(
+                    f'⚠️ [11번가 AI 수집오류]\n계정: {acct.login_id} ({acct.seller_name})\n{str(e)[:150]}')
+            except Exception:
+                pass
+        finally:
+            if driver:
+                try: driver.quit()
+                except: pass
+    stop_display()
 
     for r in all_results:
         St11AdofficeCampaign.objects.create(**r)
 
-    CrawlerLog.objects.create(platform='11st', level='info', message=f'AI 캠페인 수집: {len(all_results)}건')
-    if log_fn: log_fn(f'11번가 AI 수집 완료: {len(all_results)}건')
-    return {'collected': len(all_results), 'failed': 0}
+    CrawlerLog.objects.create(platform='11st', level='info', message=f'AI 캠페인 수집: {len(all_results)}건 / 실패 {failed}건')
+    if log_fn: log_fn(f'11번가 AI 수집 완료: {len(all_results)}건 / 실패 {failed}건')
+    return {'collected': len(all_results), 'failed': failed}

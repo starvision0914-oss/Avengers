@@ -4,3 +4,17 @@
   from { transform: translateY(100px); opacity: 0; }
   to { transform: translateY(0); opacity: 1; }
 }
+
+/* ===== 틀고정: 모든 표 헤더 행을 스크롤 시 상단 고정 (전 페이지 공통) ===== */
+/* 표가 들어있는 스크롤 컨테이너(overflow-auto) 상단에 thead가 붙어 항상 보임. */
+thead {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+/* 헤더 배경 폴백 — 본문 행이 헤더 뒤로 비치지 않게. */
+/* 요소 선택자라 특이도가 낮아, Tailwind의 bg-[...] 헤더 배경색이 있으면 그 색이 우선 적용됨. */
+thead tr {
+  background-color: #ffffff;
+}

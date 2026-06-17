@@ -1,6 +1,11 @@
 import { useEffect, useState, useRef } from 'react';
 import { getLatestSms, getSmsPhones, addSmsPhone, removeSmsPhone } from '../api/crawler';
-import { MessageSquare, X, Settings, Phone, Plus, Trash2 } from 'lucide-react';
+import { MessageSquare, X, Settings, Phone, Plus, Trash2, Send, Copy, Reply } from 'lucide-react';
+import SmsSendModal from './SmsSendModal';
+
+function cleanPhone(p?: string) {
+  return (p || '').replace(/[\u2068\u2069]/g, '').trim();
+}
 
 function maskPhone(p: string) {
   const d = (p || '').replace(/\D/g, '');
@@ -17,15 +22,23 @@ export default function SmsWidget() {
   const [phones, setPhones] = useState<any[]>([]);
   const [phoneForm, setPhoneForm] = useState({ phone_number: '', name: '' });
   const [copied, setCopied] = useState<number | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendDefaults, setSendDefaults] = useState<{phone:string; message:string}>({phone:'', message:''});
+  const [lastFetchAt, setLastFetchAt] = useState<string>('-');
+  const [fetchError, setFetchError] = useState<string>('');
   const lastIdRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const fetchSms = () => {
-    getLatestSms().then((data: any[]) => {
-      setMessages(data);
-      if (data.length > 0) {
-        const maxId = Math.max(...data.map(m => m.id));
+    getLatestSms({ limit: '100' }).then((data: any[]) => {
+      const list = Array.isArray(data) ? data : [];
+      setMessages(list);
+      setFetchError('');
+      const now = new Date();
+      setLastFetchAt(`${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`);
+      if (list.length > 0) {
+        const maxId = Math.max(...list.map(m => m.id));
         if (maxId > lastIdRef.current) {
           if (lastIdRef.current > 0 && !open) {
             setBadge(prev => prev + (maxId - lastIdRef.current));
@@ -39,12 +52,18 @@ export default function SmsWidget() {
           lastIdRef.current = maxId;
         }
       }
-    }).catch(() => {});
+    }).catch((err: any) => {
+      const code = err?.response?.status;
+      const msg = code ? `HTTP ${code}` : (err?.message || '네트워크 오류');
+      setFetchError(msg);
+      // eslint-disable-next-line no-console
+      console.error('[SmsWidget] fetchSms 실패:', err);
+    });
   };
 
   useEffect(() => {
     fetchSms();
-    const interval = setInterval(fetchSms, 5000);
+    const interval = setInterval(fetchSms, 3000);  // 3초 폴링
     return () => clearInterval(interval);
   }, []);
 
@@ -71,6 +90,12 @@ export default function SmsWidget() {
     navigator.clipboard.writeText(text);
     setCopied(msg.id);
     setTimeout(() => setCopied(null), 1500);
+  };
+
+  const handleReply = (msg: any) => {
+    // 발신자에게 답장 모달 열기
+    setSendDefaults({ phone: cleanPhone(msg.csphone) || cleanPhone(msg.phone), message: '' });
+    setSendOpen(true);
   };
 
   const now = new Date();
@@ -108,16 +133,27 @@ export default function SmsWidget() {
           </div>
 
           {/* Title */}
-          <div className="flex items-center justify-between px-3 py-1.5 border-b border-[#2a2a4a]">
-            <span className="text-[12px] font-semibold text-[#e0e0e0]">수신 문자</span>
-            <div className="flex items-center gap-1">
-              <span className="text-[10px] text-[#4cc9f0]">{messages.length}건</span>
-              <button onClick={() => setShowSettings(true)} className="p-1 hover:bg-[#2a2a4a] rounded">
-                <Settings size={12} className="text-[#888]" />
-              </button>
-              <button onClick={() => setOpen(false)} className="p-1 hover:bg-[#2a2a4a] rounded">
-                <X size={12} className="text-[#888]" />
-              </button>
+          <div className="px-3 py-1.5 border-b border-[#2a2a4a]">
+            <div className="flex items-center justify-between">
+              <span className="text-[12px] font-semibold text-[#e0e0e0]">수신 문자</span>
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] text-[#4cc9f0] font-bold">{messages.length}건</span>
+                <button onClick={() => { fetchSms(); }} className="p-1 hover:bg-[#2a2a4a] rounded" title="새로고침">
+                  <span className="text-[10px] text-[#888]">🔄</span>
+                </button>
+                <button onClick={() => setShowSettings(true)} className="p-1 hover:bg-[#2a2a4a] rounded">
+                  <Settings size={12} className="text-[#888]" />
+                </button>
+                <button onClick={() => setOpen(false)} className="p-1 hover:bg-[#2a2a4a] rounded">
+                  <X size={12} className="text-[#888]" />
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between mt-0.5">
+              <span className="text-[8px] text-[#666]">갱신 {lastFetchAt} · 3초 자동</span>
+              {fetchError && (
+                <span className="text-[8px] text-red-400 font-bold">❌ {fetchError}</span>
+              )}
             </div>
           </div>
 
@@ -126,28 +162,65 @@ export default function SmsWidget() {
             {messages.length > 0 ? messages.map(msg => {
               const isNew = (Date.now() - new Date(msg.received_at).getTime()) < 60000;
               const isCopied = copied === msg.id;
+              const sender = cleanPhone(msg.csphone) || cleanPhone(msg.phone) || '알수없음';
               return (
                 <div key={msg.id}
-                  onDoubleClick={() => handleCopy(msg)}
-                  className={`rounded-lg px-2.5 py-2 cursor-pointer transition-all text-[10px]
+                  className={`rounded-lg px-2.5 py-2 transition-all text-[10px]
                     ${isCopied ? 'bg-[#00a651]/20 border border-[#00a651]' :
                       isNew ? 'bg-[#16213e] border border-[#4cc9f0] animate-pulse' :
                       'bg-[#16213e] border border-[#2a2a4a]'}`}>
                   <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-[#4cc9f0] font-medium">{maskPhone(msg.csphone || msg.phone)}</span>
+                    <span className="text-[#4cc9f0] font-medium">{maskPhone(sender)}</span>
                     <div className="flex items-center gap-1">
+                      <span className="text-[#444] text-[8px]">#{msg.id}</span>
                       {isNew && <span className="bg-red-500 text-white text-[8px] px-1 rounded font-bold">NEW</span>}
                       {isCopied && <span className="text-[#00a651] text-[8px]">복사됨!</span>}
                       <span className="text-[#666]">{new Date(msg.received_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
                   </div>
-                  <p className="text-[#e0e0e0] leading-tight break-all">{msg.message}</p>
+                  <p className="text-[#e0e0e0] leading-tight break-all mb-1.5">{msg.message}</p>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(msg)}
+                      className="flex-1 bg-[#2a2a4a] hover:bg-[#3a3a5a] text-[#4cc9f0] py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1"
+                    >
+                      <Copy size={9} /> 복사
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleReply(msg)}
+                      className="flex-1 bg-[#4cc9f0] hover:bg-[#3aa8d0] text-[#1a1a2e] py-1 rounded text-[9px] font-bold flex items-center justify-center gap-1"
+                    >
+                      <Reply size={9} /> 답장
+                    </button>
+                  </div>
                 </div>
               );
             }) : (
-              <div className="flex items-center justify-center h-full text-[#666] text-[11px]">수신된 문자가 없습니다</div>
+              <div className="flex flex-col items-center justify-center h-full text-[#666] text-[11px] gap-2">
+                <div>수신된 문자가 없습니다</div>
+                {fetchError ? (
+                  <div className="text-red-400 text-[10px] text-center px-3">
+                    API 오류: {fetchError}<br/>
+                    <span className="text-[8px]">F12 콘솔 확인</span>
+                  </div>
+                ) : (
+                  <div className="text-[#444] text-[9px]">갱신 {lastFetchAt}</div>
+                )}
+              </div>
             )}
             <div ref={bottomRef} />
+          </div>
+
+          {/* 발송 버튼 (위젯 하단) */}
+          <div className="px-2 pb-1">
+            <button
+              onClick={() => { setSendDefaults({phone:'', message:''}); setSendOpen(true); }}
+              className="w-full bg-[#4cc9f0] hover:bg-[#3aa8d0] text-[#1a1a2e] font-bold py-1.5 rounded text-[10px] flex items-center justify-center gap-1"
+            >
+              <Send size={11} /> 새 문자 발송
+            </button>
           </div>
 
           {/* Home indicator */}
@@ -204,11 +277,20 @@ export default function SmsWidget() {
 
             <p className="text-xs text-gray-400 mt-3">
               안드로이드 Tasker/Automate 앱으로 문자 수신 시 자동으로 API를 호출하도록 설정하세요.
-              <br/>API: POST http://192.168.219.155:8010/api/cpc/sms/receive/
+              <br/>API: POST http://{typeof window !== 'undefined' ? window.location.hostname : '192.168.1.16'}:8010/api/cpc/sms/receive/
             </p>
           </div>
         </div>
       )}
+
+      {/* 발송 모달 (위젯에서 답장 / 새 발송) */}
+      <SmsSendModal
+        open={sendOpen}
+        onClose={() => setSendOpen(false)}
+        defaultPhone={sendDefaults.phone}
+        defaultMessage={sendDefaults.message}
+        onSent={fetchSms}
+      />
     </>
   );
 }

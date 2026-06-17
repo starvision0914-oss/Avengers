@@ -1,0 +1,214 @@
+import { useState, useEffect, useCallback } from 'react';
+import api from '../../api/client';
+import { formatKRW } from '../../utils/format';
+
+interface AcctRow {
+  login_id: string; seller_name: string;
+  cpc_cost: number; ai_cost: number; cpc_conv: number; ai_conv: number;
+  cpc_products: number; ai_products: number;
+  cpc_roas: number; ai_roas: number;
+  total_cost: number; total_conv: number; roas: number;
+}
+interface Totals {
+  cpc_cost: number; ai_cost: number; cpc_conv: number; ai_conv: number;
+  cost: number; conv_amount: number;
+  cpc_roas: number; ai_roas: number; roas: number;
+}
+const ZERO_TOTALS: Totals = { cpc_cost: 0, ai_cost: 0, cpc_conv: 0, ai_conv: 0, cost: 0, conv_amount: 0, cpc_roas: 0, ai_roas: 0, roas: 0 };
+interface ProdRow {
+  login_id: string; seller_id: string; seller_name: string;
+  product_no: string; group_name: string; site: string;
+  impressions: number; clicks: number; avg_click_cost: number; cost: number;
+  orders: number; conv_amount: number; conv_rate: number; roas: number;
+}
+interface Pack { products: number; totals: { cost: number; conv_amount: number; clicks: number; impressions: number; roas: number }; rows: ProdRow[]; }
+
+const now = new Date();
+
+function roasColor(roas: number): string {
+  if (!roas) return 'text-[#dc2626] font-bold';
+  if (roas >= 300) return 'text-[#00a651] font-bold';
+  if (roas >= 100) return 'text-[#e08000] font-semibold';
+  return 'text-[#dc2626] font-semibold';
+}
+
+export default function GmarketRoasPage() {
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+  const [accts, setAccts] = useState<AcctRow[]>([]);
+  const [totals, setTotals] = useState<Totals>(ZERO_TOTALS);
+  const [loading, setLoading] = useState(false);
+
+  // 상세(계정 클릭) — CPC/AI 구분
+  const [detailEid, setDetailEid] = useState<string | null>(null);
+  const [detailName, setDetailName] = useState('');
+  const [cpc, setCpc] = useState<Pack | null>(null);
+  const [ai, setAi] = useState<Pack | null>(null);
+  const [tab, setTab] = useState<'cpc' | 'ai'>('cpc');
+  const [dLoading, setDLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get('/cpc/gmarket/roas-accounts/', { params: { year, month } });
+      setAccts(data.accounts || []);
+      setTotals({ ...ZERO_TOTALS, ...(data.totals || {}) });
+    } finally { setLoading(false); }
+  }, [year, month]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openDetail = async (eid: string, name: string) => {
+    setDetailEid(eid); setDetailName(name); setTab('cpc'); setCpc(null); setAi(null); setDLoading(true);
+    try {
+      const { data } = await api.get('/cpc/gmarket/product-roas/', { params: { year, month, eid } });
+      setCpc(data.cpc); setAi(data.ai);
+    } finally { setDLoading(false); }
+  };
+
+  const blobDownload = async (params: any, fname: string) => {
+    const res = await api.get('/cpc/gmarket/product-roas/', { params: { ...params, year, month }, responseType: 'blob' });
+    const url = window.URL.createObjectURL(new Blob([res.data]));
+    const a = document.createElement('a'); a.href = url; a.download = fname; a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const dlProducts = () => blobDownload({ export: 1, fname: `전체_상품ROAS_${year}${String(month).padStart(2, '0')}.csv` }, `전체_상품ROAS_${year}-${month}.csv`);
+  const dlLoss = () => blobDownload({ export: 1, loss: 1, cost_min: 1000, roas_max: 100, fname: `적자상품_${year}${String(month).padStart(2, '0')}.csv` }, `적자상품_${year}-${month}.csv`);
+
+  const detailPack = tab === 'cpc' ? cpc : ai;
+
+  return (
+    <div className="p-4 space-y-3">
+      {/* 헤더 + 기간 + 전체관리 */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <h2 className="text-lg font-bold text-[#222]">지마켓 상품 ROAS</h2>
+        <select value={year} onChange={e => setYear(+e.target.value)} className="border rounded px-2 py-1 text-sm">
+          {[2025, 2026].map(y => <option key={y} value={y}>{y}년</option>)}
+        </select>
+        <select value={month} onChange={e => setMonth(+e.target.value)} className="border rounded px-2 py-1 text-sm">
+          {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
+        </select>
+        <button onClick={load} className="px-2.5 py-1 text-[12px] font-semibold bg-[#2563eb] text-white rounded hover:bg-[#1d4ed8]">새로고침</button>
+        <span className="ml-auto text-[#bbb] text-[11px] hidden lg:inline">전체관리({year}):</span>
+        <button onClick={() => alert('키워드 ROAS는 키워드 리포트 수집 후 제공됩니다(준비중).')} className="px-2.5 py-1 text-[12px] font-semibold bg-[#7c3aed] text-white rounded hover:bg-[#6429c4]">전체 ROAS300%↑ 키워드 ⬇</button>
+        <button onClick={dlLoss} title="광고비≥1천 & (구매금액0 또는 ROAS<100)" className="px-2.5 py-1 text-[12px] font-semibold bg-[#c2410c] text-white rounded hover:bg-[#9a3412]">전체 적자상품 ⬇</button>
+        <button onClick={dlProducts} className="px-2.5 py-1 text-[12px] font-semibold bg-[#1d7a46] text-white rounded hover:bg-[#155c34]">전체 상품ROAS ⬇</button>
+      </div>
+
+      {/* 합계 카드 — CPC ROAS / AI ROAS / 합계 ROAS 각각 별도 */}
+      <div className="flex gap-3 flex-wrap">
+        <Card label="CPC 광고비" value={formatKRW(totals.cpc_cost)} sub={`매출 ${formatKRW(totals.cpc_conv)}`} />
+        <Card label="CPC ROAS" value={`${totals.cpc_roas}%`} color={roasColor(totals.cpc_roas)} />
+        <Card label="AI 광고비" value={formatKRW(totals.ai_cost)} sub={`매출 ${formatKRW(totals.ai_conv)}`} />
+        <Card label="AI ROAS" value={`${totals.ai_roas}%`} color={roasColor(totals.ai_roas)} />
+        <Card label="합계 광고비" value={formatKRW(totals.cost)} sub={`매출 ${formatKRW(totals.conv_amount)}`} />
+        <Card label="합계 ROAS" value={`${totals.roas}%`} color={roasColor(totals.roas)} />
+      </div>
+
+      {/* 계정 요약 테이블 */}
+      <div className="bg-white rounded shadow overflow-x-auto">
+        <table className="w-full text-[13px]">
+          <thead className="bg-[#f5f6f8] text-[#555]">
+            <tr>
+              <th className="px-2 py-2 text-left">계정(상호)</th>
+              <th className="px-2 py-2 text-right">CPC 광고비</th>
+              <th className="px-2 py-2 text-right">CPC ROAS</th>
+              <th className="px-2 py-2 text-right">AI 광고비</th>
+              <th className="px-2 py-2 text-right">AI ROAS</th>
+              <th className="px-2 py-2 text-right">합계 광고비</th>
+              <th className="px-2 py-2 text-right">합계 ROAS</th>
+              <th className="px-2 py-2 text-right">상품수(CPC/AI)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td colSpan={7} className="text-center py-6 text-[#888]">불러오는 중…</td></tr>}
+            {!loading && accts.length === 0 && <tr><td colSpan={7} className="text-center py-6 text-[#888]">데이터가 없습니다. (크롤 후 표시)</td></tr>}
+            {accts.map(a => (
+              <tr key={a.login_id} onClick={() => openDetail(a.login_id, a.seller_name)}
+                className="border-t hover:bg-[#f0f7ff] cursor-pointer">
+                <td className="px-2 py-1.5 font-semibold text-[#1d4ed8]">{a.seller_name} <span className="text-[#999] font-normal">({a.login_id})</span></td>
+                <td className="px-2 py-1.5 text-right">{formatKRW(a.cpc_cost)}</td>
+                <td className={`px-2 py-1.5 text-right ${roasColor(a.cpc_roas)}`}>{a.cpc_roas}%</td>
+                <td className="px-2 py-1.5 text-right">{formatKRW(a.ai_cost)}</td>
+                <td className={`px-2 py-1.5 text-right ${roasColor(a.ai_roas)}`}>{a.ai_roas}%</td>
+                <td className="px-2 py-1.5 text-right font-semibold">{formatKRW(a.total_cost)}</td>
+                <td className={`px-2 py-1.5 text-right font-bold ${roasColor(a.roas)}`}>{a.roas}%</td>
+                <td className="px-2 py-1.5 text-right text-[#666]">{a.cpc_products}/{a.ai_products}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* 상세 모달 — CPC/AI 구분 */}
+      {detailEid && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setDetailEid(null)}>
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[88vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 px-4 py-3 border-b">
+              <span className="font-bold text-[#222]">{detailName} <span className="text-[#999] text-sm font-normal">({detailEid})</span> · {year}-{String(month).padStart(2, '0')} 상품 ROAS</span>
+              <div className="ml-auto flex gap-1">
+                <button onClick={() => setTab('cpc')} className={`px-3 py-1 text-sm rounded ${tab === 'cpc' ? 'bg-[#1d7a46] text-white' : 'bg-gray-100'}`}>CPC {cpc ? `(${cpc.products})` : ''}</button>
+                <button onClick={() => setTab('ai')} className={`px-3 py-1 text-sm rounded ${tab === 'ai' ? 'bg-[#7c3aed] text-white' : 'bg-gray-100'}`}>AI매출업 {ai ? `(${ai.products})` : ''}</button>
+                <button onClick={() => setDetailEid(null)} className="px-2 py-1 text-sm text-[#888]">✕</button>
+              </div>
+            </div>
+            {detailPack && (
+              <div className="px-4 py-2 text-[12px] text-[#555] bg-[#fafbfc] border-b flex gap-4">
+                <span>광고비 <b>{formatKRW(detailPack.totals.cost)}</b></span>
+                <span>구매금액 <b>{formatKRW(detailPack.totals.conv_amount)}</b></span>
+                <span>클릭 <b>{detailPack.totals.clicks.toLocaleString()}</b></span>
+                <span>ROAS <b className={roasColor(detailPack.totals.roas)}>{detailPack.totals.roas}%</b></span>
+              </div>
+            )}
+            <div className="overflow-auto">
+              {dLoading && <div className="text-center py-8 text-[#888]">불러오는 중…</div>}
+              {!dLoading && detailPack && (
+                <table className="w-full text-[12px]">
+                  <thead className="bg-[#f5f6f8] text-[#555] sticky top-0">
+                    <tr>
+                      <th className="px-2 py-2 text-left">상품번호</th>
+                      {tab === 'ai' && <th className="px-2 py-2 text-left">그룹명</th>}
+                      {tab === 'cpc' && <th className="px-2 py-2">사이트</th>}
+                      <th className="px-2 py-2 text-right">노출</th>
+                      <th className="px-2 py-2 text-right">클릭</th>
+                      <th className="px-2 py-2 text-right">광고비</th>
+                      <th className="px-2 py-2 text-right">구매수</th>
+                      <th className="px-2 py-2 text-right">구매금액</th>
+                      <th className="px-2 py-2 text-right">ROAS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detailPack.rows.length === 0 && <tr><td colSpan={9} className="text-center py-6 text-[#888]">데이터 없음</td></tr>}
+                    {detailPack.rows.map((r, i) => (
+                      <tr key={i} className="border-t hover:bg-[#f7f7f7]">
+                        <td className="px-2 py-1 font-mono">{r.product_no}</td>
+                        {tab === 'ai' && <td className="px-2 py-1 truncate max-w-[180px]">{r.group_name}</td>}
+                        {tab === 'cpc' && <td className="px-2 py-1 text-center">{r.site === 'A' ? '옥션' : 'G마켓'}</td>}
+                        <td className="px-2 py-1 text-right">{r.impressions.toLocaleString()}</td>
+                        <td className="px-2 py-1 text-right">{r.clicks.toLocaleString()}</td>
+                        <td className="px-2 py-1 text-right">{formatKRW(r.cost)}</td>
+                        <td className="px-2 py-1 text-right">{r.orders}</td>
+                        <td className="px-2 py-1 text-right">{formatKRW(r.conv_amount)}</td>
+                        <td className={`px-2 py-1 text-right ${roasColor(r.roas)}`}>{r.roas}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Card({ label, value, color }: { label: string; value: string; color?: string }) {
+  return (
+    <div className="bg-white rounded shadow px-4 py-2 min-w-[160px]">
+      <div className="text-[11px] text-[#888]">{label}</div>
+      <div className={`text-lg font-bold ${color || 'text-[#222]'}`}>{value}</div>
+    </div>
+  );
+}

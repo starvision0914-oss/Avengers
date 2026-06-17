@@ -4,6 +4,8 @@ from datetime import datetime
 def parse_int(value):
     if not value:
         return 0
+    if isinstance(value, float):
+        return int(value)
     cleaned = re.sub(r'[^\d-]', '', str(value))
     try:
         return int(cleaned)
@@ -30,6 +32,8 @@ def classify_11st_description(desc):
         return 'REWARD'
     if '충전' in desc:
         return 'CHARGE'
+    if '미수금상환' in desc or '정산' in desc or '입금' in desc:
+        return 'SETTLE'
     return 'OTHERS'
 
 def wait_for_download(directory, timeout=60, ext='.xls'):

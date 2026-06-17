@@ -37,14 +37,18 @@ COOKIE_TTL_HOURS = 24
 
 
 def _safe_text(driver, xpath, timeout=15):
-    """요소가 존재하고 텍스트가 비어있지 않을 때까지 대기"""
+    """요소가 존재하고 숫자가 포함된 텍스트가 로드될 때까지 대기.
+
+    페이지 초기 렌더링 시 셀렉터에는 단위(예: "원")만 들어있고 숫자가 비어있는
+    경우가 있어, 숫자(0~9)가 한 글자라도 포함된 시점까지 기다린다.
+    """
     try:
         end_time = time.time() + timeout
         while time.time() < end_time:
             try:
                 el = driver.find_element(By.XPATH, xpath)
                 text = el.text.strip()
-                if text and text != '0' and text != '-':
+                if text and any(c.isdigit() for c in text):
                     return text
             except Exception:
                 pass
@@ -174,11 +178,13 @@ def collect_one_account(driver, account, log_fn=None):
     gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
     auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
 
-    # 주요 값이 모두 0이면 페이지 로딩 실패로 판단하고 재시도
-    if gmarket_balance == 0 and gmarket_cpc_raw == 0:
-        log('CPC 페이지 데이터 미로드, 새로고침 후 재시도...')
+    # 잔액이 0이면 페이지 로딩 실패로 판단하고 최대 2회 재시도
+    for retry in range(2):
+        if gmarket_balance != 0:
+            break
+        log(f'CPC 페이지 잔액 미로드, 새로고침 후 재시도 ({retry + 1}/2)...')
         driver.refresh()
-        time.sleep(5)
+        time.sleep(8)
         gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
         auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
         gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
@@ -235,10 +241,12 @@ def _collect_sub_account(driver, sub_account, log_fn=None):
     gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
     auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
 
-    if gmarket_balance == 0 and gmarket_cpc_raw == 0:
-        log('CPC 페이지 데이터 미로드, 새로고침 후 재시도...')
+    for retry in range(2):
+        if gmarket_balance != 0:
+            break
+        log(f'CPC 페이지 잔액 미로드, 새로고침 후 재시도 ({retry + 1}/2)...')
         driver.refresh()
-        time.sleep(5)
+        time.sleep(8)
         gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
         auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
         gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
@@ -264,6 +272,25 @@ def _collect_sub_account(driver, sub_account, log_fn=None):
 
     log(f'잔액={gmarket_balance:,} CPC={gmarket_cpc:,} AI={ai_usage:,} 합계={total_usage:,}')
     return result
+
+
+def _send_telegram_alert(message):
+    """긴급 알림을 텔레그램으로 발송"""
+    try:
+        from apps.cpc.models import TelegramConfig, TelegramRecipient
+        import urllib.request
+        import json as _json
+        cfg = TelegramConfig.objects.first()
+        if not cfg or not cfg.bot_token:
+            return
+        for r in TelegramRecipient.objects.filter(is_active=True):
+            data = _json.dumps({'chat_id': r.chat_id, 'text': message}).encode()
+            req = urllib.request.Request(
+                f'https://api.telegram.org/bot{cfg.bot_token}/sendMessage',
+                data=data, headers={'Content-Type': 'application/json'})
+            urllib.request.urlopen(req, timeout=10)
+    except Exception:
+        pass
 
 
 def run_all_accounts(log_fn=None, account_filter=None):
@@ -295,82 +322,112 @@ def run_all_accounts(log_fn=None, account_filter=None):
         return {'collected': 0, 'failed': 0}
 
     collected, failed = 0, 0
-    driver = None
+    consecutive_login_failures = 0
+    LOGIN_FAIL_ABORT_THRESHOLD = 3
+    _last_sig = None   # 직전 저장 계정의 (잔액,CPC,AI,옥션) — 세션오염(동일데이터 복제) 탐지용
 
-    try:
-        driver = create_driver()
+    for account in accounts:
+        if account.crawling_status == '차단됨':
+            if log_fn: log_fn(f'[GM:{account.login_id}] 차단됨 - 건너뜀')
+            continue
 
-        for account in accounts:
-            if account.crawling_status == '차단됨':
-                if log_fn: log_fn(f'[GM:{account.login_id}] 차단됨 - 건너뜀')
-                continue
+        # 연속 3회 로그인 실패 시 즉시 중단 + 텔레그램 알림
+        if consecutive_login_failures >= LOGIN_FAIL_ABORT_THRESHOLD:
+            msg = f'⛔ 지마켓 연속 {LOGIN_FAIL_ABORT_THRESHOLD}회 접속 실패 — 서버 문제 의심, 크롤링 중단'
+            logger.error(msg)
+            if log_fn: log_fn(msg)
+            CrawlerLog.objects.create(platform='gmarket', level='error', message=msg, account_id='SYSTEM')
+            _send_telegram_alert(f'🚨 [지마켓 크롤러 긴급]\n\n{msg}\n\n로그인 시도를 중단했습니다.\n해결 후 다시 실행해주세요.')
+            break
 
-            # 메인 계정 수집
-            for attempt in range(3):
-                try:
-                    result = collect_one_account(driver, account, log_fn)
-                    if result:
-                        GmarketDepositSnapshot.objects.create(**result)
-                        account.fail_count = 0
-                        account.crawling_status = '정상'
-                        account.last_crawled_at = timezone.now()
-                        account.save()
-                        collected += 1
-
-                        CrawlerLog.objects.create(
-                            platform='gmarket', level='success',
-                            message=f'수집 완료: 합계={result["total_usage"]:,}원',
-                            account_id=account.login_id
-                        )
-
-                        # 서브 계정 수집 (같은 로그인 세션 재사용)
-                        sub_accounts = _get_sub_accounts(account.login_id)
-                        for sub in sub_accounts:
-                            try:
-                                sub_result = _collect_sub_account(driver, sub, log_fn)
-                                if sub_result:
-                                    GmarketDepositSnapshot.objects.create(**sub_result)
-                                    sub.fail_count = 0
-                                    sub.crawling_status = '정상'
-                                    sub.last_crawled_at = timezone.now()
-                                    sub.save()
-                                    collected += 1
-                                    CrawlerLog.objects.create(
-                                        platform='gmarket', level='success',
-                                        message=f'서브계정 수집 완료: 합계={sub_result["total_usage"]:,}원',
-                                        account_id=sub.login_id
-                                    )
-                            except Exception as e:
-                                logger.error(f'[서브:{sub.login_id}] 수집 실패: {e}')
-                                if log_fn:
-                                    log_fn(f'[서브:{sub.login_id}] 수집 실패: {e}')
-
-                        break
-                    else:
-                        raise Exception('수집 결과 없음')
-                except Exception as e:
-                    if attempt == 2:
-                        account.fail_count += 1
-                        if account.fail_count >= 30:
-                            account.crawling_status = '차단됨'
-                        account.save()
-                        failed += 1
-
-                        CrawlerLog.objects.create(
-                            platform='gmarket', level='error',
-                            message=f'수집 실패: {str(e)}',
-                            account_id=account.login_id
-                        )
-                        logger.error(f'[{account.login_id}] 3회 시도 실패: {e}')
-                    else:
-                        time.sleep(2)
-    finally:
-        if driver:
+        driver = None
+        # 사용자 룰: 로그인/수집 실패 시 1회 재시도 (총 2회 시도) 후 다음 계정
+        result = None
+        last_exc = None
+        for attempt in range(2):
             try:
-                driver.quit()
-            except Exception:
-                pass
-        stop_display()
+                if driver:
+                    try: driver.quit()
+                    except: pass
+                driver = create_driver()
+                result = collect_one_account(driver, account, log_fn)
+                if result:
+                    last_exc = None
+                    consecutive_login_failures = 0
+                    break
+                else:
+                    last_exc = Exception(f'수집 결과 없음 (시도 {attempt+1}/2)')
+                    if log_fn: log_fn(f'[GM:{account.login_id}] 빈 결과 — 재시도 {attempt+1}/2')
+            except Exception as e:
+                last_exc = e
+                if log_fn: log_fn(f'[GM:{account.login_id}] 시도 {attempt+1}/2 실패: {str(e)[:100]}')
+        if last_exc and not result:
+            consecutive_login_failures += 1
+        try:
+            if last_exc and not result:
+                raise last_exc
+            if result:
+                _sig = (result.get('total_balance'), result.get('gmarket_cpc'),
+                        result.get('ai_usage'), result.get('auction_cpc'))
+                # 직전 계정과 완전히 동일한 데이터 = 로그인 실패로 직전 세션을 읽은 오염 → 저장 제외
+                if _sig == _last_sig and any(v for v in _sig):
+                    raise Exception('직전 계정과 동일 데이터 — 세션오염(로그인 실패) 판단, 저장 제외')
+                _last_sig = _sig
+                GmarketDepositSnapshot.objects.create(**result)
+                # 누적 차단 정책: 성공해도 fail_count 리셋하지 않음 (관리자 수동해제로만 0)
+                account.crawling_status = '정상'
+                account.last_crawled_at = timezone.now()
+                account.save()
+                collected += 1
+
+                CrawlerLog.objects.create(
+                    platform='gmarket', level='success',
+                    message=f'수집 완료: 합계={result["total_usage"]:,}원',
+                    account_id=account.login_id
+                )
+
+                # 서브 계정 수집 (같은 로그인 세션 재사용)
+                sub_accounts = _get_sub_accounts(account.login_id)
+                for sub in sub_accounts:
+                    try:
+                        sub_result = _collect_sub_account(driver, sub, log_fn)
+                        if sub_result:
+                            GmarketDepositSnapshot.objects.create(**sub_result)
+                            # 누적 차단 정책: 성공해도 fail_count 리셋하지 않음
+                            sub.crawling_status = '정상'
+                            sub.last_crawled_at = timezone.now()
+                            sub.save()
+                            collected += 1
+                            CrawlerLog.objects.create(
+                                platform='gmarket', level='success',
+                                message=f'서브계정 수집 완료: 합계={sub_result["total_usage"]:,}원',
+                                account_id=sub.login_id
+                            )
+                    except Exception as e:
+                        logger.error(f'[서브:{sub.login_id}] 수집 실패: {e}')
+                        if log_fn:
+                            log_fn(f'[서브:{sub.login_id}] 수집 실패: {e}')
+            else:
+                raise Exception('수집 결과 없음')
+
+        except Exception as e:
+            account.fail_count += 1
+            if account.fail_count >= 30:
+                account.crawling_status = '차단됨'
+            account.save()
+            failed += 1
+            CrawlerLog.objects.create(
+                platform='gmarket', level='error',
+                message=f'수집 실패: {str(e)[:200]}',
+                account_id=account.login_id
+            )
+            logger.error(f'[{account.login_id}] 실패: {e}')
+        finally:
+            if driver:
+                try: driver.quit()
+                except: pass
+
+    stop_display()
 
     summary = f'지마켓 수집 완료: 성공={collected} 실패={failed}'
     logger.info(summary)

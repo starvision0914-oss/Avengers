@@ -7,6 +7,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from apps.cpc.views import SmsSettingsListView
+
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -31,4 +33,11 @@ urlpatterns = [
     path('api/todos/', include('apps.todos.urls')),
     path('api/messaging/', include('apps.messaging.urls')),
     path('api/emails/', include('apps.emails.urls')),
+    path('api/lohas/', include('apps.lohas.urls')),
+    path('api/ownerclan/', include('apps.ownerclan.urls')),
+    path('api/keyword/', include('apps.keyword.urls')),
+    path('api/lotto/', include('apps.lotto.urls')),
+    path('api/speedgo/', include('apps.speedgo.urls')),
+    # smsApp 호환 (root /api/settings/)
+    path('api/settings/', SmsSettingsListView.as_view()),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

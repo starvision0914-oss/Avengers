@@ -11,27 +11,43 @@ logger = logging.getLogger('crawler')
 BID_URL = 'https://ad.esmplus.com/cpc/bidmng/bidmanagement'
 
 def _login(driver, login_id, password):
-    driver.get('https://ad.esmplus.com/Member/SignIn/LogOn')
-    time.sleep(2)
+    """ad.esmplus.com 정상 로그인 — 쿠키 우선, 실패 시 풀로그인(rdoSiteSelect 선택).
+    (기존 SignIn 직접 로그인은 rdoSiteSelect 라디오 누락으로 '로그인 실패' → gmarket_crawler 재사용)"""
+    from crawlers.gmarket_crawler import _try_cookie_login, _full_login, _save_cookies
+    from apps.cpc.models import CrawlerAccount
+    acct = CrawlerAccount.objects.filter(login_id=login_id, platform='gmarket').first()
     try:
-        driver.find_element(By.ID, 'SellerId').clear()
-        driver.find_element(By.ID, 'SellerId').send_keys(login_id)
-        driver.find_element(By.ID, 'SellerPassword').clear()
-        driver.find_element(By.ID, 'SellerPassword').send_keys(password)
-        try:
-            driver.find_element(By.XPATH, '//img[@alt="로그인"]').click()
-        except:
-            driver.find_element(By.XPATH, '//*[@id="lnkSellerLogin"]/img').click()
-        WebDriverWait(driver, 15).until(lambda d: 'SignIn' not in d.current_url and 'LogOn' not in d.current_url)
-        time.sleep(2)
-        return True
+        if acct and _try_cookie_login(driver, acct):
+            return True
+        if _full_login(driver, login_id, password):
+            if acct:
+                _save_cookies(driver, acct)
+            return True
     except Exception as e:
         logger.error(f'로그인 실패 [{login_id}]: {e}')
-        return False
+    return False
+
+def _dismiss_alert(driver):
+    """'다른광고주가 선택되었습니다' 등 진입 시 뜨는 alert accept(있으면). 떴으면 True."""
+    found = False
+    for _ in range(3):
+        try:
+            WebDriverWait(driver, 2).until(EC.alert_is_present())
+            driver.switch_to.alert.accept()
+            found = True
+            time.sleep(1)
+        except Exception:
+            break
+    return found
+
 
 def _go_cpc2_tab(driver):
     driver.get(BID_URL)
     time.sleep(3)
+    if _dismiss_alert(driver):  # 광고주 불일치 alert → 새로고침 후 재진입
+        driver.get(BID_URL)
+        time.sleep(3)
+        _dismiss_alert(driver)
     driver.find_element(By.XPATH, '//*[@id="ulBidMngState"]/li[2]/a/strong').click()
     time.sleep(1)
     try:
@@ -100,9 +116,18 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
 
 def run_control(action, source='manual', log_fn=None, account_filter=None):
     from apps.cpc.models import CrawlerAccount, Cpc2History, GmarketCpcAdStatus, CrawlerLog
+    from apps.cpc import eleven_block_guard as guard
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
     if account_filter:
         qs = qs.filter(login_id__in=account_filter)
+    else:
+        qs = [a for a in qs if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
+
+    ok, reason = guard.preflight('지마켓간편광고제어', platform='gmarket', wait=True, wait_timeout=1800)
+    if not ok:
+        if log_fn:
+            log_fn(f'⏭️ 건너뜀 — {reason}')
+        return []
 
     results, driver = [], None
     try:
@@ -136,4 +161,5 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
             try: driver.quit()
             except: pass
         stop_display()
+        guard.release_global_lock(platform='gmarket')
     return results

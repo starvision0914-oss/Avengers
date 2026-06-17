@@ -8,3 +8,4 @@ class SellerAccountViewSet(viewsets.ModelViewSet):
     serializer_class = SellerAccountSerializer
     search_fields = ['seller_id', 'seller_name']
     ordering_fields = ['display_order', 'seller_id', 'created_at']
+    pagination_class = None

@@ -43,8 +43,8 @@ export default function CrawlerPage() {
   });
   const loadCron = () => getCronSchedules().then(d => setCronSchedules(Array.isArray(d) ? d : d.results || []));
   const loadLogs = () => getCrawlerLogs().then(d => setLogs(Array.isArray(d) ? d : d.results || []));
-  const loadSnapshots = () => getGmarketSnapshots().then(d => setSnapshots(Array.isArray(d) ? d : d.results || []));
-  const loadElevenCosts = () => getElevenCosts().then(d => setElevenCosts(Array.isArray(d) ? d : d.results || []));
+  const loadSnapshots = () => getGmarketSnapshots({ limit: '50' }).then(d => setSnapshots(Array.isArray(d) ? d : d.results || []));
+  const loadElevenCosts = () => getElevenCosts({ limit: '50' }).then(d => setElevenCosts(Array.isArray(d) ? d : d.results || []));
   const loadAi = () => {
     getGmarketAi().then(d => setGmAi(Array.isArray(d) ? d : d.results || []));
     getSt11Campaigns().then(d => setSt11Campaigns(Array.isArray(d) ? d : d.results || []));

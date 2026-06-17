@@ -5,11 +5,13 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--accounts', nargs='*', help='특정 계정만 수집')
+        parser.add_argument('--force', action='store_true', help='최근 24h 수집 신선도 스킵 무시하고 강제 재수집')
 
     def handle(self, *args, **options):
         from crawlers.eleven_grade_crawler import run_all_accounts
         result = run_all_accounts(
             log_fn=lambda msg: self.stdout.write(msg),
             account_filter=options.get('accounts'),
+            force=options.get('force', False),
         )
         self.stdout.write(self.style.SUCCESS(f'완료: {result}'))

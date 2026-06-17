@@ -17,29 +17,21 @@ SET_EXPOSURE_API = '/Remarketing/Management/SetCpcRemarketingGroupExposureAsync'
 
 
 def _login(driver, login_id, password):
-    driver.get('https://ad.esmplus.com/')
-    time.sleep(3)
+    """ad.esmplus.com 정상 로그인 — 쿠키 우선, 실패 시 풀로그인(rdoSiteSelect 선택).
+    (기존 직접 로그인은 rdoSiteSelect value 불일치/캡차로 실패 → gmarket_crawler 재사용)"""
+    from crawlers.gmarket_crawler import _try_cookie_login, _full_login, _save_cookies
+    from apps.cpc.models import CrawlerAccount
+    acct = CrawlerAccount.objects.filter(login_id=login_id, platform='gmarket').first()
     try:
-        try:
-            radio = driver.find_element(By.XPATH, '//input[@name="rdoSiteSelect" and @value="GMKT"]')
-            radio.click()
-            time.sleep(0.5)
-        except:
-            pass
-        driver.find_element(By.ID, 'SellerId').clear()
-        driver.find_element(By.ID, 'SellerId').send_keys(login_id)
-        driver.find_element(By.ID, 'SellerPassword').clear()
-        driver.find_element(By.ID, 'SellerPassword').send_keys(password)
-        try:
-            driver.find_element(By.XPATH, '//img[@alt="로그인"]').click()
-        except:
-            driver.find_element(By.XPATH, '//*[@id="lnkSellerLogin"]/img').click()
-        time.sleep(5)
-        url = driver.current_url.lower()
-        return 'logon' not in url and 'signin' not in url
+        if acct and _try_cookie_login(driver, acct):
+            return True
+        if _full_login(driver, login_id, password):
+            if acct:
+                _save_cookies(driver, acct)
+            return True
     except Exception as e:
         logger.error(f'[AI제어:{login_id}] 로그인 실패: {e}')
-        return False
+    return False
 
 
 def _call_esm_api(driver, api_path, payload):
@@ -160,9 +152,18 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
     """전체 계정 AI ON/OFF 제어"""
     from apps.cpc.models import CrawlerAccount, GmarketAiAdHistory, CrawlerLog
 
+    from apps.cpc import eleven_block_guard as guard
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
     if account_filter:
         qs = qs.filter(login_id__in=account_filter)
+    else:
+        qs = [a for a in qs if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
+
+    ok, reason = guard.preflight('지마켓AI광고제어', platform='gmarket', wait=True, wait_timeout=1800)
+    if not ok:
+        if log_fn:
+            log_fn(f'⏭️ 건너뜀 — {reason}')
+        return {'results': [], 'count': 0}
 
     all_results, driver = [], None
     try:
@@ -206,6 +207,7 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
             except:
                 pass
         stop_display()
+        guard.release_global_lock(platform='gmarket')
 
     if log_fn:
         log_fn(f'AI {action} 완료: {len(all_results)}건')

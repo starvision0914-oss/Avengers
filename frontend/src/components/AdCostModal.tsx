@@ -41,7 +41,7 @@ export default function AdCostModal({ sellerId, sellerAlias, platform, date, cat
         {/* 헤더 */}
         <div className="flex items-center justify-between px-5 py-3 border-b">
           <div>
-            <h2 className="text-[14px] font-bold text-[#333]">{sellerAlias} 광고비 상세</h2>
+            <h2 className="text-[12px] font-bold text-[#333]">{sellerAlias} 광고비 상세</h2>
             <p className="text-[11px] text-[#999]">{date} {category ? `· ${category}` : ''} · {platform === 'gmarket' ? '지마켓' : '11번가'}</p>
           </div>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded"><X size={18} className="text-[#999]" /></button>

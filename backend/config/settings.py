@@ -33,6 +33,11 @@ INSTALLED_APPS = [
     'apps.todos',
     'apps.messaging',
     'apps.emails',
+    'apps.lohas',
+    'apps.ownerclan',
+    'apps.keyword',
+    'apps.lotto',
+    'apps.speedgo',
 ]
 
 MIDDLEWARE = [
@@ -96,11 +101,26 @@ MEDIA_URL = '/media/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Logging
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'simple': {'format': '[%(asctime)s] %(levelname)s %(name)s: %(message)s', 'datefmt': '%H:%M:%S'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'simple'},
+    },
+    'loggers': {
+        'crawler': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}
+
 # CORS
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
-    'http://192.168.219.155:5173',
+    'http://192.168.1.16:5173',
 ]
 
 # DRF
@@ -126,6 +146,11 @@ SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
 }
+
+# 매출 파일 업로드 한도 — 대용량 엑셀/정산파일(.xls/.xlsx) 대비 (기본 2.5MB는 너무 작음)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 200 * 1024 * 1024      # 200MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 200 * 1024 * 1024      # 200MB
+DATA_UPLOAD_MAX_NUMBER_FIELDS = None                  # 필드 수 제한 해제
 
 # App label fix for apps in subdirectory
 for app_conf in INSTALLED_APPS:

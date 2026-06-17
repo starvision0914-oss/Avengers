@@ -6,6 +6,9 @@ export const updateCrawlerAccount = (id: number, data: any) => api.put(`/cpc/cra
 export const deleteCrawlerAccount = (id: number) => api.delete(`/cpc/crawler/accounts/${id}/`);
 export const getCrawlerLogs = (params?: Record<string, string>) => api.get('/cpc/crawler/logs/', { params }).then(r => r.data);
 export const triggerCrawl = (data: { platform: string; type: string; accounts?: string[] }) => api.post('/cpc/crawler/trigger/', data).then(r => r.data);
+export const runElevenCostCrawl = () => api.post('/cpc/crawler/eleven-cost/run/').then(r => r.data);
+export const stopElevenCrawl = () => api.post('/cpc/crawler/eleven-cost/stop/').then(r => r.data);
+export const getElevenCrawlStatus = () => api.get('/cpc/crawler/eleven-cost/status/').then(r => r.data);
 export const getGmarketSnapshots = (params?: Record<string, string>) => api.get('/cpc/gmarket-snapshots/', { params }).then(r => r.data);
 export const getElevenCosts = (params?: Record<string, string>) => api.get('/cpc/eleven-costs/', { params }).then(r => r.data);
 export const getGmarketGrades = (params?: Record<string, string>) => api.get('/cpc/gmarket-grades/', { params }).then(r => r.data);

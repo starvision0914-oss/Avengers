@@ -10,3 +10,5 @@ export const getTransactions = (params?: Record<string, string>) => api.get('/cp
 export const createTransaction = (data: any) => api.post('/cpc/transactions/', data).then(r => r.data);
 export const getSummary = (date?: string) => api.get('/cpc/summary/', { params: { date } }).then(r => r.data);
 export const getChart = (params?: Record<string, string>) => api.get('/cpc/chart/', { params }).then(r => r.data);
+export const getProfitDashboard = () => api.get('/cpc/profit-dashboard/').then(r => r.data);
+export const getCrawlerStats = () => api.get('/cpc/crawler/stats/').then(r => r.data);

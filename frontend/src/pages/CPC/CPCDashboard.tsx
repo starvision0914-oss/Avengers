@@ -1,313 +1,225 @@
-import { useEffect, useState } from 'react';
-import { getGmarketSummary, getElevenSummary, getGmarketSnapshots, getElevenCosts, triggerCrawl } from '../../api/crawler';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
-import { ChevronLeft, ChevronRight, Play, RefreshCw } from 'lucide-react';
-import toast from 'react-hot-toast';
-import AdCostModal from '../../components/AdCostModal';
-import dayjs from 'dayjs';
-
-type PeriodMode = 'daily' | 'monthly';
+import { useState, useCallback, useEffect } from 'react';
+import { useCpcData } from '../../hooks/useCpcData';
+import DateNavigator from '../../components/cpc/DateNavigator';
+import DateRangePicker from '../../components/cpc/DateRangePicker';
+import SummaryBar from '../../components/cpc/SummaryBar';
+import AdSummaryTable from '../../components/cpc/AdSummaryTable';
+import MobileSellerCard from '../../components/cpc/MobileSellerCard';
+import CpcTimeChart from '../../components/cpc/CpcTimeChart';
+import AiHistoryModal from '../../components/cpc/AiHistoryModal';
+import AiManageModal from '../../components/cpc/AiManageModal';
+import SellerGradeModal from '../../components/cpc/SellerGradeModal';
+import GmarketAdCostModal from '../../components/cpc/GmarketAdCostModal';
+import { todayStr, formatKRW, ymd } from '../../utils/format';
+import api from '../../api/client';
 
 export default function CPCDashboard() {
-  const [platform, setPlatform] = useState<'gmarket' | '11st'>('gmarket');
-  const [date, setDate] = useState(dayjs().format('YYYY-MM-DD'));
-  const [periodMode, setPeriodMode] = useState<PeriodMode>('daily');
-  const [gmData, setGmData] = useState<any>({ totals: {}, sellers: [] });
-  const [elData, setElData] = useState<any>({ totals: {}, sellers: [] });
-  const [crawling, setCrawling] = useState('');
-  const [selectedSeller, setSelectedSeller] = useState<string | null>(null);
-  const [modal, setModal] = useState<{ sellerId: string; sellerAlias: string; category?: string } | null>(null);
+  const {
+    date, setDate, summary, timeseries, salesTimeseries, delta,
+    selectedSeller, setSelectedSeller,
+    loading, prevDate, nextDate, goToday,
+    tgMode, setTgMode, tgStatus, manualSend,
+    periodMode, setPeriodMode,
+    rangeStart, setRangeStart, rangeEnd, setRangeEnd, searchRange,
+  } = useCpcData();
 
-  const load = () => {
-    if (periodMode === 'daily') {
-      getGmarketSummary({ date }).then(setGmData).catch(() => {});
-      getElevenSummary({ date }).then(setElData).catch(() => {});
-    } else {
-      const from = dayjs(date).startOf('month').format('YYYY-MM-DD');
-      const to = dayjs(date).endOf('month').format('YYYY-MM-DD');
-      getGmarketSummary({ date_from: from, date_to: to }).then(setGmData).catch(() => {});
-      getElevenSummary({ date_from: from, date_to: to }).then(setElData).catch(() => {});
-    }
-  };
+  const [mobileHideEmpty, setMobileHideEmpty] = useState(false);
+  const [aiModal, setAiModal] = useState<{ sellerId: string; alias: string } | null>(null);
+  const [costModal, setCostModal] = useState<{ sellerId: string; alias: string; category?: string } | null>(null);
+  const [showAiManage, setShowAiManage] = useState(false);
+  const [showSellerGrade, setShowSellerGrade] = useState(false);
+  const [blockedSellers, setBlockedSellers] = useState<{ seller_id: string; seller_alias: string }[]>([]);
+  const [showBlockedPopup, setShowBlockedPopup] = useState(false);
 
-  useEffect(() => { load(); }, [date, periodMode]);
+  const onAiClick = useCallback((sellerId: string, alias: string) => setAiModal({ sellerId, alias }), []);
+  const onCostClick = useCallback((sellerId: string, alias: string, category?: string) => setCostModal({ sellerId, alias, category }), []);
 
-  const moveDate = (dir: number) => {
-    setDate(prev => dayjs(prev).add(dir, periodMode === 'daily' ? 'day' : 'month').format('YYYY-MM-DD'));
-  };
-  const goToday = () => setDate(dayjs().format('YYYY-MM-DD'));
-  const isToday = date === dayjs().format('YYYY-MM-DD');
-  const isFuture = dayjs(date).isAfter(dayjs(), 'day');
+  useEffect(() => {
+    api.get('/cpc/crawler/blocked/').then(r => {
+      if (r.data.blocked?.length > 0) {
+        setBlockedSellers(r.data.blocked);
+        setShowBlockedPopup(true);
+      }
+    }).catch(() => {});
+  }, []);
 
-  const dateLabel = periodMode === 'daily'
-    ? dayjs(date).format('YYYY-MM-DD (ddd)')
-    : dayjs(date).format('YYYY년 MM월');
+  const selectedSellerData = summary?.sellers.find(s => s.seller_id === selectedSeller);
+  const sellerAlias = selectedSellerData?.seller_alias ?? '';
+  const isToday = periodMode === 'daily' && date === todayStr();
 
-  const handleCrawl = async (p: string) => {
-    setCrawling(p);
-    await triggerCrawl({ platform: p, type: 'cost' });
-    toast.success(`${p === 'gmarket' ? '지마켓' : '11번가'} 크롤링 시작`);
-    setTimeout(() => { setCrawling(''); load(); }, 15000);
-  };
+  const lastCollected = (() => {
+    if (!summary) return '';
+    const times = summary.sellers.map(s => s.last_tx).filter(Boolean) as string[];
+    if (!times.length) return '';
+    return times.sort().pop()!.replace('T', ' ');
+  })();
 
-  const data = platform === 'gmarket' ? gmData : elData;
-  const sellers = data.sellers || [];
-  const totals = data.totals || {};
+  const mobileFiltered = summary
+    ? mobileHideEmpty
+      ? summary.sellers.filter(s => s.ad_total > 0 || s.sales > 0)
+      : summary.sellers
+    : [];
 
-  const fmt = (v: number) => (v || 0).toLocaleString();
+  const showChart = periodMode === 'daily' && selectedSeller && timeseries.length > 0;
+  const blockedSet = new Set(blockedSellers.map(b => b.seller_id));
+
+  const costRange = periodMode === 'range'
+    ? { start_date: rangeStart, end_date: rangeEnd }
+    : periodMode === 'yearly'
+      ? { start_date: `${date.slice(0, 4)}-01-01`, end_date: `${date.slice(0, 4)}-12-31` }
+      : periodMode === 'monthly'
+        ? (() => { const d = new Date(date); return { start_date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`, end_date: ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)) }; })()
+        : undefined;
 
   return (
-    <div className="max-w-[1800px] mx-auto px-4 py-4 space-y-3">
-      {/* Header: Platform Tabs + Date Nav + Actions */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          {/* Platform Tabs */}
-          <div className="flex border border-[#e0e0e0] rounded overflow-hidden">
-            <button onClick={() => setPlatform('gmarket')}
-              className={`px-5 py-2 text-[13px] font-semibold ${platform === 'gmarket' ? 'bg-[#1a73e8] text-white' : 'bg-white text-[#555] hover:bg-gray-50'}`}>
-              지마켓
-            </button>
-            <button onClick={() => setPlatform('11st')}
-              className={`px-5 py-2 text-[13px] font-semibold border-l border-[#e0e0e0] ${platform === '11st' ? 'bg-[#e67700] text-white' : 'bg-white text-[#555] hover:bg-gray-50'}`}>
-              11번가
-            </button>
-          </div>
-
-          {/* Date Navigator */}
-          <div className="flex items-center gap-1">
-            <button onClick={() => moveDate(-1)} className="p-1.5 hover:bg-gray-100 rounded text-[#666]"><ChevronLeft size={18} /></button>
-            <div className="flex items-center gap-2">
-              <input type="date" value={date} max={dayjs().format('YYYY-MM-DD')}
-                onChange={e => setDate(e.target.value)}
-                className="text-[13px] font-semibold text-[#333] bg-transparent border-none cursor-pointer" />
+    <div className="min-h-screen bg-[#f5f5f5]">
+      {/* 차단 계정 팝업 */}
+      {showBlockedPopup && blockedSellers.length > 0 && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40" onClick={() => setShowBlockedPopup(false)}>
+          <div className="bg-white rounded-xl p-7 max-w-[440px] w-[90%] shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-[22px]">&#9888;</span>
+              <span className="text-[12px] font-bold text-[#dc2626]">지마켓 계정 차단 알림</span>
             </div>
-            <button onClick={() => moveDate(1)} disabled={isFuture}
-              className="p-1.5 hover:bg-gray-100 rounded text-[#666] disabled:opacity-20"><ChevronRight size={18} /></button>
-            <button onClick={goToday} disabled={isToday}
-              className="ml-1 px-3 py-1 text-[11px] border border-[#ddd] rounded hover:bg-gray-50 disabled:opacity-30">오늘</button>
-          </div>
-
-          {/* Period Mode */}
-          <div className="flex border border-[#e0e0e0] rounded overflow-hidden">
-            <button onClick={() => setPeriodMode('daily')}
-              className={`px-3 py-1 text-[11px] ${periodMode === 'daily' ? 'bg-[#333] text-white' : 'bg-white text-[#666]'}`}>일별</button>
-            <button onClick={() => setPeriodMode('monthly')}
-              className={`px-3 py-1 text-[11px] border-l border-[#e0e0e0] ${periodMode === 'monthly' ? 'bg-[#333] text-white' : 'bg-white text-[#666]'}`}>월별</button>
+            {blockedSellers.map(b => (
+              <div key={b.seller_id} className="flex items-center justify-between p-2 mb-1.5 bg-[#fef2f2] border border-[#fecaca] rounded">
+                <div>
+                  <span className="font-bold text-[#dc2626]">{b.seller_alias}</span>
+                  <span className="text-[#666] ml-1.5 text-[12px]">({b.seller_id})</span>
+                  <span className="text-[#dc2626] ml-1 text-[12px]">차단됨</span>
+                </div>
+                <button onClick={() => {
+                  api.post('/cpc/crawler/blocked/', { seller_id: b.seller_id }).then(() => {
+                    const updated = blockedSellers.filter(x => x.seller_id !== b.seller_id);
+                    setBlockedSellers(updated);
+                    if (updated.length === 0) setShowBlockedPopup(false);
+                  }).catch(() => {});
+                }} className="px-2.5 py-1 bg-[#16a34a] text-white rounded text-[11px] font-semibold hover:bg-[#15803d]">해제</button>
+              </div>
+            ))}
+            <p className="mt-3 text-[12px] text-[#555] leading-relaxed">
+              2차인증 혹은 비밀번호를 변경하고 차단을 풀어주세요.
+            </p>
+            <div className="text-right mt-4">
+              <button onClick={() => setShowBlockedPopup(false)} className="px-5 py-1.5 bg-[#dc2626] text-white rounded-md font-semibold text-[12px] hover:bg-[#b91c1c]">확인</button>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2">
-          <button onClick={() => handleCrawl(platform)} disabled={!!crawling}
-            className="flex items-center gap-1 px-3 py-1.5 bg-[#1a73e8] text-white rounded text-[12px] hover:bg-[#1557b0] disabled:opacity-50">
-            {crawling ? <RefreshCw size={12} className="animate-spin" /> : <Play size={12} />}
-            수집
-          </button>
-          <button onClick={load} className="p-1.5 hover:bg-gray-100 rounded text-[#666]"><RefreshCw size={14} /></button>
+      {/* 날짜 네비게이션 바 */}
+      <div className="bg-white border-b border-[#e0e0e0] px-4 md:px-6 py-2">
+        <div className="flex items-center justify-between max-w-[1800px] mx-auto">
+          <div className="flex items-center gap-3">
+            <h1 className="text-[12px] font-bold text-[#333]">지마켓 대시보드</h1>
+            {loading && <span className="text-[11px] text-[#999] animate-pulse">로딩중...</span>}
+          </div>
+          {periodMode === 'range' ? (
+            <DateRangePicker startDate={rangeStart} endDate={rangeEnd}
+              onStartChange={setRangeStart} onEndChange={setRangeEnd} onSearch={searchRange} />
+          ) : (
+            <DateNavigator date={date} onPrev={prevDate} onNext={nextDate} onToday={goToday} onDateChange={setDate} periodMode={periodMode} />
+          )}
         </div>
       </div>
 
-      {/* Summary Bar */}
-      <div className="bg-white border border-[#e0e0e0] rounded-lg">
-        <div className="flex items-center justify-between px-5 py-3">
-          <div className="flex items-center gap-6 text-[13px]">
-            {platform === 'gmarket' ? (
-              <>
-                <div><span className="text-[#888]">총잔액: </span><span className="font-semibold text-[#00a651]">{fmt(totals.balance)}</span></div>
-                <div><span className="text-[#888]">총CPC: </span><span className="font-semibold text-[#1a73e8]">{fmt(totals.cpc_spend)}</span></div>
-                <div><span className="text-[#888]">총AI: </span><span className="font-semibold text-[#7c3aed]">{fmt(totals.ai_spend)}</span></div>
-                <div><span className="text-[#888]">총광고비: </span><span className="font-bold text-[#e04040]">{fmt(totals.ad_total)}</span></div>
-              </>
-            ) : (
-              <>
-                <div><span className="text-[#888]">총CPC: </span><span className="font-semibold text-[#e67700]">{fmt(totals.cpc_spend)}</span></div>
-                <div><span className="text-[#888]">계정수: </span><span className="font-semibold">{totals.seller_count || 0}</span></div>
-              </>
+      {/* PC 레이아웃 */}
+      <div className="hidden md:block max-w-[1800px] mx-auto px-6 py-5 space-y-4">
+        {summary && (
+          <>
+            <SummaryBar
+              totals={summary.totals} delta={delta} lastCollected={lastCollected}
+              tgMode={tgMode} onTgModeChange={setTgMode} tgStatus={tgStatus} onManualSend={manualSend}
+              periodMode={periodMode} onPeriodChange={setPeriodMode}
+              onAiManage={() => setShowAiManage(true)}
+              onSellerGrade={() => setShowSellerGrade(true)}
+            />
+            <AdSummaryTable
+              sellers={summary.sellers} totals={summary.totals}
+              selectedSeller={selectedSeller} onSelectSeller={setSelectedSeller}
+              onAiClick={onAiClick} onCostClick={onCostClick}
+              blockedIds={blockedSet}
+              onDismissBlocked={sid => {
+                api.post('/cpc/crawler/blocked/', { seller_id: sid }).then(() =>
+                  setBlockedSellers(prev => prev.filter(b => b.seller_id !== sid))
+                ).catch(() => {});
+              }}
+            />
+            {showChart && (
+              <CpcTimeChart data={timeseries} salesData={salesTimeseries} sellerAlias={sellerAlias} />
             )}
-          </div>
-          <div className="text-[11px] text-[#aaa]">
-            {data.date && `기준일: ${data.date}`}
-          </div>
-        </div>
-      </div>
-
-      {/* Main Table */}
-      <div className="bg-white border border-[#e0e0e0] rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-[12px]" style={{ fontVariantNumeric: 'tabular-nums' }}>
-            <thead>
-              <tr className="bg-[#f7f7f7] border-b border-[#e0e0e0]">
-                <th className="px-3 py-[7px] text-center text-[#999] font-normal w-8">#</th>
-                <th className="px-3 py-[7px] text-left text-[#555] font-semibold min-w-[120px]">셀러명</th>
-                {platform === 'gmarket' ? (
-                  <>
-                    <th className="px-3 py-[7px] text-center text-[#555] font-semibold">광고상태</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">잔액</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">CPC</th>
-                    <th className="px-3 py-[7px] text-center text-[#555] font-semibold">AI</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-bold">광고비합</th>
-                    <th className="px-3 py-[7px] text-left text-[#555] font-semibold">등급</th>
-                    <th className="px-3 py-[7px] text-left text-[#999] font-normal">수집</th>
-                  </>
-                ) : (
-                  <>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">CPC</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">충전</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">잔액</th>
-                    <th className="px-3 py-[7px] text-right text-[#555] font-semibold">건수</th>
-                  </>
+            {selectedSellerData?.grade_info && (
+              <div className="bg-white border border-[#e0e0e0] rounded px-5 py-3 flex items-center gap-6 text-[12px]">
+                <span className="font-bold text-[#333]">{selectedSellerData.seller_alias}</span>
+                <span className="text-[#666]">등급 <b className={selectedSellerData.grade_info.seller_grade === '파워이딜러' ? 'text-[#e04040]' : 'text-[#333]'}>{selectedSellerData.grade_info.seller_grade}</b></span>
+                <span className="text-[#666]">최대수량 <b className={selectedSellerData.grade_info.max_item_count && selectedSellerData.grade_info.max_item_count >= 10000 ? 'text-[#e04040] font-bold' : 'text-[#333]'}>{selectedSellerData.grade_info.max_item_count?.toLocaleString() ?? '-'}개</b></span>
+                <span className="text-[#666]">승인 <b className={selectedSellerData.grade_info.approval_status === '승인' ? 'text-[#00a651]' : 'text-[#e04040]'}>{selectedSellerData.grade_info.approval_status ?? '-'}</b></span>
+                {selectedSellerData.grade_info.contact_expiry && (
+                  <span className="text-[#666]">연락처인증 <b className="text-[#e08000]">{selectedSellerData.grade_info.contact_expiry}</b></span>
                 )}
-              </tr>
-            </thead>
-            <tbody>
-              {sellers.length > 0 ? sellers.map((s: any, i: number) => (
-                <tr key={s.seller_id} onClick={() => setSelectedSeller(s.seller_id === selectedSeller ? null : s.seller_id)}
-                  className={`border-b border-[#eee] cursor-pointer transition-colors ${
-                    selectedSeller === s.seller_id ? 'bg-[#e8f5e9]' : i % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]'
-                  } hover:bg-[#f0f7f0]`}>
-                  <td className="px-3 py-[7px] text-center text-[#999]">{i + 1}</td>
-                  <td className="px-3 py-[7px] text-left font-semibold text-[#222]">
-                    <div className="flex items-center gap-1.5">
-                      {platform === 'gmarket' && s.balance < 100000 && (
-                        <span className="w-2 h-2 rounded-full bg-[#e04040] animate-pulse" title={`잔액: ${fmt(s.balance)}`} />
-                      )}
-                      {s.seller_id}
-                    </div>
-                  </td>
-                  {platform === 'gmarket' ? (
-                    <>
-                      {/* 광고상태 */}
-                      <td className="px-3 py-[7px] text-center">
-                        {s.cpc_status ? (
-                          <div className="flex flex-col items-center gap-0.5 text-[10px]">
-                            <span className="px-1 py-0.5 rounded bg-gray-50 text-gray-700">일반 <span className="text-green-600 font-bold">{s.cpc_status.cpc1_on}</span>ON/<span className="text-red-500 font-bold">{s.cpc_status.cpc1_off}</span>OFF</span>
-                            <span className="px-1 py-0.5 rounded bg-blue-50 text-blue-700">간편 <span className="text-green-600 font-bold">{s.cpc_status.cpc2_on}</span>ON/<span className="text-red-500 font-bold">{s.cpc_status.cpc2_off}</span>OFF</span>
-                          </div>
-                        ) : <span className="text-[#ccc] text-[10px]">-</span>}
-                      </td>
-                      <td className="px-3 py-[7px] text-right text-[#00a651]">{fmt(s.balance)}</td>
-                      <td className={`px-3 py-[7px] text-right cursor-pointer hover:underline ${s.cpc_spend ? 'text-[#1a73e8]' : 'text-[#ccc]'}`}
-                        onClick={(e) => { e.stopPropagation(); setModal({ sellerId: s.seller_id, sellerAlias: s.seller_id, category: 'CPC' }); }}>{fmt(s.cpc_spend)}</td>
-                      {/* AI 상태 */}
-                      <td className="px-3 py-[7px] text-center">
-                        {s.ai_status ? (
-                          <div className="flex flex-col items-center gap-0.5">
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${s.ai_status.actual_status === 'ON' ? 'bg-[#e8f5e9] text-[#00a651]' : 'bg-[#ffeef0] text-[#e04040]'}`}>
-                              {s.ai_status.actual_status}
-                            </span>
-                            {s.ai_status.start_date && <span className="text-[9px] text-[#999]">{s.ai_status.start_date}</span>}
-                          </div>
-                        ) : (
-                          <span className={`text-[10px] ${s.ai_spend ? 'text-[#7c3aed]' : 'text-[#ccc]'}`}>{fmt(s.ai_spend)}</span>
-                        )}
-                      </td>
-                      <td className={`px-3 py-[7px] text-right font-bold cursor-pointer hover:underline ${s.ad_total ? 'text-[#1557b0]' : 'text-[#ccc]'}`}
-                        onClick={(e) => { e.stopPropagation(); setModal({ sellerId: s.seller_id, sellerAlias: s.seller_id }); }}>{fmt(s.ad_total)}</td>
-                      {/* 등급 */}
-                      <td className="px-3 py-[7px] text-left text-[10px]">
-                        {s.grade_info ? (
-                          <div>
-                            <span className={`font-semibold ${(s.grade_info.max_item_count || 0) >= 10000 ? 'text-[#e04040]' : 'text-[#333]'}`}>
-                              {s.grade_info.seller_grade}
-                            </span>
-                            <span className="text-[#999] ml-1">({(s.grade_info.max_item_count || 0).toLocaleString()})</span>
-                          </div>
-                        ) : <span className="text-[#ccc]">-</span>}
-                      </td>
-                      <td className="px-3 py-[7px] text-left text-[10px] text-[#aaa]">
-                        {s.collected_at ? new Date(s.collected_at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }) : ''}
-                      </td>
-                    </>
-                  ) : (
-                    <>
-                      <td className={`px-3 py-[7px] text-right cursor-pointer hover:underline ${s.cpc_spend ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}`}
-                        onClick={(e) => { e.stopPropagation(); setModal({ sellerId: s.seller_id, sellerAlias: s.seller_id, category: 'CPC' }); }}>{fmt(s.cpc_spend)}</td>
-                      <td className={`px-3 py-[7px] text-right ${s.charge ? 'text-[#00a651]' : 'text-[#ccc]'}`}>{fmt(s.charge)}</td>
-                      <td className="px-3 py-[7px] text-right text-[#333]">{fmt(s.balance)}</td>
-                      <td className="px-3 py-[7px] text-right text-[#999]">{s.tx_count || 0}</td>
-                    </>
-                  )}
-                </tr>
-              )) : (
-                <tr>
-                  <td colSpan={platform === 'gmarket' ? 9 : 6} className="px-4 py-12 text-center text-[#aaa]">
-                    {date} 수집된 데이터가 없습니다. 수집 버튼을 클릭하세요.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-            {sellers.length > 0 && (
-              <tfoot>
-                <tr className="bg-[#f7f7f7] border-t-2 border-[#ddd] font-bold text-[12px]">
-                  <td className="px-3 py-[8px] text-center text-[#999]">#</td>
-                  <td className="px-3 py-[8px] text-left text-[#333]">합계 ({sellers.length})</td>
-                  {platform === 'gmarket' ? (
-                    <>
-                      <td className="px-3 py-[8px]"></td>{/* 광고상태 */}
-                      <td className="px-3 py-[8px] text-right text-[#00a651]">{fmt(totals.balance)}</td>
-                      <td className="px-3 py-[8px] text-right text-[#1a73e8]">{fmt(totals.cpc_spend)}</td>
-                      <td className="px-3 py-[8px] text-center text-[#7c3aed]">{fmt(totals.ai_spend)}</td>
-                      <td className="px-3 py-[8px] text-right text-[#e04040]">{fmt(totals.ad_total)}</td>
-                      <td className="px-3 py-[8px]"></td>{/* 등급 */}
-                      <td className="px-3 py-[8px]"></td>{/* 수집 */}
-                    </>
-                  ) : (
-                    <>
-                      <td className="px-3 py-[8px] text-right text-[#e67700]">{fmt(totals.cpc_spend)}</td>
-                      <td className="px-3 py-[8px] text-right text-[#00a651]">{fmt(sellers.reduce((s: number, d: any) => s + (d.charge || 0), 0))}</td>
-                      <td className="px-3 py-[8px] text-right">{fmt(sellers.reduce((s: number, d: any) => s + (d.balance || 0), 0))}</td>
-                      <td className="px-3 py-[8px] text-right text-[#999]">{sellers.reduce((s: number, d: any) => s + (d.tx_count || 0), 0)}</td>
-                    </>
-                  )}
-                </tr>
-              </tfoot>
+                <span className="text-[#aaa] text-[10px] ml-auto">수집 {selectedSellerData.grade_info.collected_at}</span>
+              </div>
             )}
-          </table>
-        </div>
+          </>
+        )}
       </div>
 
-      {/* Chart */}
-      {sellers.length > 0 && (
-        <div className="bg-white border border-[#e0e0e0] rounded-lg p-5">
-          <h3 className="text-[13px] font-semibold text-[#333] mb-3">계정별 광고비</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={sellers.map((s: any) => ({
-              name: s.seller_id,
-              CPC: s.cpc_spend || 0,
-              ...(platform === 'gmarket' ? { AI: s.ai_spend || 0 } : { 충전: s.charge || 0 }),
-            }))}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis tickFormatter={(v) => `${(v / 10000).toFixed(0)}만`} tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v: number) => `${v.toLocaleString()}원`} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
-              {platform === 'gmarket' ? (
-                <>
-                  <Bar dataKey="CPC" fill="#1a73e8" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="AI" fill="#7c3aed" radius={[2, 2, 0, 0]} />
-                </>
-              ) : (
-                <>
-                  <Bar dataKey="CPC" fill="#e67700" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="충전" fill="#00a651" radius={[2, 2, 0, 0]} />
-                </>
-              )}
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
+      {/* 모바일 레이아웃 */}
+      <div className="md:hidden px-2 py-3 space-y-2">
+        {summary && (
+          <>
+            <SummaryBar
+              totals={summary.totals} delta={delta} lastCollected={lastCollected}
+              tgMode={tgMode} onTgModeChange={setTgMode} tgStatus={tgStatus} onManualSend={manualSend}
+              periodMode={periodMode} onPeriodChange={setPeriodMode}
+              onAiManage={() => setShowAiManage(true)}
+              onSellerGrade={() => setShowSellerGrade(true)}
+            />
+            <div className="bg-white border border-[#e0e0e0] rounded p-3">
+              <div className="flex items-center justify-between text-[11px] mb-1">
+                <span className="text-[#333] font-bold text-[12px] cursor-pointer" onClick={() => setMobileHideEmpty(h => !h)}>
+                  합계 <span className="ml-1 text-[10px] text-[#999] font-normal">{mobileHideEmpty ? `${mobileFiltered.length}개만` : `${summary.sellers.length}개`}</span>
+                </span>
+                <span className={`text-[12px] font-bold ${summary.totals.net_profit < 0 ? 'text-[#e04040]' : 'text-[#00a651]'}`}>
+                  순이익 {formatKRW(summary.totals.net_profit)}
+                </span>
+              </div>
+              <div className="flex items-center gap-3 text-[10px] text-[#666]">
+                <span>CPC <b className="text-[#1a73e8]">{formatKRW(summary.totals.cpc_spend)}</b></span>
+                <span>AI <b className="text-[#1a73e8]">{formatKRW(summary.totals.ai_spend)}</b></span>
+                <span>광고비 <b className="text-[#1557b0]">{formatKRW(summary.totals.ad_total)}</b></span>
+              </div>
+            </div>
+            <div className="bg-white border border-[#e0e0e0] rounded overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-[#f7f7f7] border-b border-[#e0e0e0] cursor-pointer"
+                onClick={() => setMobileHideEmpty(h => !h)}>
+                <span className="text-[12px] font-bold text-[#333]">
+                  셀러명 <span className="ml-1.5 text-[10px] font-normal text-[#999]">{mobileHideEmpty ? `활동 ${mobileFiltered.length}개` : `전체 ${summary.sellers.length}개`}</span>
+                </span>
+                <span className={`text-[10px] px-1.5 py-[1px] rounded ${mobileHideEmpty ? 'bg-[#e7f5ff] text-[#228be6] font-bold' : 'text-[#999]'}`}>
+                  {mobileHideEmpty ? '활동만' : '전체보기'}
+                </span>
+              </div>
+              {mobileFiltered.map((s, i) => (
+                <MobileSellerCard key={s.seller_id} seller={s} index={i + 1}
+                  isSelected={selectedSeller === s.seller_id}
+                  onSelect={() => setSelectedSeller(selectedSeller === s.seller_id ? null : s.seller_id)}
+                  onAiClick={onAiClick} onCostClick={onCostClick} />
+              ))}
+            </div>
+            {showChart && <CpcTimeChart data={timeseries} salesData={salesTimeseries} sellerAlias={sellerAlias} />}
+          </>
+        )}
+      </div>
 
-      {/* 광고비 상세 모달 */}
-      {modal && (
-        <AdCostModal
-          sellerId={modal.sellerId}
-          sellerAlias={modal.sellerAlias}
-          platform={platform}
-          date={date}
-          category={modal.category}
-          onClose={() => setModal(null)}
-        />
+      {/* 모달들 */}
+      {costModal && (
+        <GmarketAdCostModal sellerId={costModal.sellerId} sellerAlias={costModal.alias}
+          date={date} range={costRange} category={costModal.category} onClose={() => setCostModal(null)} />
       )}
+      {showAiManage && <AiManageModal onClose={() => setShowAiManage(false)} />}
+      {showSellerGrade && <SellerGradeModal onClose={() => setShowSellerGrade(false)} />}
+      {aiModal && <AiHistoryModal sellerId={aiModal.sellerId} sellerAlias={aiModal.alias} onClose={() => setAiModal(null)} />}
     </div>
   );
 }

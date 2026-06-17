@@ -8,3 +8,7 @@ dist/
 media/
 *.log
 .DS_Store
+*.env
+backups/
+*.sql.gz
+CLAUDE.md
