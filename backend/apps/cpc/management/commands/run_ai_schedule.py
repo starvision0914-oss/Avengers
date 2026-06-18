@@ -59,15 +59,10 @@ class Command(BaseCommand):
         action = options['action']
         self.stdout.write(f'예약 실행 — 오늘: {today_str}, 시작일: {start_date}, 액션: {action}, 대상: {selected}')
 
-        # 대상 seller_id → gmarket_id 매핑
-        summaries = GmarketAiAdSummary.objects.filter(
-            seller_id__in=selected
-        ).values_list('gmarket_id', flat=True).distinct()
-
-        account_ids = list(summaries)
-        if not account_ids:
-            # selected_accounts가 gmarket_id일 수도 있음
-            account_ids = selected
+        # 선택한 계정(login_id=마스터)을 그대로 사용 — 수동 AI 제어와 동일.
+        # (구버전: GmarketAiAdSummary.seller_id 매핑 → 서브가 마스터로 바뀌고 .distinct()가
+        #  모델 정렬로 깨져 3개→84개 폭주. 매핑 제거하고 중복만 제거.)
+        account_ids = list(dict.fromkeys(selected))
 
         # 수동 OFF 오버라이드 체크
         if not options['force']:
@@ -113,11 +108,25 @@ class Command(BaseCommand):
         )
         from crawlers.browser import create_driver, stop_display
         from apps.cpc.models import CrawlerAccount, GmarketAiAdHistory
+        from apps.cpc import eleven_block_guard as guard
+
+        # 동시접속 방지: 다른 지마켓 크롤(간편 등)이 돌고 있으면 끝날 때까지 대기(스킵 아님)
+        ok, reason = guard.preflight('지마켓AI광고ON', platform='gmarket', wait=True, wait_timeout=1800)
+        if not ok:
+            self._log(f'⏭️ AI ON 건너뜀 — {reason}')
+            return
+        guard.clear_control_stop('gmarket')   # 새 실행 — 묵은 중지플래그 제거
 
         driver = None
         try:
             driver = create_driver()
+            try:
+                driver.set_page_load_timeout(40); driver.implicitly_wait(3)
+            except Exception:
+                pass
             for aid in account_ids:
+                if guard.is_control_stop('gmarket'):
+                    self._log('🛑 강제중지 요청 — 중단'); break
                 acct = CrawlerAccount.objects.filter(
                     login_id=aid, platform='gmarket', is_active=True
                 ).first()
@@ -130,7 +139,12 @@ class Command(BaseCommand):
                     continue
 
                 groups = _get_group_info(driver)
+                if len(groups) > 100:   # 폭주 안전장치 — 정상 계정은 그룹 수십개
+                    self._log(f'[AI스케줄:{aid}] ⚠️ 그룹 {len(groups)}개 비정상 과다 — 스킵(폭주 방지)')
+                    continue
                 for g in groups:
+                    if guard.is_control_stop('gmarket'):
+                        self._log('🛑 강제중지 — 그룹 처리 중단'); break
                     result = set_ai_onoff(driver, g['group_no'], 'on', start_date=start_date)
                     success = result and result.get('ResultCode') == 0 if result else False
                     self._log(f'[AI스케줄:{aid}] {g["seller_id"]}({g["group_name"]}): ON(시작일:{start_date}) {"성공" if success else "실패"}')
@@ -150,6 +164,8 @@ class Command(BaseCommand):
                 except:
                     pass
             stop_display()
+            guard.release_global_lock(platform='gmarket')
+            guard.clear_control_stop('gmarket')
 
     def _next_business_day(self, base_date, holidays):
         d = base_date + timedelta(days=1)

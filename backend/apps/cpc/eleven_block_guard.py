@@ -371,6 +371,32 @@ def release_global_lock(platform='11st'):
         pass
 
 
+# ===== 실행 중 제어 강제중지 플래그 (계정 루프가 계정 사이에서 확인) =====
+def _stop_flag_path(platform='gmarket'):
+    return Path(f'/tmp/avengers_{platform}_control_stop')
+
+
+def request_control_stop(platform='gmarket'):
+    """강제중지 요청 — 실행 중인 제어 루프가 다음 계정 전에 멈춘다."""
+    try:
+        _stop_flag_path(platform).write_text('stop')
+    except Exception:
+        pass
+
+
+def is_control_stop(platform='gmarket'):
+    return _stop_flag_path(platform).exists()
+
+
+def clear_control_stop(platform='gmarket'):
+    try:
+        p = _stop_flag_path(platform)
+        if p.exists():
+            p.unlink()
+    except Exception:
+        pass
+
+
 def live_reachable(timeout=10, platform='11st'):
     """해당 플랫폼 사이트에 실제로 닿는지 단건 확인 (HTTP 응답이 오면 도달)."""
     import urllib.request

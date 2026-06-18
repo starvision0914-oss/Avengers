@@ -48,23 +48,25 @@ class Command(BaseCommand):
             cpc_d, ai_d = cpc_c - cpc_p, ai_c - ai_p
             tot['cpc'] += cpc_c; tot['cpc_d'] += cpc_d
             tot['ai'] += ai_c; tot['ai_d'] += ai_d
-            rows.append((cpc_c + ai_c, a.login_id, cpc_c, cpc_d, ai_c, ai_d))
+            # 표시는 증가(CPC 또는 AI 증가분 > 0)가 있는 계정만
+            if cpc_d > 0 or ai_d > 0:
+                rows.append((cpc_c + ai_c, a.login_id, cpc_c, cpc_d, ai_c, ai_d))
 
-        # 계정 번호(display_order) 순 유지 — accts를 이미 그 순서로 조회함.
-        # (이전엔 금액순 rows.sort 로 번호가 뒤섞여 알림 순서가 안 맞았음)
+        # 증가분 큰 순으로 정렬(증가계정만이라 번호순보다 변동 큰 계정 우선)
+        rows.sort(key=lambda r: -((r[3] if r[3] > 0 else 0) + (r[5] if r[5] > 0 else 0)))
 
         def sd(v):   # 증가분 표기: +n / -n / 0
             return f'+{v:,}' if v > 0 else (f'{v:,}' if v < 0 else '+0')
 
-        # 전체 광고비(괄호에 증가분)를 메인으로 + 계정마다 줄바꿈(모든 계정 표시).
+        # 전체 광고비(모든 계정 합계)를 메인으로 + 증가 있는 계정만 줄바꿈 표시.
         grand = tot['cpc'] + tot['ai']
         grand_d = tot['cpc_d'] + tot['ai_d']
         head = f"📊 [지마켓 시간별 광고비] {now.strftime('%m/%d %H:%M')}"
-        total = (f"전체 {grand:,}원({sd(grand_d)})  ·  "
-                 f"CPC {tot['cpc']:,}({sd(tot['cpc_d'])}) / AI {tot['ai']:,}({sd(tot['ai_d'])})  · {len(rows)}계정")
+        total = (f"💰 오늘 전체 광고비 {grand:,}원({sd(grand_d)})  ·  "
+                 f"CPC {tot['cpc']:,}({sd(tot['cpc_d'])}) / AI {tot['ai']:,}({sd(tot['ai_d'])})  · 증가 {len(rows)}계정")
         lines = [f"{lid}  CPC {cpc_c:,}({sd(cpc_d)}) / AI {ai_c:,}({sd(ai_d)})"
                  for _, lid, cpc_c, cpc_d, ai_c, ai_d in rows]
-        body = head + "\n" + total + "\n" + "\n".join(lines)
+        body = head + "\n" + total + ("\n" + "\n".join(lines) if lines else "")
         if no_data:
             body += f"\n(스냅샷없음 {len(no_data)})"
 

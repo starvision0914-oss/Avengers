@@ -42,3 +42,34 @@ export async function getOverview(date?: string): Promise<OverviewResponse> {
   const { data } = await api.get('/cpc/overview/', { params: date ? { date } : {} });
   return data;
 }
+
+export interface MallProfitRow {
+  platform: string;
+  label: string;
+  revenue: number;
+  cost: number;
+  commission: number;
+  gross_profit: number;
+  ad_cost: number;
+  net_profit: number;
+  orders: number;
+  net_margin: number;
+  ad_ratio: number;
+  has_ad_data: boolean;
+}
+export interface MallProfitResponse {
+  month: string;
+  date_from: string;
+  date_to: string;
+  rows: MallProfitRow[];
+  totals: {
+    revenue: number; cost: number; gross_profit: number; commission: number;
+    ad_cost: number; net_profit: number; orders: number;
+    net_margin: number; gross_margin: number;
+  };
+}
+
+export async function getMallProfit(month?: string): Promise<MallProfitResponse> {
+  const { data } = await api.get('/cpc/all-mall-profit/', { params: month ? { month } : {} });
+  return data;
+}

@@ -23,6 +23,7 @@ export const getCpc2Schedule = () => api.get('/cpc/cpc2-schedule/').then(r => r.
 export const updateCpc2Schedule = (id: number, data: any) => api.put(`/cpc/cpc2-schedule/${id}/`, data).then(r => r.data);
 export const getCpc2History = () => api.get('/cpc/cpc2-history/').then(r => r.data);
 export const controlCpc2 = (data: any) => api.post('/cpc/cpc2/control/', data).then(r => r.data);
+export const getGmarketMyAccounts = () => api.get('/cpc/gmarket-my/accounts/').then(r => r.data);
 export const getAiSchedule = () => api.get('/cpc/ai-schedule/').then(r => r.data);
 export const updateAiSchedule = (id: number, data: any) => api.put(`/cpc/ai-schedule/${id}/`, data).then(r => r.data);
 export const createAiSchedule = (data: any) => api.post('/cpc/ai-schedule/', data).then(r => r.data);
@@ -42,6 +43,17 @@ export const updateCronSchedule = (id: number, data: any) => api.patch(`/cpc/cro
 export const applyCron = () => api.post('/cpc/cron/apply/').then(r => r.data);
 export const unblockAccount = (id: number) => api.post('/cpc/crawler/unblock/', { id }).then(r => r.data);
 export const controlAi = (data: any) => api.post('/cpc/ai/control/', data).then(r => r.data);
+export const getAiHistory = () => api.get('/cpc/ai-history/').then(r => r.data);
+export const stopGmarketControl = () => api.post('/cpc/gmarket-control/stop/').then(r => r.data);
+export const getGmarketControlStatus = () => api.get('/cpc/gmarket-control/status/').then(r => r.data);
+export const getSt11StrategyAccounts = () => api.get('/cpc/eleven-ad-strategy/accounts/').then(r => r.data);
+export const getSt11StrategyCampaigns = (eid: string) => api.get('/cpc/eleven-ad-strategy/campaigns/', { params: { eid } }).then(r => r.data);
+export const fetchSt11StrategyCampaigns = (eid: string) => api.post('/cpc/eleven-ad-strategy/campaigns/', { eid }).then(r => r.data);
+export const controlSt11Strategy = (data: any) => api.post('/cpc/eleven-ad-strategy/control/', data).then(r => r.data);
+export const getSt11StrategyLogs = (run_id?: string) => api.get('/cpc/eleven-ad-strategy/logs/', { params: run_id ? { run_id } : {} }).then(r => r.data);
+export const getSt11StrategyRuns = () => api.get('/cpc/eleven-ad-strategy/runs/').then(r => r.data);
+export const getSt11StrategySchedule = () => api.get('/cpc/eleven-ad-strategy/schedule/').then(r => r.data);
+export const saveSt11StrategySchedule = (data: any) => api.put('/cpc/eleven-ad-strategy/schedule/', data).then(r => r.data);
 
 export const getSmsPhones = () => api.get('/cpc/sms/phones/').then(r => r.data);
 export const addSmsPhone = (data: any) => api.post('/cpc/sms/phones/', data).then(r => r.data);

@@ -57,6 +57,7 @@ def _get_group_info(driver):
     time.sleep(3)
 
     groups = []
+    seen = set()   # group_no 중복 제거 — 중첩 table 셀렉터로 같은 행이 여러번 잡히는 폭주 방지
     tables = driver.find_elements(By.CSS_SELECTOR, 'div.remarketing_table table')
     if not tables:
         tables = driver.find_elements(By.TAG_NAME, 'table')
@@ -67,6 +68,9 @@ def _get_group_info(driver):
             if not sid:
                 continue
             group_no = row.get_attribute('data-groupno')
+            if not group_no or group_no in seen:
+                continue                      # 이미 본 그룹 → 중복 스킵
+            seen.add(group_no)
             onoff = row.get_attribute('data-onoff') or '0'
             start_raw = row.get_attribute('data-startdate') or ''
             start_date = start_raw[:10] if start_raw and '0001-01-01' not in start_raw else ''
@@ -165,15 +169,34 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
             log_fn(f'⏭️ 건너뜀 — {reason}')
         return {'results': [], 'count': 0}
 
+    guard.clear_control_stop('gmarket')   # 새 실행 — 묵은 중지플래그 제거
     all_results, driver = [], None
     try:
         driver = create_driver()
+        try:
+            driver.set_page_load_timeout(40); driver.implicitly_wait(3)
+        except Exception:
+            pass
         for acct in qs:
+            if guard.is_control_stop('gmarket'):
+                if log_fn: log_fn('🛑 강제중지 요청 — 중단')
+                break
             try:
-                driver.delete_all_cookies()
-                if not _login(driver, acct.login_id, acct.password_enc):
+                # 로그인 2회 재시도(일시 실패 대비)
+                logged = False
+                for _try in range(2):
+                    try:
+                        driver.delete_all_cookies()
+                        if _login(driver, acct.login_id, acct.password_enc):
+                            logged = True; break
+                    except Exception:
+                        pass
+                    try: driver.switch_to.alert.accept()
+                    except Exception: pass
+                    time.sleep(2)
+                if not logged:
                     if log_fn:
-                        log_fn(f'[AI제어:{acct.login_id}] 로그인 실패')
+                        log_fn(f'[AI제어:{acct.login_id}] 로그인 실패(2회)')
                     continue
 
                 results = control_account(driver, acct.login_id, action, source, log_fn)
@@ -196,6 +219,8 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
             except Exception as e:
                 if log_fn:
                     log_fn(f'[AI제어:{acct.login_id}] 오류: {e}')
+                try: driver.switch_to.alert.accept()   # 잔여 알림 정리(다음 계정 보호)
+                except Exception: pass
                 CrawlerLog.objects.create(
                     platform='gmarket', level='error',
                     message=str(e), account_id=acct.login_id
@@ -208,6 +233,7 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
                 pass
         stop_display()
         guard.release_global_lock(platform='gmarket')
+        guard.clear_control_stop('gmarket')
 
     if log_fn:
         log_fn(f'AI {action} 완료: {len(all_results)}건')

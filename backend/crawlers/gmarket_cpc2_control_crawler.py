@@ -5,6 +5,7 @@ from django.utils import timezone
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import UnexpectedAlertPresentException
 from .browser import create_driver, stop_display
 
 logger = logging.getLogger('crawler')
@@ -114,7 +115,8 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
         'after_on': after_on, 'after_off': after_off,
     }
 
-def run_control(action, source='manual', log_fn=None, account_filter=None):
+def run_control(action, source='manual', log_fn=None, account_filter=None, include_cpc1=False):
+    """간편광고(스마트) ON/OFF. include_cpc1=True면 같은 로그인으로 일반광고(일반그룹)도 함께 제어."""
     from apps.cpc.models import CrawlerAccount, Cpc2History, GmarketCpcAdStatus, CrawlerLog
     from apps.cpc import eleven_block_guard as guard
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
@@ -129,37 +131,94 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
             log_fn(f'⏭️ 건너뜀 — {reason}')
         return []
 
+    guard.clear_control_stop('gmarket')   # 새 실행 시작 — 묵은 중지플래그 제거
     results, driver = [], None
     try:
         driver = create_driver()
+        # 페이지가 안 열려도 무한대기 않도록 캡(한 계정 14분 멈춤 방지) + 요소 대기 단축
+        try:
+            driver.set_page_load_timeout(40)
+            driver.implicitly_wait(3)
+        except Exception:
+            pass
         for acct in qs:
+            if guard.is_control_stop('gmarket'):
+                if log_fn: log_fn('🛑 강제중지 요청 — 중단')
+                break
             try:
-                driver.delete_all_cookies()
-                if not _login(driver, acct.login_id, acct.password_enc):
+                # 로그인 2회 재시도(일시적 로그인폼 미로딩=SellerId 못찾음 대비)
+                logged = False
+                for _try in range(2):
+                    try:
+                        driver.delete_all_cookies()
+                        if _login(driver, acct.login_id, acct.password_enc):
+                            logged = True; break
+                    except Exception:
+                        pass
+                    _dismiss_alert(driver); time.sleep(2)
+                if not logged:
+                    if log_fn: log_fn(f'[간편:{acct.login_id}] 로그인 실패(2회) — 건너뜀')
+                    CrawlerLog.objects.create(platform='gmarket', level='error',
+                        message='간편 로그인 실패(2회)', account_id=acct.login_id)
                     continue
-                result = control_one(driver, acct.login_id, action, source, log_fn)
-                if result and not result.get('skipped'):
+                # '다른광고주' 알림이 중간에 뜨면 닫고 1회 재시도
+                try:
+                    result = control_one(driver, acct.login_id, action, source, log_fn)
+                except UnexpectedAlertPresentException:
+                    _dismiss_alert(driver)
+                    result = control_one(driver, acct.login_id, action, source, log_fn)
+                after_val = '-'
+                if result:
+                    # 스킵(이미 ON/OFF)도 진행사항에 보이도록 기록 — 변경없으면 after=before
+                    after_val = result.get('after_on')
+                    if after_val is None:
+                        after_val = result.get('before_on', 0)
                     Cpc2History.objects.create(
                         gmarket_id=acct.login_id, action=action,
                         cpc2_before=result.get('before_on', 0),
-                        cpc2_after=result.get('after_on', 0),
+                        cpc2_after=after_val,
                         source=source,
                     )
-                    GmarketCpcAdStatus.objects.update_or_create(
-                        gmarket_id=acct.login_id,
-                        defaults={'cpc2_on': result.get('after_on', 0), 'cpc2_off': result.get('after_off', 0)}
-                    )
+                    if not result.get('skipped'):
+                        GmarketCpcAdStatus.objects.update_or_create(
+                            gmarket_id=acct.login_id,
+                            defaults={'cpc2_on': result.get('after_on', 0), 'cpc2_off': result.get('after_off', 0)}
+                        )
                 results.append(result)
                 CrawlerLog.objects.create(platform='gmarket', level='success',
-                    message=f'간편광고 {action}: {result.get("before_on")}→{result.get("after_on")}',
+                    message=f'간편광고 {action}: {result.get("before_on") if result else "-"}→{after_val}',
                     account_id=acct.login_id)
+
+                # 일반광고(일반그룹)도 함께 — 같은 로그인 세션에서 이어서 처리
+                if include_cpc1:
+                    try:
+                        from crawlers.gmarket_cpc1_control_crawler import control_one as _cpc1_one
+                        r1 = _cpc1_one(driver, acct.login_id, action, source, log_fn)
+                        a1 = r1.get('after_on') if r1 else None
+                        if a1 is None:
+                            a1 = r1.get('before_on', 0) if r1 else 0
+                        # 진행사항에 구분되게 출처에 '/일반' 표기
+                        Cpc2History.objects.create(
+                            gmarket_id=acct.login_id, action=action,
+                            cpc2_before=r1.get('before_on', 0) if r1 else 0,
+                            cpc2_after=a1, source=f'{source}/일반')
+                        CrawlerLog.objects.create(platform='gmarket', level='success',
+                            message=f'일반광고 {action}: {r1.get("before_on") if r1 else "-"}→{a1}',
+                            account_id=acct.login_id)
+                    except Exception as e1:
+                        if log_fn: log_fn(f'[일반:{acct.login_id}] 실패: {e1}')
+                        CrawlerLog.objects.create(platform='gmarket', level='error',
+                            message=f'일반광고 실패: {e1}', account_id=acct.login_id)
             except Exception as e:
                 if log_fn: log_fn(f'[간편:{acct.login_id}] 실패: {e}')
-                CrawlerLog.objects.create(platform='gmarket', level='error', message=str(e), account_id=acct.login_id)
+                CrawlerLog.objects.create(platform='gmarket', level='error', message=str(e)[:200], account_id=acct.login_id)
+                try: _dismiss_alert(driver)   # 잔여 알림 정리 → 다음 계정 보호(연쇄실패 방지)
+                except Exception: pass
     finally:
         if driver:
             try: driver.quit()
             except: pass
         stop_display()
         guard.release_global_lock(platform='gmarket')
+        guard.clear_control_stop('gmarket')
     return results

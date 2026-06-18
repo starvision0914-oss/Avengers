@@ -41,28 +41,25 @@ class Command(BaseCommand):
         day_map = grouped(day)
         win_map = grouped(win)
 
-        rows = []
-        tot_c = tot_d = 0
-        for sid in set(day_map) | set(win_map):
-            cur = day_map.get(sid, 0)
-            d = win_map.get(sid, 0)
-            if cur == 0 and d == 0:
-                continue
-            tot_c += cur; tot_d += d
-            rows.append((cur, sid, d))
-        rows.sort(key=lambda r: -r[0])
+        # 전체금액(모든 계정 오늘 누적/직전1h 증가) 합계
+        tot_c = sum(day_map.values())
+        tot_d = sum(win_map.values())
+        # 표시는 직전 1시간 증가분이 있는 계정만
+        rows = [(day_map.get(sid, 0), sid, win_map.get(sid, 0))
+                for sid in set(day_map) | set(win_map) if win_map.get(sid, 0) > 0]
+        rows.sort(key=lambda r: -r[2])   # 증가분 큰 순
 
         def sd(v):
             return f'+{v:,}' if v > 0 else '+0'
 
         if not rows and not o.get('always'):
-            self.stdout.write('11번가 CPC 발생 없음 — 미발송')
+            self.stdout.write('11번가 CPC 증가 없음 — 미발송')
             return
 
-        head = f"📊 [11번가 시간별 CPC광고비] {now.strftime('%m/%d %H:%M')}  오늘누적(직전1h)"
-        total = f"합계  CPC {tot_c:,}({sd(tot_d)})  · {len(rows)}계정"
+        head = f"📊 [11번가 시간별 CPC광고비] {now.strftime('%m/%d %H:%M')}"
+        total = f"💰 오늘 전체 CPC 광고비 {tot_c:,}원({sd(tot_d)})  · 증가 {len(rows)}계정"
         lines = [f"{sid}  CPC {cur:,}({sd(d)})" for cur, sid, d in rows]
-        body = head + "\n" + total + ("\n" + "\n".join(lines) if lines else "\n(발생 없음)")
+        body = head + "\n" + total + ("\n" + "\n".join(lines) if lines else "")
 
         if not o.get('no_telegram'):
             try:

@@ -12,6 +12,7 @@ import { useTheme } from '../../hooks/useTheme';
 import ElevenAccountSummaryCards from './ElevenAccountSummaryCards';
 
 const PER_PAGE_OPTIONS = [50, 100, 200, 500, 1000];
+const MAX_SELECT = 3000;   // 한 번에 선택 가능한 최대 상품 수
 
 const STATUS_LABEL: Record<string, string> = {
   '101': '판매대기', '102': '판매중', '103': '판매중지', '104': '품절',
@@ -262,6 +263,63 @@ export default function ElevenMyProductsPage() {
     });
   };
   const [downloading, setDownloading] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  // 현재 필터(계정/상태/검색)에 맞는 검색결과 상위 MAX_SELECT개를 한 번에 선택 (페이지 넘김 불필요)
+  const selectUpToMax = async () => {
+    if (selecting) return;
+    setSelecting(true);
+    const tid = toast.loading(`검색결과 상위 ${fmt(MAX_SELECT)}개 불러오는 중...`);
+    try {
+      const resp = platform === 'gmarket'
+        ? await fetchGmarketMyProducts(1, MAX_SELECT, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder)
+        : await fetchElevenMyProducts(1, MAX_SELECT, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck);
+      const fetched = resp.items as ElevenMyProduct[];
+      setSelProd(() => {
+        const n = new Map<number, ElevenMyProduct>();
+        for (const p of fetched) {
+          if (n.size >= MAX_SELECT) break;
+          n.set(p.id, p);
+        }
+        return n;
+      });
+      const cnt = Math.min(fetched.length, MAX_SELECT);
+      toast.success(
+        `${fmt(cnt)}개 선택됨${resp.total > MAX_SELECT ? ` (전체 ${fmt(resp.total)}건 중 상위 ${fmt(MAX_SELECT)}개)` : ''}`,
+        { id: tid },
+      );
+    } catch {
+      toast.error('선택 실패', { id: tid });
+    } finally {
+      setSelecting(false);
+    }
+  };
+  // 선택한 상품만 CSV로 다운로드 (이미 로드된 객체로 클라이언트에서 생성 — 선택 그대로 반영)
+  const downloadSelectedExcel = () => {
+    const sel = Array.from(selProd.values()) as any[];
+    if (!sel.length) { toast.error('선택된 상품이 없습니다'); return; }
+    const header = ['셀러', '로그인ID', '상품번호', '판매자상품코드', '상품명', '판매가', '재고', '판매상태', '카테고리', '마켓가', '차이'];
+    const esc = (v: any) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [header.join(',')];
+    for (const p of sel) {
+      lines.push([
+        p.seller_name ?? '', p.login_id ?? '', p.product_no ?? '',
+        p.seller_product_code ?? '', p.product_name ?? '', p.sale_price ?? '',
+        p.stock_quantity ?? '', STATUS_LABEL[p.status_type] ?? p.status_type ?? '',
+        p.category_id ?? '', p.purchase_cost ?? '', p.cost_diff ?? '',
+      ].map(esc).join(','));
+    }
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `11번가_나의상품_선택_${sel.length}건_${new Date().toLocaleDateString('sv')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`선택 ${fmt(sel.length)}건 엑셀(CSV) 다운로드`);
+  };
   // 현재 필터(계정/상태/검색)에 맞는 '전체' 상품을 CSV로 다운로드 — 선택 불필요
   const downloadAllExcel = async () => {
     if (downloading) return;
@@ -449,8 +507,24 @@ export default function ElevenMyProductsPage() {
             <Package size={13} /> 등록상품 재크롤{recrawlSel.size > 0 ? ` (${recrawlSel.size})` : ''}
           </button>
 
+          <button
+            onClick={selectUpToMax}
+            disabled={selecting}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-40"
+            title={`현재 필터(계정/상태/검색)에 맞는 검색결과 상위 ${fmt(MAX_SELECT)}개를 한 번에 선택`}
+          >
+            {selecting ? '선택 중…' : `최대 ${fmt(MAX_SELECT)}개 선택`}
+          </button>
+
           {selProd.size > 0 && (
             <>
+              <button
+                onClick={downloadSelectedExcel}
+                title="선택한 상품만 CSV(엑셀)로 다운로드"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-sky-600 hover:bg-sky-700 text-white"
+              >
+                <Download size={13} /> 선택 엑셀 다운로드 ({selProd.size})
+              </button>
               <button
                 onClick={() => deleteSelectedProducts(false)}
                 title="선택 상품을 셀러오피스 셀렉터로 검증(실제 삭제 안 함)"

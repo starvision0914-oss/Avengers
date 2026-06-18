@@ -41,6 +41,7 @@
 - [전페이지 성능감사 2026-06](project_perf_audit_2026-06.md) — 전 페이지 로딩 감사·수정: dedup 353→4.2초, roas연 178→3.2초, dashboard 9→1.1초, sales 41→1.1초 등. 인덱스(cpc0034/sales0005)+N+1일괄화+캐시(LocMem). 패턴: 조인필터→id IN, OR월→범위, 계정루프→GROUP BY
 - [11번가 구글시트 업로드](project_11st_gsheet_upload.md) — 기간별보고서(일자별 27컬럼, 합계+날짜별, 누락날짜 빈행)→계정별 구글시트. crawl_11st_period_gsheet(1일=전월/그외=당월). 페이지 /cpc/focus/report/period. ⚠️상품별/키워드 올리면 오염+셀한도초과
 - [덮어쓰기 전 양식검증](feedback_verify_before_overwrite.md) — 실데이터(시트) 덮어쓰기 전 원본 양식 먼저 확인+1계정 소량 테스트. 추측남발 말고 실제 URL/네트워크 캡처
+- [11번가 광고그룹 전략설정](project_11st_ad_strategy_schedule.md) — /ad-settings 신탭. 계정→캠페인(실시간조회 필수, DB0건)→시간·요일 노출스케줄 일괄적용. DOM 미검증=드라이런 먼저
 - [지마켓 키워드 단일실행만](project_gmarket_keyword_single_only.md) — 키워드 백필 동시2개=캡차확산(풀로그인빈도↑가 트리거)+stale25%누락+속도이득0. 단일+쿠키우선+계정간90초. Tier A 5.7초/상품. 락분리(gmarket_b) 봉인(2026-06-14 실증)
 - [11번가 장시간 인증 배치분할](project_11st_tmxkzhfldk8_crash.md) — verify_11st_logins 전체 연속실행이 ~26계정 후 SIGTERM(누적 크롬/리소스). tmxkzhfldk8은 단독선 정상. 배치 나눠 돌리고 죽으면 미완료분 --only 재개
 - [11번가 구매원가 출처](project_eleven_purchase_cost.md) — 구매원가=오너클랜 ownerclan_price(공급가), market_price(권장판매가) 아님. 가짜역마진 15169→125 수정(2026-06-15). 확인필요(역마진) 필터+배지. 잔여=단위불일치·오염7건

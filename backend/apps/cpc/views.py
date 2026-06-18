@@ -984,9 +984,88 @@ class CpcAdStatusViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketCpcAdStatus.objects.all()
     serializer_class = CpcAdStatusSerializer
 
+def _sched_dow_csv(weekdays):
+    """모델 요일(1=월..7=일) → crontab 요일(0=일,1=월..6=토). 빈값=매일('*')."""
+    if not weekdays:
+        return '*'
+    cron = sorted({(0 if int(w) == 7 else int(w)) for w in weekdays})
+    return ','.join(str(x) for x in cron)
+
+
+def _write_schedule_cron(tag, items):
+    """tag가 붙은 기존 크론 라인을 모두 지우고 items로 교체.
+    items: [(TimeField, dow_csv, script_path), ...] (time None이면 스킵).
+    크론 수정 전 백업(메모리: sed # 사고 방지)."""
+    import subprocess, os
+    from datetime import datetime
+    try:
+        res = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
+        lines = res.stdout.split('\n') if res.stdout else []
+    except Exception:
+        lines = []
+    # 백업
+    try:
+        bdir = os.path.expanduser('~/cron_backups'); os.makedirs(bdir, exist_ok=True)
+        with open(os.path.join(bdir, f'crontab_{datetime.now():%Y%m%d_%H%M%S}.txt'), 'w') as f:
+            f.write('\n'.join(lines))
+    except Exception:
+        pass
+    # 해당 tag 라인 제거(활성 라인만; 주석 #로 시작하는 건 유지)
+    lines = [l for l in lines if not (tag in l and not l.lstrip().startswith('#'))]
+    for t, dow, script in items:
+        if t is None:
+            continue
+        lines.append(f'{t.minute} {t.hour} * * {dow} {script} # {tag}')
+    cron_text = '\n'.join([l for l in lines if l.strip()]) + '\n'
+    subprocess.run(['crontab', '-'], input=cron_text, text=True)
+
+
+def _regenerate_ad_crons():
+    """간편(CPC2)+AI 스케줄을 읽어 광고 ON/OFF 크론을 통째로 재생성.
+    AI와 간편의 (시각·요일)이 동일하면 → 통합 1회 로그인 크론(cron_ad_combined),
+    다르면 → 각자 별도 크론. 한 시각에 둘이 겹쳐 한쪽이 스킵되는 문제·이중 로그인 방지.
+    태그 'AD_SCHEDULE'(구 CPC2_AD_SCHEDULE/AI_AD_SCHEDULE도 substring 매칭으로 정리됨)."""
+    from apps.cpc.models import Cpc2Schedule, AiSchedule
+    base = '/home/rejoice888/Avengers/backend/scripts'
+    cpc2 = Cpc2Schedule.objects.first()
+    ai = AiSchedule.objects.filter(platform='gmarket').first()
+    cpc2_on = bool(cpc2 and cpc2.selected_accounts)
+    ai_on = bool(ai and ai.selected_accounts)
+
+    def same(t1, t2, d1, d2):
+        return t1 and t2 and t1 == t2 and sorted(d1 or []) == sorted(d2 or [])
+
+    items = []  # (TimeField, dow_csv, script)
+    # --- ON ---
+    if cpc2_on and ai_on and same(cpc2.on_time, ai.on_time, cpc2.weekdays, ai.weekdays):
+        items.append((cpc2.on_time, _sched_dow_csv(cpc2.weekdays), f'{base}/cron_ad_combined_on.sh'))
+    else:
+        if cpc2_on:
+            items.append((cpc2.on_time, _sched_dow_csv(cpc2.weekdays), f'{base}/cron_cpc2_on.sh'))
+        if ai_on:
+            items.append((ai.on_time, _sched_dow_csv(ai.weekdays), f'{base}/cron_ai_on.sh'))
+    # --- OFF ---
+    if cpc2_on and ai_on and same(cpc2.off_time, ai.off_time, cpc2.off_weekdays, ai.off_weekdays):
+        items.append((cpc2.off_time, _sched_dow_csv(cpc2.off_weekdays), f'{base}/cron_ad_combined_off.sh'))
+    else:
+        if cpc2_on:
+            items.append((cpc2.off_time, _sched_dow_csv(cpc2.off_weekdays), f'{base}/cron_cpc2_off.sh'))
+        if ai_on:
+            items.append((ai.off_time, _sched_dow_csv(ai.off_weekdays), f'{base}/cron_ai_off.sh'))
+
+    _write_schedule_cron('AD_SCHEDULE', items)
+
+
 class Cpc2ScheduleViewSet(viewsets.ModelViewSet):
     queryset = Cpc2Schedule.objects.all()
     serializer_class = Cpc2ScheduleSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(); _regenerate_ad_crons()
+
+    def perform_update(self, serializer):
+        serializer.save(); _regenerate_ad_crons()
+
 
 class Cpc2HistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Cpc2History.objects.all()[:100]
@@ -997,39 +1076,10 @@ class AiScheduleViewSet(viewsets.ModelViewSet):
     serializer_class = AiScheduleSerializer
 
     def perform_create(self, serializer):
-        instance = serializer.save()
-        self._update_cron(instance)
+        serializer.save(); _regenerate_ad_crons()
 
     def perform_update(self, serializer):
-        instance = serializer.save()
-        self._update_cron(instance)
-
-    def _update_cron(self, schedule):
-        """AI 스케줄 저장 시 crontab 자동 업데이트"""
-        import subprocess
-        tag = 'AI_AD_SCHEDULE'
-        script = '/home/rejoice888/Avengers/backend/scripts/cron_ai_schedule.sh'
-
-        # 현재 crontab 읽기
-        try:
-            result = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
-            lines = result.stdout.strip().split('\n') if result.stdout.strip() else []
-        except Exception:
-            lines = []
-
-        # 기존 AI 스케줄 라인 제거
-        lines = [l for l in lines if tag not in l]
-
-        # off_on_time이 있으면 새 라인 추가
-        t = schedule.off_on_time
-        if t and schedule.selected_accounts:
-            mm, hh = t.minute, t.hour
-            new_line = f'{mm} {hh} * * 1-5 {script} # {tag}'
-            lines.append(new_line)
-
-        # crontab 업데이트
-        cron_text = '\n'.join(lines) + '\n'
-        subprocess.run(['crontab', '-'], input=cron_text, text=True)
+        serializer.save(); _regenerate_ad_crons()
 
 class TelegramConfigViewSet(viewsets.ModelViewSet):
     queryset = TelegramConfig.objects.all()
@@ -1062,17 +1112,74 @@ class TelegramSendView(views.APIView):
                 pass
         return Response({'sent': sent})
 
+class GmarketControlStopView(views.APIView):
+    """지마켓 광고제어(간편/AI/통합) 강제 중지 — 중지플래그 설정.
+    실행 루프가 다음 계정 전에 확인해 중단(현재 계정은 최대 40초 내 마무리). 동시 11번가 크롤엔 영향 없음."""
+    def post(self, request):
+        from apps.cpc import eleven_block_guard as guard
+        guard.request_control_stop('gmarket')
+        return Response({'status': 'stopping',
+                         'message': '강제중지 요청 — 현재 계정 처리(최대 40초) 후 중단됩니다.'})
+
+
+class GmarketControlStatusView(views.APIView):
+    """지마켓 광고제어 예약·실행 현황 — 상단 배너용(중복/겹침 확인)."""
+    def get(self, request):
+        import os, subprocess
+        from apps.cpc.models import Cpc2Schedule, AiSchedule
+        WD = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7: '일'}
+
+        def days(w):
+            return ''.join(WD[int(x)] for x in (w or [])) if w else '매일'
+
+        # 실행/락 상태
+        lockf = '/tmp/avengers_crawl_chrome_gmarket.lock'
+        running = None
+        if os.path.exists(lockf):
+            try:
+                raw = (open(lockf).read() or '').strip().split('|')
+                pid = int(raw[0])
+                os.kill(pid, 0)   # 살아있나
+                running = {'name': raw[1] if len(raw) > 1 else '실행중',
+                           'since': (raw[2][11:19] if len(raw) > 2 and len(raw[2]) >= 19 else '')}
+            except Exception:
+                running = None
+        # 대기/실행 중인 제어 프로세스 수
+        try:
+            r = subprocess.run(['pgrep', '-fc',
+                'crawl_gmarket_cpc2|run_ai_schedule|gmarket_ad_combined|crawl_gmarket_ad_combined'],
+                capture_output=True, text=True)
+            proc_count = int((r.stdout or '0').strip() or 0)
+        except Exception:
+            proc_count = 0
+
+        c = Cpc2Schedule.objects.first()
+        a = AiSchedule.objects.filter(platform='gmarket').first()
+        cpc2 = None
+        if c:
+            cpc2 = {'on_time': str(c.on_time or '')[:5], 'off_time': str(c.off_time or '')[:5],
+                    'on_days': days(c.weekdays), 'off_days': days(c.off_weekdays),
+                    'accounts': len(c.selected_accounts or []), 'include_cpc1': c.include_cpc1}
+        ai = None
+        if a:
+            ai = {'on_time': str(a.on_time or '')[:5], 'off_time': str(a.off_time or '')[:5],
+                  'on_days': days(a.weekdays), 'off_days': days(a.off_weekdays),
+                  'accounts': len(a.selected_accounts or [])}
+        return Response({'running': running, 'proc_count': proc_count, 'cpc2': cpc2, 'ai': ai})
+
+
 class Cpc2ControlView(views.APIView):
     def post(self, request):
         import threading as th
         action = request.data.get('action', 'on')
         accounts = request.data.get('accounts')
         source = request.data.get('source', 'manual')
+        include_cpc1 = bool(request.data.get('include_cpc1', False))
         def run():
             from crawlers.gmarket_cpc2_control_crawler import run_control
-            run_control(action, source, account_filter=accounts)
+            run_control(action, source, account_filter=accounts, include_cpc1=include_cpc1)
         th.Thread(target=run, daemon=True).start()
-        return Response({'status': 'started', 'action': action})
+        return Response({'status': 'started', 'action': action, 'include_cpc1': include_cpc1})
 
 class AiControlView(views.APIView):
     def post(self, request):
@@ -1085,6 +1192,165 @@ class AiControlView(views.APIView):
             run_control(action, source, account_filter=accounts)
         th.Thread(target=run, daemon=True).start()
         return Response({'status': 'started', 'action': action})
+
+
+class St11AdStrategyCampaignsView(views.APIView):
+    """캠페인 이름 목록.
+    GET ?eid= : DB(St11AdofficeCampaign)에 저장된 이름 즉시 반환(최대100).
+    POST {eid}: 광고센터에서 실시간 조회(백그라운드) 시작 → run_id 반환, 로그(status=CAMP) 폴링."""
+    def get(self, request):
+        from apps.cpc.models import St11AdofficeCampaign
+        eid = request.query_params.get('eid', '')
+        qs = St11AdofficeCampaign.objects.all()
+        if eid:
+            qs = qs.filter(eleven_id=eid)
+        names = [n for n in qs.values_list('campaign_name', flat=True).distinct()[:100] if n]
+        return Response({'eid': eid, 'campaigns': names})
+
+    def post(self, request):
+        import threading as th, time as _t
+        eid = request.data.get('eid', '')
+        if not eid:
+            return Response({'error': '계정(eid)을 지정하세요.'}, status=400)
+        run_id = _t.strftime('%Y%m%d%H%M%S')
+
+        def run():
+            from crawlers.eleven_ad_strategy import list_campaigns
+            list_campaigns(eid, run_id=run_id)
+        th.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'run_id': run_id})
+
+
+class St11AdStrategyAccountsView(views.APIView):
+    """11번가 계정 목록을 '1등급>2>3>4>광고이력>나머지' 순으로 정렬해 반환(계정 선택 표시순)."""
+    def get(self, request):
+        from apps.cpc.models import CrawlerAccount, ElevenSellerGrade, St11ProductDaily
+        from crawlers.eleven_ad_strategy import order_accounts
+        eids = list(CrawlerAccount.objects.filter(platform='11st').values_list('login_id', flat=True))
+        ordered = order_accounts(eids)
+        grade_map = {}
+        for r in ElevenSellerGrade.objects.order_by('eleven_id', '-collected_at').values('eleven_id', 'grade'):
+            grade_map.setdefault(r['eleven_id'], r['grade'])
+        adhist = set(St11ProductDaily.objects.values_list('eleven_id', flat=True).distinct())
+        def bucket(e):
+            g = grade_map.get(e)
+            if g in (1, 2, 3, 4): return f'{g}등급'
+            return '광고이력' if e in adhist else '나머지'
+        return Response({'accounts': [
+            {'login_id': e, 'grade': grade_map.get(e), 'bucket': bucket(e)} for e in ordered]})
+
+
+class St11AdStrategyControlView(views.APIView):
+    """11번가 광고그룹 노출 스케줄 전략 적용 실행(백그라운드).
+    body: accounts[], campaigns[], on_start, on_end, weekdays[], execute(bool)"""
+    def post(self, request):
+        import threading as th, time as _t
+        d = request.data
+        accounts = d.get('accounts') or []
+        campaigns = d.get('campaigns') or []
+        on_start = int(d.get('on_start', 8))
+        on_end = int(d.get('on_end', 16))
+        weekdays = [int(w) for w in (d.get('weekdays') or [1, 2, 3, 4, 5])]
+        execute = bool(d.get('execute', False))
+        if not accounts or not campaigns:
+            return Response({'error': '계정과 캠페인을 선택하세요.'}, status=400)
+        run_id = _t.strftime('%Y%m%d%H%M%S')
+
+        def run():
+            from crawlers.eleven_ad_strategy import run_strategy
+            run_strategy(accounts, campaigns, on_start=on_start, on_end=on_end,
+                         weekdays=weekdays, execute=execute, run_id=run_id)
+        th.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'run_id': run_id,
+                         'mode': '실제적용' if execute else '드라이런'})
+
+
+class St11AdStrategyScheduleView(views.APIView):
+    """11번가 전략설정 저장(예약). GET=조회, PUT/POST=저장(싱글톤 id=1).
+    body: name, accounts[], campaigns[], on_start, on_end, weekdays[], enabled"""
+    def _serialize(self, s):
+        return {
+            'id': s.id, 'name': s.name, 'accounts': s.accounts or [],
+            'campaigns': s.campaigns or [], 'on_start': s.on_start, 'on_end': s.on_end,
+            'weekdays': s.weekdays or [], 'enabled': s.enabled,
+            'last_applied_at': s.last_applied_at.strftime('%Y-%m-%d %H:%M') if s.last_applied_at else None,
+            'updated_at': s.updated_at.strftime('%Y-%m-%d %H:%M'),
+        }
+
+    def get(self, request):
+        from apps.cpc.models import St11AdStrategySchedule
+        s = St11AdStrategySchedule.objects.order_by('id').first()
+        return Response({'schedule': self._serialize(s) if s else None})
+
+    def post(self, request):
+        return self.put(request)
+
+    def put(self, request):
+        from apps.cpc.models import St11AdStrategySchedule
+        d = request.data
+        s = St11AdStrategySchedule.objects.order_by('id').first() or St11AdStrategySchedule()
+        s.name = d.get('name', s.name or '기본 전략')
+        s.accounts = d.get('accounts', s.accounts) or []
+        s.campaigns = d.get('campaigns', s.campaigns) or []
+        s.on_start = int(d.get('on_start', s.on_start))
+        s.on_end = int(d.get('on_end', s.on_end))
+        s.weekdays = [int(w) for w in (d.get('weekdays', s.weekdays) or [])]
+        if 'enabled' in d:
+            s.enabled = bool(d.get('enabled'))
+        s.save()
+        return Response({'schedule': self._serialize(s)})
+
+
+class St11AdStrategyRunsView(views.APIView):
+    """전략 실행 내역 목록(최근 20건) — 미리보기/실제적용 진행상황 표시용."""
+    def get(self, request):
+        from apps.cpc.models import St11AdStrategyLog
+        run_ids = list(St11AdStrategyLog.objects.values_list('run_id', flat=True)
+                       .distinct().order_by('-run_id')[:20])
+        out = []
+        for rid in run_ids:
+            rows = list(St11AdStrategyLog.objects.filter(run_id=rid).order_by('id'))
+            if not rows:
+                continue
+            accts = sorted({r.eleven_id for r in rows if r.eleven_id})
+            camps = sorted({r.campaign_name for r in rows if r.campaign_name})
+            applied = sum(1 for r in rows if r.status == 'APPLIED')
+            skip = sum(1 for r in rows if r.status == 'SKIP')
+            err = sum(1 for r in rows if r.status == 'ERROR')
+            mode = '드라이런'
+            for r in rows:
+                if r.status == 'START':
+                    mode = '실제적용' if '실제적용' in r.detail else '드라이런'
+                    break
+            running = rows[-1].status != 'DONE'
+            out.append({
+                'run_id': rid, 'accounts': accts, 'campaigns': camps,
+                'mode': mode, 'applied': applied, 'skip': skip, 'error': err,
+                'running': running,
+                'started': rows[0].created_at.strftime('%m-%d %H:%M:%S'),
+                'last': rows[-1].created_at.strftime('%H:%M:%S'),
+            })
+        return Response({'runs': out})
+
+
+class St11AdStrategyLogView(views.APIView):
+    """전략 실행 로그 조회(폴링용). run_id 주면 그 실행만, 없으면 최근 200줄.
+    running = 가장 최근 START 이후 DONE 이 아직 없으면 True."""
+    def get(self, request):
+        from apps.cpc.models import St11AdStrategyLog
+        run_id = request.query_params.get('run_id', '')
+        qs = St11AdStrategyLog.objects.all()
+        if run_id:
+            qs = qs.filter(run_id=run_id)
+        rows = list(qs.order_by('-id')[:200])
+        rows.reverse()
+        data = [{'id': r.id, 'run_id': r.run_id, 'eid': r.eleven_id,
+                 'campaign': r.campaign_name, 'group': r.group_name,
+                 'status': r.status, 'detail': r.detail,
+                 'at': r.created_at.strftime('%H:%M:%S')} for r in rows]
+        running = bool(rows) and rows[-1].status != 'DONE'
+        return Response({'logs': data, 'running': running})
+
 
 class GmarketAiViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketAiAdSummary.objects.all()
@@ -3142,7 +3408,9 @@ class GmarketMyAccountsView(views.APIView):
         from django.db.models import Count
         from apps.cpc.models import CrawlerAccount, GmarketMyProduct
         cnt = {r['account']: r['n'] for r in GmarketMyProduct.objects.values('account').annotate(n=Count('id'))}
-        accts = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).order_by('login_id')
+        accts = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).order_by('display_order', 'login_id')
+        # 공유ESM 서브 제외 — 마스터(대표)만. 간편광고는 마스터 ESM 단위로 제어됨(서브는 대표에 묶임).
+        accts = [a for a in accts if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
         data = [{'account_id': a.id, 'login_id': a.login_id, 'seller_name': a.seller_name,
                  'product_count': cnt.get(a.id, 0)} for a in accts]
         return Response({'accounts': data})
@@ -3310,12 +3578,13 @@ class ElevenGradeLatestView(views.APIView):
 class AllMallProfitView(views.APIView):
     """전체 쇼핑몰 순수익 분석 — 플랫폼별 매출/원가/순익/광고비/순수익.
     ?month=YYYY-MM (미지정 시 이번 달). 순익=매출-원가(SalesRecord.net_profit),
-    순수익=순익-광고비. 광고비: gmarket/auction=GmarketCostHistory(거래내역),
-    11st=St11ProductDaily.cost(adoffice), 그 외 플랫폼은 광고비 데이터 없음(0)."""
+    순수익=순익-광고비. 광고비(전계정 통일, 거래내역 기준): gmarket/auction=GmarketCostHistory,
+    11st=ElevenCostHistory(CPC 차감), 그 외 플랫폼은 광고비 데이터 없음(0)."""
     def get(self, request):
-        from datetime import date as dt_date
+        from datetime import date as dt_date, datetime as dt_dt, timedelta as dt_td
+        import pytz as _pytz
         from apps.sales.models import SalesRecord
-        from apps.cpc.models import GmarketCostHistory, St11ProductDaily
+        from apps.cpc.models import GmarketCostHistory, ElevenCostHistory
 
         mp = request.query_params.get('month')  # 'YYYY-MM'
         today = dt_date.today()
@@ -3346,8 +3615,13 @@ class AllMallProfitView(views.APIView):
                   .values('market').annotate(a=Sum('amount'))):
             mk = r['market'] or 'gmarket'
             ad[mk] = ad.get(mk, 0) + abs(r['a'] or 0)
-        st11_ad = St11ProductDaily.objects.filter(
-            stat_date__gte=ms, stat_date__lte=me).aggregate(s=Sum('cost'))['s'] or 0
+        # 11번가도 거래내역(ElevenCostHistory) 기준으로 통일 — 전계정 CPC 차감 합계(지마켓과 동일 방식).
+        _kst = _pytz.timezone('Asia/Seoul')
+        _s = _kst.localize(dt_dt.combine(ms, dt_dt.min.time()))
+        _e = _kst.localize(dt_dt.combine(me, dt_dt.min.time()) + dt_td(days=1))
+        st11_ad = abs(ElevenCostHistory.objects.filter(
+            transaction_datetime__gte=_s, transaction_datetime__lt=_e,
+            transaction_type='CPC', amount__lt=0).aggregate(s=Sum('amount'))['s'] or 0)
         ad_map = {'gmarket': ad.get('gmarket', 0), 'auction': ad.get('auction', 0), '11st': st11_ad}
 
         # 3) 플랫폼 행 구성
@@ -3591,7 +3865,8 @@ def _gmarket_realsales(d0, d1, product_nos):
     # = 최신 크롤에서 누락 = 더이상 판매목록에 없음(판매불가/삭제) → 비고를 '판매불가'로 표시.
     acct_latest = {r['account_id']: r['mx'] for r in (
         GmarketMyProduct.objects.values('account_id').annotate(mx=_Max('synced_at')))}
-    STALE = _td(hours=12)
+    # 3일+ 연속 누락만 판매불가로 판정(12h/1일은 크롤 변동·부분실패로 멀쩡한 상품을 오판 → 검증결과 3일이 안전).
+    STALE = _td(days=3)
     code_by_pno = {}
     status_by_pno = {}
     for p in (GmarketMyProduct.objects.filter(product_no__in=pnos)
@@ -3910,6 +4185,19 @@ def _gmkt_product_rows(request):
     all_pno = {g['product_no'] for g in grp_list}
     rd0, rd1 = _gmkt_realsales_window(base)
     code_by_pno, real_by_pno, status_by_pno, realorders_by_pno = _gmarket_realsales(rd0, rd1, all_pno)
+    # 누적 판매수량(2025-01-01 ~ 현재) — 판매자코드 전역매칭(지마켓+옥션). 평균단가 왼쪽 표기용.
+    from datetime import date as _cum_date
+    cum_qty_by_pno = {}
+    _cum_codes = {c for c in code_by_pno.values() if c}
+    if _cum_codes:
+        from apps.sales.models import SalesRecord as _SR
+        _cum_by_code = {}
+        for _r in (_SR.objects.filter(platform__in=['gmarket', 'auction'],
+                                      order_date__gte=_cum_date(2025, 1, 1),
+                                      product_code__in=_cum_codes)
+                   .values('product_code').annotate(q=Sum('quantity'))):
+            _cum_by_code[_r['product_code']] = _r['q'] or 0
+        cum_qty_by_pno = {pno: _cum_by_code.get(code, 0) for pno, code in code_by_pno.items()}
     # 상태 신선도 — '판매중' 스냅샷이 오래됐으면(STALE_DAYS+) 실제 판매중지일 수 있어 '확인필요' 경고.
     from django.utils import timezone as _tz
     STALE_DAYS = 2
@@ -3970,6 +4258,7 @@ def _gmkt_product_rows(request):
             'product_no': pno, 'seller_code': code_by_pno.get(pno, ''),
             'site': a.get('site', ''),
             'cost': cost, 'clicks': g['clicks'] or 0,
+            'cum_sold_qty': cum_qty_by_pno.get(pno, 0),  # 누적 판매수량(2025~현재)
             'avg_click_cost': round(cost / (g['clicks'] or 1)) if (g['clicks'] or 0) else 0,  # 평균단가(광고비/클릭)
             'ad_orders': g['orders'] or 0, 'conv_amount': conv,   # 광고센터 구매수/구매금액
             'real_sales': real_by_pno.get(pno, 0), 'real_orders': realorders_by_pno.get(pno, 0),  # 매출자료(참고)

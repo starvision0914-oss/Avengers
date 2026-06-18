@@ -251,6 +251,41 @@ class St11AdofficeCampaign(models.Model):
         ]
 
 
+class St11AdStrategyLog(models.Model):
+    """11번가 광고 그룹 전략설정(노출 스케줄) 실행 로그.
+    run_id = 한 번의 '전략 적용 실행' 단위. status: START/INFO/APPLIED/SKIP/ERROR/DONE."""
+    run_id = models.CharField(max_length=40, db_index=True)
+    eleven_id = models.CharField(max_length=50, blank=True)
+    campaign_name = models.CharField(max_length=200, blank=True)
+    group_name = models.CharField(max_length=200, blank=True)
+    status = models.CharField(max_length=20)
+    detail = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'st11_ad_strategy_log'
+        ordering = ['id']
+        indexes = [models.Index(fields=['run_id']), models.Index(fields=['created_at'])]
+
+
+class St11AdStrategySchedule(models.Model):
+    """11번가 광고그룹 노출 스케줄 전략 저장(예약).
+    저장해두면 폼이 기억하고, cron이 enabled일 때 매일(선택 요일) 자동 재적용한다.
+    노출 스케줄은 11번가 측에 주간 단위로 박히지만, 계정/캠페인이 늘거나 초기화될 수 있어 주기 재적용으로 안전망."""
+    name = models.CharField(max_length=100, default='기본 전략', blank=True)
+    accounts = models.JSONField(default=list, blank=True)      # 적용 대상 11번가 login_id 목록
+    campaigns = models.JSONField(default=list, blank=True)     # 적용 대상 캠페인명 목록
+    on_start = models.IntegerField(default=8)                  # ON 시작 시(0~23)
+    on_end = models.IntegerField(default=16)                   # ON 종료 시(0~23)
+    weekdays = models.JSONField(default=list, blank=True)      # ON 요일 [1=월..7=일], 빈값=매일
+    enabled = models.BooleanField(default=False)               # cron 자동 재적용 ON/OFF
+    last_applied_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'st11_ad_strategy_schedule'
+        ordering = ['-updated_at']
+
+
 class St11ProductRoas(models.Model):
     """11번가 adoffice 다운로드보고서 기반 상품코드별 광고 ROAS (캠페인>상품>키워드 집계)."""
     eleven_id = models.CharField(max_length=50)
@@ -373,6 +408,9 @@ class Cpc2Schedule(models.Model):
     off_time = models.TimeField(null=True, blank=True)
     skip_holidays = models.BooleanField(default=True)
     selected_accounts = models.JSONField(default=list, blank=True)
+    weekdays = models.JSONField(default=list, blank=True)        # ON 요일 [1=월 … 7=일], 빈값=매일
+    off_weekdays = models.JSONField(default=list, blank=True)    # OFF 요일 [1=월 … 7=일], 빈값=매일
+    include_cpc1 = models.BooleanField(default=False)            # True면 일반광고(일반그룹)도 함께 ON/OFF
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         db_table = 'gmarket_cpc2_schedule'
@@ -422,6 +460,8 @@ class AiSchedule(models.Model):
     selected_accounts = models.JSONField(default=list, blank=True)
     enabled_holidays = models.JSONField(default=list, blank=True)
     custom_holidays = models.JSONField(default=list, blank=True)
+    weekdays = models.JSONField(default=list, blank=True)        # ON 요일 [1=월 … 7=일], 빈값=매일
+    off_weekdays = models.JSONField(default=list, blank=True)    # OFF 요일 [1=월 … 7=일], 빈값=매일
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         db_table = 'ai_schedule'

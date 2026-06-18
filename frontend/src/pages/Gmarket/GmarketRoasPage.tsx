@@ -254,16 +254,17 @@ export default function GmarketRoasPage() {
         (x.k.conv_rate ?? 0) + '%', (x.k.roas ?? 0) + '%']);
       if (!body.length) { alert('키워드 없음 (수집된 ROAS≥기준 키워드가 없습니다)'); return; }
     } else {
-      head = ['계정', '상품번호', '판매자코드', '평균단가', '광고비', '키워드', '클릭', '구매수(광고센터)', '구매금액(광고센터)', 'ROAS(광고센터)', '실구매건수(참고)', '실매출(참고)', '실ROAS(참고)', '비고'];
+      head = ['계정', '상품번호', '판매자코드', '누적판매(25~)', '평균단가', '광고비', '키워드', '클릭', '구매수(광고센터)', '구매금액(광고센터)', 'ROAS(광고센터)', '실구매건수(참고)', '실매출(참고)', '실ROAS(참고)', '비고'];
       // 키워드별로 한 줄씩 펼침 — 한 상품에 키워드 N개면 N행, 상품정보(번호·코드·메트릭)는 각 행 반복.
       // 같은 상품 내 동일 키워드는 1개만(중복 제거). 키워드 없는 상품은 키워드 빈칸 1행.
       body = rows.flatMap((r: any) => {
         const avg = r.clicks ? Math.round(r.cost / r.clicks) : 0;
+        const cum = r.cum_sold_qty || 0;
         const tail = [r.clicks, r.ad_orders, r.conv_amount, r.roas + '%', r.real_orders, r.real_sales, (r.real_roas || 0) + '%', r.status];
         const seen = new Set<string>();
         const kws = (r.keywords || []).filter((k: any) => k.keyword && !seen.has(k.keyword) && seen.add(k.keyword));
-        if (!kws.length) return [[r.login_id, r.product_no, r.seller_code, avg, r.cost, '', ...tail]];
-        return kws.map((k: any) => [r.login_id, r.product_no, r.seller_code, avg, r.cost, k.keyword, ...tail]);
+        if (!kws.length) return [[r.login_id, r.product_no, r.seller_code, cum, avg, r.cost, '', ...tail]];
+        return kws.map((k: any) => [r.login_id, r.product_no, r.seller_code, cum, avg, r.cost, k.keyword, ...tail]);
       });
     }
     const csv = '﻿' + [head, ...body].map(a => a.map((c: any) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -804,6 +805,7 @@ export default function GmarketRoasPage() {
                     <th onClick={() => lossSortClick('login_id')} className="px-2 py-1.5 text-left cursor-pointer hover:text-[#1d4ed8]">계정{lossArrow('login_id')}</th>
                     <th onClick={() => lossSortClick('product_no')} className="px-2 py-1.5 text-left cursor-pointer hover:text-[#1d4ed8]">상품번호{lossArrow('product_no')}</th>
                     <th onClick={() => lossSortClick('seller_code')} className="px-2 py-1.5 text-left cursor-pointer hover:text-[#1d4ed8]">판매자코드{lossArrow('seller_code')}</th>
+                    <th onClick={() => lossSortClick('cum_sold_qty')} className="px-2 py-1.5 text-right cursor-pointer hover:text-[#1d4ed8]" title="2025-01-01 ~ 현재 누적 판매수량(판매자코드 전역매칭, 지마켓+옥션)">누적판매<span className="text-[10px] text-[#999] font-normal">(25~)</span>{lossArrow('cum_sold_qty')}</th>
                     <th onClick={() => lossSortClick('avg_click_cost')} className="px-2 py-1.5 text-right cursor-pointer hover:text-[#1d4ed8]" title="평균단가=광고비/클릭">평균단가{lossArrow('avg_click_cost')}</th>
                     <th onClick={() => lossSortClick('cost')} className="px-2 py-1.5 text-right cursor-pointer hover:text-[#1d4ed8]">광고비{lossArrow('cost')}</th>
                     <th onClick={() => lossSortClick('kw_count')} className="px-2 py-1.5 text-left cursor-pointer hover:text-[#1d4ed8]" title="수집된 CPC 키워드(광고비순) — 클릭시 키워드 수로 정렬">키워드{lossArrow('kw_count')}</th>
@@ -828,6 +830,7 @@ export default function GmarketRoasPage() {
                         <td className={`px-2 py-1.5 text-[#555] ${cont ? 'opacity-40' : ''}`}>{r.login_id}</td>
                         <td className={`px-2 py-1.5 font-mono ${cont ? 'opacity-40' : ''}`}><a href={gmktUrl(r)} target="_blank" rel="noreferrer" className="text-[#1d4ed8] hover:underline">{r.product_no}</a></td>
                         <td className={`px-2 py-1.5 font-mono text-[#666] ${cont ? 'opacity-40' : ''}`}>{r.seller_code || '-'}</td>
+                        <td className={`px-2 py-1.5 text-right font-semibold ${(r.cum_sold_qty || 0) > 0 ? 'text-[#1d7a46]' : 'text-[#bbb]'} ${cont ? 'opacity-40' : ''}`}>{(r.cum_sold_qty || 0).toLocaleString()}</td>
                         <td className={`px-2 py-1.5 text-right text-[#555] ${cont ? 'opacity-40' : ''}`}>{formatKRW(r.clicks ? Math.round(r.cost / r.clicks) : 0)}</td>
                         <td className={`px-2 py-1.5 text-right ${cont ? 'opacity-40' : ''}`}>{formatKRW(r.cost)}</td>
                         <td className="px-2 py-1.5 text-left max-w-[280px]">

@@ -11,7 +11,7 @@ START=$(date '+%T')
 echo "$(date '+%F %T') 11번가 시간별 광고비 수집 시작(집중관리 45)" >> "$LOG"
 /usr/bin/python3 manage.py crawl_11st_cost --force --focused >> "$LOG" 2>&1
 echo "$(date '+%F %T') CPC 증가분 텔레그램" >> "$LOG"
-/usr/bin/python3 manage.py notify_11st_adcost_hourly >> "$LOG" 2>&1
+/usr/bin/python3 manage.py notify_11st_adcost_hourly --always >> "$LOG" 2>&1
 echo "$(date '+%F %T') 전계정 크롤 종료 알림" >> "$LOG"
 /usr/bin/python3 manage.py notify_crawl_done --platform 11st --started "$START" >> "$LOG" 2>&1
 echo "$(date '+%F %T') 완료" >> "$LOG"
