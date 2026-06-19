@@ -1,15 +1,30 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { getOverview, getMallProfit, type OverviewResponse, type MallProfitResponse } from '../../api/overview';
+import { getOverview, getMallProfit, type OverviewResponse, type MallProfitResponse, type OverviewParams } from '../../api/overview';
 import { formatKRW } from '../../utils/format';
 
 function todayKST(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
 }
+function ydayKST(): string {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString('en-CA');
+}
 function curMonth(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+
+type PeriodKey = 'yesterday' | '7d' | 'month' | 'mtd' | 'today' | 'custom';
+const PERIODS: { key: PeriodKey; label: string }[] = [
+  { key: 'yesterday', label: '어제' },
+  { key: '7d', label: '최근 7일' },
+  { key: 'month', label: '최근 30일' },
+  { key: 'mtd', label: '이번 달' },
+  { key: 'today', label: '오늘(미완성)' },
+  { key: 'custom', label: '기간 직접' },
+];
 
 // 쇼핑몰 브랜드 색/아이콘
 const MALL: Record<string, { color: string; emoji: string; grad: string }> = {
@@ -28,28 +43,35 @@ const CARD: React.CSSProperties = {
 };
 
 export default function OverviewDashboard() {
-  const [date, setDate] = useState(todayKST());
+  const [period, setPeriod] = useState<PeriodKey>('mtd');
+  const [cFrom, setCFrom] = useState(ydayKST());
+  const [cTo, setCTo] = useState(ydayKST());
   const [month, setMonth] = useState(curMonth());
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [profit, setProfit] = useState<MallProfitResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const fetchData = useCallback(async (d: string, m: string) => {
+  const ovParams = useMemo<OverviewParams>(
+    () => (period === 'custom' ? { date_from: cFrom, date_to: cTo } : { period }),
+    [period, cFrom, cTo]
+  );
+
+  const fetchData = useCallback(async (p: OverviewParams, m: string) => {
     setLoading(true); setErr(null);
     try {
-      const [ov, pf] = await Promise.all([getOverview(d), getMallProfit(m)]);
+      const [ov, pf] = await Promise.all([getOverview(p), getMallProfit(m)]);
       setData(ov); setProfit(pf);
     } catch (e: any) {
       setErr(e?.message || '불러오기 실패');
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchData(date, month); }, [date, month, fetchData]);
+  useEffect(() => { fetchData(ovParams, month); }, [ovParams, month, fetchData]);
   useEffect(() => {
-    const t = setInterval(() => fetchData(date, month), 5 * 60 * 1000);
+    const t = setInterval(() => fetchData(ovParams, month), 5 * 60 * 1000);
     return () => clearInterval(t);
-  }, [date, month, fetchData]);
+  }, [ovParams, month, fetchData]);
 
   const pie = useMemo(() => {
     if (!data) return [];
@@ -79,7 +101,7 @@ export default function OverviewDashboard() {
       {/* 헤더 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>📊 통합 현황</h1>
-        <button className="ovh-btn" onClick={() => fetchData(date, month)} disabled={loading}
+        <button className="ovh-btn" onClick={() => fetchData(ovParams, month)} disabled={loading}
           style={{ padding: '6px 14px', border: '1px solid #d1d5db', borderRadius: 8, background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
           {loading ? <span className="ovh-spin">↻</span> : '↻'} {loading ? ' 불러오는 중' : ' 새로고침'}
         </button>
@@ -163,23 +185,50 @@ export default function OverviewDashboard() {
         </>
       )}
 
-      {/* ===== 당일 광고·계정 현황 ===== */}
+      {/* ===== 기간별 실적 (광고·매출·순익·계정) ===== */}
       {t && (
         <>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '0 2px 12px' }}>
-            <span style={{ fontSize: 16, fontWeight: 800 }}>📅 당일 광고·계정</span>
-            <input type="date" value={date} onChange={e => setDate(e.target.value)}
-              style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 12px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 16, fontWeight: 800 }}>📅 기간별 실적</span>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {PERIODS.map(p => (
+                <button key={p.key} onClick={() => setPeriod(p.key)}
+                  style={{
+                    padding: '5px 12px', borderRadius: 999, cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
+                    border: period === p.key ? '1px solid #0ea5e9' : '1px solid #d1d5db',
+                    background: period === p.key ? '#0ea5e9' : '#fff',
+                    color: period === p.key ? '#fff' : '#374151',
+                  }}>{p.label}</button>
+              ))}
+            </div>
+            {period === 'custom' && (
+              <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                <input type="date" value={cFrom} max={cTo} onChange={e => setCFrom(e.target.value)}
+                  style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+                <span style={{ color: '#9ca3af' }}>~</span>
+                <input type="date" value={cTo} min={cFrom} onChange={e => setCTo(e.target.value)}
+                  style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+              </span>
+            )}
+            {data?.date_from && (
+              <span style={{ fontSize: 12, color: '#6b7280', marginLeft: 'auto' }}>
+                {data.date_from === data.date_to ? data.date_from : `${data.date_from} ~ ${data.date_to}`}
+              </span>
+            )}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 16 }}>
-            <MiniStat icon="💸" label="총 광고비 (당일)" value={`${formatKRW(t.ad_cost)}원`} color="#f59e0b" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12, marginBottom: 16 }}>
+            <MiniStat icon="🛒" label="매출 (기간)" value={`${formatKRW(t.sales)}원`} color="#0891b2" />
+            <MiniStat icon="💸" label="광고비 (기간)" value={`${formatKRW(t.ad_cost)}원`} color="#f59e0b" />
+            <MiniStat icon="📦" label="상품순익 (광고 전)" value={`${formatKRW(t.profit)}원`} color="#7c3aed" />
+            <MiniStat icon={t.net_after_ad >= 0 ? '🟢' : '🔴'} label="순수익 (광고 차감 후)"
+              value={`${t.net_after_ad >= 0 ? '+' : ''}${formatKRW(t.net_after_ad)}원`} color={t.net_after_ad >= 0 ? '#16a34a' : '#dc2626'} />
             <MiniStat icon="🏦" label="총 잔액" sub="예치금+셀러포인트" value={`${formatKRW(t.balance)}원`} color="#0369a1" />
             <MiniStat icon="👥" label="계정 현황" sub={`정상 ${t.normal} / 실패 ${t.failed}`} value={`${t.accounts}개`} color={t.failed > 0 ? '#dc2626' : '#16a34a'} />
           </div>
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 16 }}>
             <div className="ovh-card" style={{ ...CARD, flex: '0 0 290px', padding: 18 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>마켓별 광고비 비중 (당일)</div>
+              <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>마켓별 광고비 비중 (기간)</div>
               {pie.length > 0 ? (
                 <ResponsiveContainer width="100%" height={200}>
                   <PieChart>
@@ -204,8 +253,11 @@ export default function OverviewDashboard() {
                     <span style={{ fontSize: 12, color: '#9ca3af' }}>계정 {m.accounts}개 (정상 {m.normal} / 실패 {m.failed})</span>
                   </div>
                   <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                    <div><span style={{ fontSize: 12, color: '#6b7280' }}>매출 </span><b style={{ color: '#0891b2' }}>{formatKRW(m.sales || 0)}원</b></div>
                     <div><span style={{ fontSize: 12, color: '#6b7280' }}>광고비 </span><b style={{ color: '#f59e0b' }}>{formatKRW(m.ad_cost)}원</b>
                       {m.ai > 0 && <span style={{ fontSize: 11, color: '#9ca3af' }}> (CPC {formatKRW(m.cpc)}/AI {formatKRW(m.ai)})</span>}</div>
+                    <div><span style={{ fontSize: 12, color: '#6b7280' }}>순수익 </span>
+                      <b style={{ color: (m.net_after_ad || 0) >= 0 ? '#16a34a' : '#dc2626' }}>{(m.net_after_ad || 0) >= 0 ? '+' : ''}{formatKRW(m.net_after_ad || 0)}원</b></div>
                     <div><span style={{ fontSize: 12, color: '#6b7280' }}>잔액 </span><b style={{ color: '#0369a1' }}>{formatKRW(m.balance)}원</b>
                       {m.key === '11st' && m.cash != null && <span style={{ fontSize: 11, color: '#9ca3af' }}> (셀러캐시 {formatKRW(m.cash)})</span>}</div>
                   </div>

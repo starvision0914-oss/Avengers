@@ -19,6 +19,8 @@ metadata:
 - **옥션**: 상품별/거래원장 모두 집계됨. CPC리포트 **site='A'**(지마켓=G), **AI는 site=''(옥션·지마켓 통합)**. 거래원장은 market='auction'. 옥션 월 5천~1.5만(전체 0.1~0.25%, 거의 안함). ⚠️**일자별 구글시트(gmarket_daily_gsheet)는 dailyReport 기본=지마켓만→옥션 미포함**(합산하려면 수정 필요).
 - **공유ESM 서브 광고비**: 대표 로그인 1회로 리포트에 판매자ID로 같이 나옴(별도로그인 불필요). AI리포트 seller_id에 **'G '접두사**('G starvisi')라 조회0이던 것 → **접두제거 정규화 완료**(starvisi/223/224 분리표시). 일자별 시트는 대표탭에 대표+서브 **합산**(starvisi 별도탭 없음). 235/236은 6월 광고 미집행(실제0).
 
+✅ **대시보드 실시간 보충(2026-06-19)**: GmarketCostHistory(거래원장)는 use_date 기준 **1~2일 지연 기록**(2026-06-19 시점 최신=06-17)이라 GmarketDashboardView 기간 광고비가 "오늘/어제치 0"으로 보였음. → **하이브리드로 수정**(views.py GmarketDashboardView): 거래내역 최신 반영일(_cut_g/_cut_a=market별 Max(use_date))**까지는 거래내역**, 그 이후 미반영일(오늘 포함)은 **GmarketDepositSnapshot 당일소진액(계정별 그날 마지막값) 실시간 보충**(중복 방지). 검증: 오늘만 조회 0→121,121원(CPC+AI). 갱신 주기=스냅샷 시간별 크롤(09~23시). 옥션은 _cut_a/auction_cpc로 대칭 처리.
+
 --- 이하 종전 기록(실시간 스냅샷 맥락) ---
 
 - **GmarketDepositSnapshot** (crawl_gmarket_cost → gmarket_crawler.py): ad.esmplus.com 광고센터에서 CPC(`gmarket_cpc`)·AI매출업(`ai_usage`) 실시간 소진액 직접 read. 예) dlrmsgh012 CPC=6501/AI=1067. **이게 맞는 값.**

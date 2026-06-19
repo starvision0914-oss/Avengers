@@ -15,11 +15,15 @@ export interface OverviewMarket {
   point?: number;
   sales?: number;
   profit?: number;
+  net_after_ad?: number;
+  orders?: number;
   last_collected?: string | null;
 }
 
 export interface OverviewResponse {
   date: string;
+  date_from: string;
+  date_to: string;
   totals: {
     ad_cost: number;
     balance: number;
@@ -28,6 +32,7 @@ export interface OverviewResponse {
     failed: number;
     sales: number;
     profit: number;
+    net_after_ad: number;
   };
   markets: OverviewMarket[];
   alerts: {
@@ -38,8 +43,15 @@ export interface OverviewResponse {
   last_collected: string | null;
 }
 
-export async function getOverview(date?: string): Promise<OverviewResponse> {
-  const { data } = await api.get('/cpc/overview/', { params: date ? { date } : {} });
+export interface OverviewParams {
+  period?: string;       // today | 7d | month(최근30일) | mtd | (기본=어제)
+  date?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
+export async function getOverview(params?: OverviewParams): Promise<OverviewResponse> {
+  const { data } = await api.get('/cpc/overview/', { params: params || {} });
   return data;
 }
 

@@ -813,12 +813,54 @@ class ElevenSummaryView(views.APIView):
 
 class OverviewView(views.APIView):
     """통합 Overview — G마켓+11번가 광고비/잔액/계정현황 합산 + 경보.
-    각 마켓 SummaryView를 그대로 재사용 → 개별 대시보드와 합계 일치."""
+    기간(period/date_from/date_to) 지원. 지마켓은 거래내역 기반 GmarketDashboardView를
+    재사용해 /gmarket 대시보드와 합계 일치(스냅샷 마지막값만 잡던 기간합산 버그 제거)."""
     def get(self, request):
+        from datetime import datetime, timedelta
+        from django.http import QueryDict
+        from django.utils import timezone as tz
         from .models import CrawlerAccount
 
-        # 각 마켓 요약 재사용 (동일 date 파라미터 그대로 전달)
-        g = GmarketSummaryView().get(request).data
+        # ── 기간 해석: period 프리셋 > date_from/to > date > 기본(어제) ──
+        today = tz.localdate()
+        yesterday = today - timedelta(days=1)
+        period = (request.query_params.get('period') or '').strip()
+        df = request.query_params.get('date_from') or request.query_params.get('start_date')
+        dt = request.query_params.get('date_to') or request.query_params.get('end_date')
+        dsingle = request.query_params.get('date')
+
+        def _pd(s):
+            return datetime.strptime(s, '%Y-%m-%d').date()
+
+        if df and dt:
+            start_d, end_d = _pd(df), _pd(dt)
+        elif dsingle:
+            start_d = end_d = _pd(dsingle)
+        elif period == 'today':
+            start_d = end_d = today
+        elif period in ('month', '30d'):
+            end_d, start_d = today, today - timedelta(days=29)
+        elif period == '7d':
+            end_d, start_d = today, today - timedelta(days=6)
+        elif period in ('mtd', 'thismonth'):
+            end_d, start_d = today, today.replace(day=1)   # 이번 달 1일~오늘
+        else:                                   # 기본 = 어제(완성된 최신일)
+            start_d = end_d = yesterday
+        if end_d < start_d:
+            start_d, end_d = end_d, start_d
+
+        # 하위 뷰가 동일 기간을 쓰도록 date_from/date_to 주입
+        q = QueryDict(mutable=True)
+        for k, v in request.query_params.items():
+            q[k] = v
+        q['date_from'] = start_d.isoformat()
+        q['date_to'] = end_d.isoformat()
+        q.pop('date', None)
+        q.pop('period', None)
+        request._request.GET = q
+
+        # 지마켓 = 거래내역 기반(기간합산 정확) / 11번가 = 기간 거래 집계
+        g = GmarketDashboardView().get(request).data
         e = ElevenSummaryView().get(request).data
         gt = g.get('totals', {}) or {}
         et = e.get('totals', {}) or {}
@@ -832,22 +874,31 @@ class OverviewView(views.APIView):
         g_total, g_normal, g_failed = acct_stats('gmarket')
         e_total, e_normal, e_failed = acct_stats('11st')
 
-        g_ad = gt.get('ad_total', 0) or 0                                  # G마켓 = CPC+AI(+옥션)
+        g_ad = gt.get('ad_spend', 0) or 0                                  # G마켓 = CPC+AI+서버(+옥션)
         e_ad = et.get('cpc_spend', 0) or 0                                 # 11번가 = CPC
         g_bal = gt.get('balance', 0) or 0                                  # G마켓 예치금
         e_bal = et.get('point', 0) or 0                                    # 11번가 = 셀러포인트만 (캐시는 내 돈 아님 → 제외)
+        # 순익 의미 통일: profit=상품순익(광고 전), net_after_ad=순수익(광고 후)
+        g_sales = gt.get('revenue', 0) or 0                                # G마켓 매출(정산받는금액)
+        g_profit = gt.get('profit', 0) or 0                                # G마켓 상품순익(매출-원가)
+        g_net = gt.get('net_after_ad', 0) or 0                             # G마켓 순수익(상품순익-광고비)
+        e_sales = et.get('sales', 0) or 0                                  # 11번가 매출
+        e_net = et.get('net_profit', 0) or 0                               # 11번가 순수익(이미 광고+서버 차감)
+        # 11번가 상품순익(광고 전) = 순수익 + 광고비 + 서버이용료 → 지마켓과 동일 기준으로 환산
+        e_profit = e_net + (et.get('cpc_spend', 0) or 0) + (et.get('server_fee', 0) or 0)
 
         markets = [
             {'key': 'gmarket', 'label': 'G마켓', 'color': '#6cc24a',
              'ad_cost': g_ad, 'cpc': gt.get('cpc_spend', 0) or 0, 'ai': gt.get('ai_spend', 0) or 0,
              'balance': g_bal, 'accounts': g_total, 'normal': g_normal, 'failed': g_failed,
-             'sales': gt.get('sales', 0) or 0, 'profit': gt.get('profit', 0) or 0,
+             'sales': g_sales, 'profit': g_profit, 'net_after_ad': g_net,
+             'orders': gt.get('orders', 0) or 0,
              'last_collected': None},
             {'key': '11st', 'label': '11번가', 'color': '#ff5a2e',
              'ad_cost': e_ad, 'cpc': e_ad, 'ai': 0,
              'balance': e_bal, 'cash': et.get('cash', 0) or 0, 'point': et.get('point', 0) or 0,
              'accounts': e_total, 'normal': e_normal, 'failed': e_failed,
-             'sales': 0, 'profit': 0,
+             'sales': e_sales, 'profit': e_profit, 'net_after_ad': e_net,
              'last_collected': e.get('last_collected_at')},
         ]
 
@@ -874,12 +925,15 @@ class OverviewView(views.APIView):
             'accounts': g_total + e_total,
             'normal': g_normal + e_normal,
             'failed': g_failed + e_failed,
-            'sales': gt.get('sales', 0) or 0,
-            'profit': gt.get('profit', 0) or 0,
+            'sales': g_sales + e_sales,
+            'profit': g_profit + e_profit,                 # 상품순익(광고 전, 양 마켓 동일기준)
+            'net_after_ad': g_net + e_net,                 # 순수익(광고+서버 차감 후)
         }
 
         return Response({
-            'date': e.get('date') or g.get('date'),
+            'date_from': start_d.isoformat(),
+            'date_to': end_d.isoformat(),
+            'date': end_d.isoformat(),
             'totals': totals,
             'markets': markets,
             'alerts': {
@@ -1132,26 +1186,39 @@ class GmarketControlStatusView(views.APIView):
         def days(w):
             return ''.join(WD[int(x)] for x in (w or [])) if w else '매일'
 
-        # 실행/락 상태
+        # 실행 판정 = 실제 제어 프로세스 존재 여부(락 pid 재사용 오판 방지).
+        # ps로 실제 명령 프로세스만 카운트(pgrep 자기매칭/ps 자신 제외).
+        pats = ('crawl_gmarket_cpc2', 'run_ai_schedule', 'crawl_gmarket_ad_combined', 'gmarket_ai_control')
+        procs = []
+        try:
+            out = subprocess.run(['ps', '-eo', 'pid,args'], capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                if any(p in line for p in pats) and 'ps -eo' not in line and 'pgrep' not in line:
+                    procs.append(line.strip())
+        except Exception:
+            pass
+        proc_count = len(procs)
+
         lockf = '/tmp/avengers_crawl_chrome_gmarket.lock'
         running = None
-        if os.path.exists(lockf):
+        if proc_count > 0:
+            name, since = '실행중', ''
             try:
                 raw = (open(lockf).read() or '').strip().split('|')
-                pid = int(raw[0])
-                os.kill(pid, 0)   # 살아있나
-                running = {'name': raw[1] if len(raw) > 1 else '실행중',
-                           'since': (raw[2][11:19] if len(raw) > 2 and len(raw[2]) >= 19 else '')}
+                if len(raw) > 1 and raw[1]:
+                    name = raw[1]
+                if len(raw) > 2 and len(raw[2]) >= 19:
+                    since = raw[2][11:19]
             except Exception:
-                running = None
-        # 대기/실행 중인 제어 프로세스 수
-        try:
-            r = subprocess.run(['pgrep', '-fc',
-                'crawl_gmarket_cpc2|run_ai_schedule|gmarket_ad_combined|crawl_gmarket_ad_combined'],
-                capture_output=True, text=True)
-            proc_count = int((r.stdout or '0').strip() or 0)
-        except Exception:
-            proc_count = 0
+                pass
+            running = {'name': name, 'since': since}
+        else:
+            # 프로세스 없는데 락만 남음 = 스테일(죽은/재사용 pid) → 자동 정리
+            try:
+                if os.path.exists(lockf):
+                    os.remove(lockf)
+            except Exception:
+                pass
 
         c = Cpc2Schedule.objects.first()
         a = AiSchedule.objects.filter(platform='gmarket').first()
@@ -1305,6 +1372,7 @@ class St11AdStrategyRunsView(views.APIView):
     """전략 실행 내역 목록(최근 20건) — 미리보기/실제적용 진행상황 표시용."""
     def get(self, request):
         from apps.cpc.models import St11AdStrategyLog
+        from django.utils import timezone as tz
         run_ids = list(St11AdStrategyLog.objects.values_list('run_id', flat=True)
                        .distinct().order_by('-run_id')[:20])
         out = []
@@ -1327,8 +1395,8 @@ class St11AdStrategyRunsView(views.APIView):
                 'run_id': rid, 'accounts': accts, 'campaigns': camps,
                 'mode': mode, 'applied': applied, 'skip': skip, 'error': err,
                 'running': running,
-                'started': rows[0].created_at.strftime('%m-%d %H:%M:%S'),
-                'last': rows[-1].created_at.strftime('%H:%M:%S'),
+                'started': tz.localtime(rows[0].created_at).strftime('%m-%d %H:%M:%S'),
+                'last': tz.localtime(rows[-1].created_at).strftime('%H:%M:%S'),
             })
         return Response({'runs': out})
 
@@ -1338,6 +1406,7 @@ class St11AdStrategyLogView(views.APIView):
     running = 가장 최근 START 이후 DONE 이 아직 없으면 True."""
     def get(self, request):
         from apps.cpc.models import St11AdStrategyLog
+        from django.utils import timezone as tz
         run_id = request.query_params.get('run_id', '')
         qs = St11AdStrategyLog.objects.all()
         if run_id:
@@ -1347,7 +1416,7 @@ class St11AdStrategyLogView(views.APIView):
         data = [{'id': r.id, 'run_id': r.run_id, 'eid': r.eleven_id,
                  'campaign': r.campaign_name, 'group': r.group_name,
                  'status': r.status, 'detail': r.detail,
-                 'at': r.created_at.strftime('%H:%M:%S')} for r in rows]
+                 'at': tz.localtime(r.created_at).strftime('%H:%M:%S')} for r in rows]
         running = bool(rows) and rows[-1].status != 'DONE'
         return Response({'logs': data, 'running': running})
 
@@ -3047,6 +3116,59 @@ class GmarketMyProductListView(views.APIView):
                          'total_pages': math.ceil(total / per_page) if per_page else 1})
 
 
+class GmarketCrawlStatusView(views.APIView):
+    """지마켓 상품별광고비(ad_report) 수집 상태 — 오늘 갱신/미갱신 계정 + 최근 에러(원인)."""
+    def get(self, request):
+        from apps.cpc.models import GmarketProductAdCost as G, CrawlerAccount, CrawlerLog
+        from django.db.models import Max
+        from datetime import timedelta
+        import subprocess
+        today = timezone.localdate()
+        kst = timezone.get_current_timezone()
+        masters = [a.login_id for a in CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
+                   if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
+        last = {r['login_id']: r['m'] for r in
+                G.objects.filter(login_id__in=masters).values('login_id').annotate(m=Max('collected_at'))}
+        done, failed = [], []
+        for m in masters:
+            lm = last.get(m)
+            if lm and lm.astimezone(kst).date() == today:
+                done.append(m)
+            else:
+                failed.append({'login_id': m,
+                               'last': lm.astimezone(kst).strftime('%m-%d %H:%M') if lm else '수집기록 없음'})
+        # 최근 12h 에러(원인 요약)
+        since = timezone.now() - timedelta(hours=12)
+        errs = [{'account': l.account_id, 'msg': (l.message or '')[:90],
+                 'at': l.created_at.astimezone(kst).strftime('%H:%M')}
+                for l in CrawlerLog.objects.filter(platform='gmarket', level='error', created_at__gte=since)
+                .order_by('-created_at')[:15]]
+        running = False
+        try:
+            running = 'crawl_gmarket_ad_report' in subprocess.run(
+                ['ps', '-eo', 'args'], capture_output=True, text=True).stdout
+        except Exception:
+            pass
+        return Response({'total': len(masters), 'done': len(done),
+                         'failed': failed, 'errors': errs, 'running': running})
+
+
+class GmarketRecrawlView(views.APIView):
+    """실패(미갱신) 계정만 상품별광고비 재크롤 (백그라운드). accounts=login_id 리스트."""
+    def post(self, request):
+        import threading as th
+        accounts = request.data.get('accounts') or []
+        with_keywords = bool(request.data.get('with_keywords', False))
+        if not accounts:
+            return Response({'error': '재크롤할 계정이 없습니다.'}, status=400)
+
+        def run():
+            from crawlers.gmarket_ad_report_crawler import run as adrun
+            adrun(login_ids=accounts, with_keywords=with_keywords)
+        th.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'count': len(accounts), 'accounts': accounts})
+
+
 class GmarketDashboardView(views.APIView):
     """지마켓 대시보드 요약 — 계정별 잔액/광고비/상품수 (기간 광고비 집계)."""
     permission_classes = [IsAuthenticated]
@@ -3108,9 +3230,26 @@ class GmarketDashboardView(views.APIView):
             prev = _daily.get(key)
             if prev is None or ca > prev[0]:
                 _daily[key] = (ca, s['gmarket_cpc'] or 0, s['ai_usage'] or 0, s['auction_cpc'] or 0)
+        # 거래내역(GmarketCostHistory)은 1~2일 지연 기록 → 최신 반영일 이후(미반영일)는
+        # 광고센터 당일소진액 스냅샷(계정별 그날 마지막값)으로 실시간 보충. 반영일까지는 거래내역만 써 중복 방지.
+        # ★ 차단선은 반드시 '계정별'로 — 전역이면 한 계정이 최신 거래내역을 받는 순간
+        #   아직 못 받은 다른 계정의 미수집일까지 보충이 꺼져 광고비가 갑자기 0으로 떨어짐(부분수집/백필 중 사고).
+        _def_cut = d0 - timedelta(days=1)
+        _cut_g_by = defaultdict(lambda: _def_cut)
+        for r in (GmarketCostHistory.objects.filter(market='gmarket', use_date__lte=d1)
+                  .values('seller_id').annotate(m=Max('use_date'))):
+            _cut_g_by[r['seller_id']] = r['m']
+        _cut_a_by = defaultdict(lambda: _def_cut)
+        for r in (GmarketCostHistory.objects.filter(market='auction', use_date__lte=d1)
+                  .values('seller_id').annotate(m=Max('use_date'))):
+            _cut_a_by[r['seller_id']] = r['m']
         snap = defaultdict(lambda: {'cpc': 0, 'ai': 0, 'auction': 0, 'days': 0})
         for (_gid, _d), (_ca, _cpc, _ai, _au) in _daily.items():
-            v = snap[_gid]; v['cpc'] += _cpc; v['ai'] += _ai; v['auction'] += _au; v['days'] += 1
+            v = snap[_gid]
+            if _d > _cut_g_by[_gid]:
+                v['cpc'] += _cpc; v['ai'] += _ai; v['days'] += 1
+            if _d > _cut_a_by[_gid]:
+                v['auction'] += _au
         # 광고비 — 판매예치금 거래내역(GmarketCostHistory, market 태그)이 정확한 출처.
         # (광고센터 스냅샷은 '당일 소진액'이라 기간 누적이 비어 0으로 나왔음 → 거래내역으로 대체)
         # 지마켓(market='gmarket') CPC/AI/서버 + 옥션(market='auction') 별도 집계.
@@ -3214,8 +3353,15 @@ class GmarketDashboardView(views.APIView):
             lid = a.login_id
             b = bal.get(lid) or {}
             c = cost.get(lid) or {'cpc': 0, 'ai': 0, 'server': 0, 'auction': 0, 'cnt': 0}
-            # CPC/AI/서버 = 지마켓 판매예치금 거래내역, 옥션 = 옥션 판매예치금 거래내역(기간 합)
-            cpc = c['cpc']; ai = c['ai']; server = c['server']; auction = c['auction']
+            sp = snap.get(lid) or {'cpc': 0, 'ai': 0, 'auction': 0, 'days': 0}
+            # CPC/AI/서버 = 판매예치금 거래내역(반영일까지) + 미반영일(오늘 등) 광고센터 스냅샷 실시간 보충
+            if market == 'gmarket':
+                cpc = c['cpc'] + sp['cpc']; ai = c['ai'] + sp['ai']
+                auction = c['auction'] + sp['auction']        # 他마켓(옥션) 실시간 보충
+            else:
+                cpc = c['cpc'] + sp['auction']; ai = c['ai']  # 옥션 CPC 실시간 보충
+                auction = c['auction'] + sp['cpc'] + sp['ai']  # 他마켓(지마켓) 실시간 보충
+            server = c['server']
             spend = cpc + ai + server   # 광고비합계 = 현재 마켓(지마켓/옥션 토글)만 — 마켓별 완전 분리
             pc = prod_mkt.get((lid, market), 0)   # 현재 마켓 상품수만 (지마켓/옥션 분리)
             sl = sales.get(lid) or {'revenue': 0, 'profit': 0, 'orders': 0}

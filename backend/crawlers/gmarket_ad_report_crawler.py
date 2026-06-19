@@ -266,7 +266,7 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
         periods = [(year or today.year, month or today.month)]
     # 미래월 제거 + 정렬(과거→현재)
     periods = sorted({(y, m) for (y, m) in periods if (y, m) <= (today.year, today.month)})
-    ok, reason = guard.preflight('지마켓상품광고비', platform='gmarket')
+    ok, reason = guard.preflight('지마켓상품광고비', platform='gmarket', wait=True, wait_timeout=1800)
     if not ok:
         _log(log_fn, f'⏭️ 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}

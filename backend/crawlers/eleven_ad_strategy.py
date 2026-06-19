@@ -234,8 +234,9 @@ def _dump_radios(driver):
         return None
 
 
-def _pick_schedule_radio(driver, run_id, eid, camp, grp_name):
-    """'상세 설정(노출 스케줄)' 라디오/옵션을 여러 방법으로 찾아 클릭. 성공시 True."""
+def _pick_schedule_radio(driver, run_id, eid, camp, grp_name, timeout=12):
+    """'상세 설정(노출 스케줄)' 라디오/옵션을 여러 방법으로 찾아 클릭. 성공시 True.
+    화면 렌더가 늦으면 못찾고 그룹이 통째 누락되므로 timeout초 동안 폴링 재시도."""
     candidates = [
         (By.CSS_SELECTOR, '#radio-schedule-setting'),
         (By.CSS_SELECTOR, "input[type=radio][id*='schedule']"),
@@ -246,22 +247,27 @@ def _pick_schedule_radio(driver, run_id, eid, camp, grp_name):
         (By.XPATH, "//*[contains(text(),'상세 설정') or contains(text(),'상세설정')]"),
         (By.XPATH, "//*[contains(text(),'시간대') or contains(text(),'노출 시간') or contains(text(),'요일')]"),
     ]
-    for by, sel in candidates:
-        try:
-            els = [e for e in driver.find_elements(by, sel) if e.is_displayed()]
-            if els:
-                try:
-                    els[0].click()
-                except Exception:
-                    driver.execute_script('arguments[0].click();', els[0])
-                time.sleep(1)
-                _log(run_id, 'INFO', f'상세설정 클릭: {sel}', eid, camp, grp_name)
-                return True
-        except Exception:
-            continue
-    # 실패 — 진단 덤프
+    deadline = time.time() + timeout
+    attempt = 0
+    while time.time() < deadline:
+        attempt += 1
+        for by, sel in candidates:
+            try:
+                els = [e for e in driver.find_elements(by, sel) if e.is_displayed()]
+                if els:
+                    try:
+                        els[0].click()
+                    except Exception:
+                        driver.execute_script('arguments[0].click();', els[0])
+                    time.sleep(1)
+                    _log(run_id, 'INFO', f'상세설정 클릭: {sel} (시도 {attempt})', eid, camp, grp_name)
+                    return True
+            except Exception:
+                continue
+        time.sleep(0.8)   # 렌더 대기 후 재탐색
+    # timeout 내 실패 — 진단 덤프
     dump = _dump_radios(driver)
-    _log(run_id, 'ERROR', f'상세설정 라디오 못찾음. 화면 라디오/텍스트={dump}', eid, camp, grp_name)
+    _log(run_id, 'ERROR', f'상세설정 라디오 못찾음({timeout}s, {attempt}회). 화면 라디오/텍스트={dump}', eid, camp, grp_name)
     return False
 
 

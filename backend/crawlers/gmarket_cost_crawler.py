@@ -17,30 +17,47 @@ from django.utils import timezone
 
 logger = logging.getLogger('crawler')
 
-BALANCE_PAGE = 'https://www.esmplus.com/Member/Settle/IacSellBalanceManagement?menuCode=TDM134'
+# 지마켓(Gmkt)·옥션(Iac) 판매예치금 거래내역은 별도 페이지/엔드포인트로 분리됨.
+GMKT_PAGE = 'https://www.esmplus.com/Member/Settle/GmktSellBalanceManagement?menuCode=TDM131'
+IAC_PAGE = 'https://www.esmplus.com/Member/Settle/IacSellBalanceManagement?menuCode=TDM134'
+BALANCE_PAGE = IAC_PAGE  # 하위호환
 
-# 같은 origin(www.esmplus.com/Member/Settle/)에서 거래내역 API 호출
+# 같은 origin에서 거래내역 API 호출. (인자: endpoint, page, sdt, edt, searchAccount=평문 login_id)
+# ★ X-Requested-With 헤더 필수 — ESM이 2026-06-18경부터 이 헤더 없는 요청엔 JSON 대신
+#   HTML 전체페이지를 반환하도록 변경(응답이상의 근본원인). 페이지가 보내는 요청을 그대로 복제.
+#   searchAccount는 평문 login_id($("#sellerId").val() 옵션값) — data-token 경로는 막힘.
 _SEARCH_JS = (
-    "var cb=arguments[arguments.length-1];var p=arguments[0];var sdt=arguments[1];var edt=arguments[2];"
-    # searchAccount는 #sellerId 옵션의 data-token(암호화 계정id). 평문 login_id는 '선택된' 계정만
-    # 통과되고 서브계정은 HTML에러 → 토큰을 URL인코딩해 넘겨야 비선택 서브도 조회됨.
-    "var body='page='+p+'&limit=500&searchAccount='+encodeURIComponent(arguments[3])+'&searchType=0&searchSDT='+sdt"
-    "+'&searchEDT='+edt+'&searchKey=0&searchKeyword=&SortFeild=OrderDate&SortType=Asc';"
-    "fetch('IacSellBalanceUseListSearch',{method:'POST',credentials:'include',"
-    "headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'},body:body})"
+    "var cb=arguments[arguments.length-1];var ep=arguments[0];var p=arguments[1];"
+    "var sdt=arguments[2];var edt=arguments[3];var acc=arguments[4];"
+    "var body='page='+p+'&limit=500&searchAccount='+encodeURIComponent(acc)"
+    "+'&searchType=&searchSDT='+sdt+'&searchEDT='+edt"
+    "+'&searchKey=0&searchKeyword=&SortFeild=TransDate&SortType=Desc&start=0';"
+    "fetch(ep,{method:'POST',credentials:'include',headers:{"
+    "'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8',"
+    "'X-Requested-With':'XMLHttpRequest',"
+    "'Accept':'application/json, text/javascript, */*; q=0.01'},body:body})"
     ".then(function(r){return r.text();}).then(function(t){cb(t);}).catch(function(e){cb('ERR:'+e);});"
 )
 
 
-def _get_seller_tokens(driver):
-    """#sellerId 드롭다운에서 {login_id: data-token} 추출.
-    ESM 거래조회(searchAccount)는 이 data-token으로 해야 비선택 서브계정도 조회됨."""
-    try:
-        return driver.execute_script(
-            "var m={};document.querySelectorAll('#sellerId option').forEach("
-            "function(o){var v=(o.value||'').trim();if(v)m[v]=o.getAttribute('data-token')||v;});return m;") or {}
-    except Exception:
-        return {}
+def _norm_gmkt(r):
+    """지마켓 GmktSellBalanceUseListSearch 행 → 표준 dict."""
+    td = (r.get('TransDate') or '').strip()
+    return {'d': td[:10], 'dt': td if len(td) > 10 else None,
+            'use_type': r.get('SaveTypeNm') or '',
+            'comment': r.get('SdCodeNm') or r.get('Comment') or '',
+            'amount': _parse_amt(r.get('SdMoney') if r.get('SdMoney') not in (None, '') else r.get('TransMoney')),
+            'related': str(r.get('RefNo') or r.get('GoodsNo') or '')}
+
+
+def _norm_iac(r):
+    """옥션 IacSellBalanceUseListSearch 행 → 표준 dict."""
+    ud = (r.get('UseDate') or '').strip()
+    return {'d': ud[:10], 'dt': ud if len(ud) > 10 else None,
+            'use_type': r.get('UseType') or '',
+            'comment': r.get('Comment') or '',
+            'amount': _parse_amt(r.get('UseAmnt')),
+            'related': str(r.get('OrderNo') or r.get('DeliveryNo') or r.get('PayNo') or '')}
 
 
 def _log(log_fn, m):
@@ -152,13 +169,15 @@ def _esm_login(driver, eid, pw):
 
 
 def _classify(comment):
-    """차감내역 분류 — 광고비 3종(CPC/AI매출업/서버비용) + 비광고."""
+    """차감내역 분류 — 광고비 3종(CPC/AI매출업/서버비용) + 비광고.
+    지마켓 SdCodeNm은 소문자('cpc광고구매')라 대소문자 무시 비교."""
     c = comment or ''
-    if 'AI매출업' in c or 'AI 매출업' in c:
+    cl = c.lower().replace(' ', '')
+    if 'ai매출업' in cl:
         return 'AI매출업'
     if '서버' in c:               # 서버비용/서버이용료
         return '서버비용'
-    if 'CPC' in c:
+    if 'cpc' in cl:
         return 'CPC'
     if '전환' in c:
         return '예치금전환'
@@ -194,15 +213,14 @@ def _month_ranges(d0, d1):
     return out
 
 
-def _fetch_month(driver, eid, sdt, edt, log_fn, search_val=None):
-    """(rows, ok) 반환. ok=False면 수집 실패(응답이상/HTML/ERR) → 호출측에서 저장(삭제) 금지.
-    정상 빈 달은 (그대로) ok=True, rows=[]. '실패'와 '진짜 0건'을 구분해 데이터 유실 방지.
-    search_val: searchAccount로 넘길 값(data-token). 없으면 eid(평문, 선택된 계정만 통과)."""
-    sv = search_val or eid
+def _fetch_month(driver, eid, endpoint, sdt, edt, log_fn, normalizer):
+    """(rows, ok) 반환. rows=정규화 dict 리스트. ok=False면 수집 실패(응답이상/HTML/ERR).
+    정상 빈 달은 ok=True, rows=[]. '실패'와 '진짜 0건'을 구분해 데이터 유실 방지.
+    searchAccount=평문 login_id(eid). endpoint별 normalizer로 스키마 흡수."""
     rows = []
     page = 1
     while page <= 200:
-        txt = driver.execute_async_script(_SEARCH_JS, page, sdt, edt, sv)
+        txt = driver.execute_async_script(_SEARCH_JS, endpoint, page, sdt, edt, eid)
         if not txt or txt.startswith('ERR:') or not txt.strip().startswith('{'):
             _log(log_fn, f'[{eid}] {sdt}~{edt} p{page} 응답이상 — 저장 스킵(기존 보존)')
             return rows, False     # 실패: 부분수집 포함 무효 처리
@@ -210,7 +228,7 @@ def _fetch_month(driver, eid, sdt, edt, log_fn, search_val=None):
         batch = data.get('data') or []
         if not batch:
             break
-        rows.extend(batch)
+        rows.extend(normalizer(r) for r in batch)
         if len(batch) < 500:
             break
         page += 1
@@ -218,45 +236,54 @@ def _fetch_month(driver, eid, sdt, edt, log_fn, search_val=None):
     return rows, True
 
 
-def _save(eid, sdt, edt, rows):
-    """월 구간 삭제후 재삽입(멱등). seq는 (날짜) 내 순번.
-    rows가 비면 삭제하지 않고 기존 보존 — 거래원장은 append-only라 비어질 일이 없으므로
-    빈 결과(응답이상/세션throttle로 인한 거짓 0건)로 기존 데이터를 지우지 않게 방어."""
+def _save(eid, market, sdt, edt, rows):
+    """(seller_id, market) 단위 월 구간 삭제후 재삽입(멱등). seq는 (날짜) 내 순번.
+    rows가 비면 삭제하지 않고 기존 보존(응답이상 거짓0건 방어). rows=정규화 dict."""
     from apps.cpc.models import GmarketCostHistory
     from datetime import datetime
+    import pytz
+    kst = pytz.timezone('Asia/Seoul')
     if not rows:
         return 0
-    GmarketCostHistory.objects.filter(seller_id=eid, use_date__gte=sdt, use_date__lte=edt).delete()
+    GmarketCostHistory.objects.filter(
+        seller_id=eid, market=market, use_date__gte=sdt, use_date__lte=edt).delete()
     objs = []
     seq_by_date = {}
     for r in rows:
-        ud = r.get('UseDate')
+        ud = r.get('d')
         if not ud:
             continue
         d = datetime.strptime(ud[:10], '%Y-%m-%d').date()
         seq = seq_by_date.get(d, 0)
         seq_by_date[d] = seq + 1
-        cmt = (r.get('Comment') or '')[:255]
-        rel = str(r.get('OrderNo') or r.get('DeliveryNo') or r.get('PayNo') or '')[:50]
+        traded = None
+        if r.get('dt'):
+            try:
+                traded = kst.localize(datetime.strptime(r['dt'][:19], '%Y-%m-%d %H:%M:%S'))
+            except Exception:
+                traded = None
+        cmt = (r.get('comment') or '')[:255]
         objs.append(GmarketCostHistory(
-            seller_id=eid, use_date=d, seq=seq,
-            use_type=(r.get('UseType') or '')[:20],
+            seller_id=eid, market=market, use_date=d, seq=seq, traded_at=traded,
+            use_type=(r.get('use_type') or '')[:20],
             transaction_type=_classify(cmt),
-            comment=cmt, amount=_parse_amt(r.get('UseAmnt')), related_no=rel))
+            comment=cmt, amount=r.get('amount') or 0,
+            related_no=str(r.get('related') or '')[:50]))
     if objs:
         GmarketCostHistory.objects.bulk_create(objs, batch_size=1000)
     return len(objs)
 
 
-def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=None):
-    """지마켓 계정의 ESM 판매예치금 거래내역(광고비 포함)을 월 단위 수집."""
+def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=None, wait=False):
+    """지마켓 계정의 ESM 판매예치금 거래내역(광고비 포함)을 월 단위 수집.
+    wait=True면 다른 지마켓 크롤이 돌고 있어도 끝날 때까지 대기 후 수집(스킵 안 함) — 거래내역 누락 방지."""
     from apps.cpc.models import CrawlerAccount
     from apps.cpc import eleven_block_guard as guard
     from crawlers.browser import create_driver, stop_display
 
     d1 = date_to or timezone.localdate()
     d0 = date_from or date(d1.year, 1, 1)
-    ok, reason = guard.preflight('지마켓광고비', platform='gmarket')
+    ok, reason = guard.preflight('지마켓광고비', platform='gmarket', wait=wait, wait_timeout=1800)
     if not ok:
         _log(log_fn, f'⏭️ 지마켓 광고비 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}
@@ -286,32 +313,24 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                         failed += 1
                         continue
                     _save_cookies(driver, a)
-                driver.get(BALANCE_PAGE)
-                time.sleep(4)
-                # #sellerId 드롭다운에서 이 계정의 data-token 확보(서브계정도 조회되게).
-                # 드롭다운이 AJAX로 늦게 차므로 토큰 보일 때까지 잠깐 폴링.
-                tokens, search_val = {}, None
-                for _ in range(6):
-                    tokens = _get_seller_tokens(driver)
-                    search_val = tokens.get(a.login_id)
-                    if search_val:
-                        break
-                    time.sleep(1)
-                if search_val and search_val != a.login_id:
-                    _log(log_fn, f'[{a.login_id}] 토큰 확보({len(tokens)}계정, 서브 조회용)')
-                elif not search_val:
-                    _log(log_fn, f'[{a.login_id}] ⚠️ 드롭다운에 토큰 없음 — 평문으로 시도')
                 acc_rows = acc_ad = 0
-                for sdt, edt in months:
-                    rows, ok = _fetch_month(driver, a.login_id, str(sdt), str(edt), log_fn, search_val=search_val)
-                    if not ok:
-                        # 수집 실패월은 삭제·저장하지 않고 기존 데이터 보존(유실 방지)
-                        continue
-                    n = _save(a.login_id, sdt, edt, rows)
-                    acc_rows += n
-                    acc_ad += sum(1 for r in rows if _classify(r.get('Comment')) in AD_TYPES)
-                    _log(log_fn, f'[{a.login_id}] {sdt:%Y-%m}: {n}건 (광고 {sum(1 for r in rows if _classify(r.get("Comment")) in AD_TYPES)})')
-                    time.sleep(0.5)
+                # 지마켓·옥션을 각 페이지/엔드포인트로 분리 수집(searchAccount=평문 login_id).
+                for page_url, endpoint, market, norm in (
+                    (GMKT_PAGE, 'GmktSellBalanceUseListSearch', 'gmarket', _norm_gmkt),
+                    (IAC_PAGE, 'IacSellBalanceUseListSearch', 'auction', _norm_iac),
+                ):
+                    driver.get(page_url)
+                    time.sleep(4)
+                    for sdt, edt in months:
+                        rows, ok = _fetch_month(driver, a.login_id, endpoint, str(sdt), str(edt), log_fn, norm)
+                        if not ok:
+                            continue   # 실패월은 삭제·저장 안 함(기존 보존)
+                        n = _save(a.login_id, market, sdt, edt, rows)
+                        ad = sum(1 for r in rows if _classify(r.get('comment')) in AD_TYPES)
+                        acc_rows += n
+                        acc_ad += ad
+                        _log(log_fn, f'[{a.login_id}] {market} {sdt:%Y-%m}: {n}건 (광고 {ad})')
+                        time.sleep(0.5)
                 total_rows += acc_rows
                 ad_rows += acc_ad
                 done += 1

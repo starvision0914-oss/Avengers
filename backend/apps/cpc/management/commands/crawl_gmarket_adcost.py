@@ -10,11 +10,13 @@ class Command(BaseCommand):
         parser.add_argument('--accounts', nargs='*', help='특정 계정만')
         parser.add_argument('--from', dest='date_from', default=None, help='YYYY-MM-DD')
         parser.add_argument('--to', dest='date_to', default=None, help='YYYY-MM-DD')
+        parser.add_argument('--wait', action='store_true', help='다른 지마켓 크롤 중이면 대기 후 수집(스킵 방지)')
 
     def handle(self, *args, **o):
         from crawlers.gmarket_cost_crawler import run_all_accounts
         d0 = datetime.strptime(o['date_from'], '%Y-%m-%d').date() if o['date_from'] else None
         d1 = datetime.strptime(o['date_to'], '%Y-%m-%d').date() if o['date_to'] else None
         res = run_all_accounts(log_fn=lambda m: self.stdout.write(m),
-                               account_filter=o.get('accounts'), date_from=d0, date_to=d1)
+                               account_filter=o.get('accounts'), date_from=d0, date_to=d1,
+                               wait=o.get('wait', False))
         self.stdout.write(self.style.SUCCESS(f'완료: {res}'))

@@ -59,6 +59,30 @@ export default function GmarketDashboard() {
   }, [from, to, market]);
   useEffect(() => { load(); }, [load]);
 
+  // 상품별광고비 수집 상태(실패 요약 + 재크롤)
+  const [cstat, setCstat] = useState<any>(null);
+  const [recrawling, setRecrawling] = useState(false);
+  const [showErrors, setShowErrors] = useState(false);
+  const loadCstat = useCallback(() => {
+    api.get('/cpc/gmarket/crawl-status/').then(r => setCstat(r.data)).catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadCstat();
+    const t = setInterval(loadCstat, 5000);
+    return () => clearInterval(t);
+  }, [loadCstat]);
+  const recrawlFailed = async () => {
+    const ids = (cstat?.failed || []).map((f: any) => f.login_id);
+    if (!ids.length) return;
+    if (!confirm(`실패(미갱신) ${ids.length}계정 상품별 광고비를 재크롤할까요?\n${ids.join(', ')}`)) return;
+    setRecrawling(true);
+    try {
+      await api.post('/cpc/gmarket/recrawl/', { accounts: ids, with_keywords: false });
+    } catch { /* noop */ }
+    setTimeout(() => setRecrawling(false), 3000);
+    loadCstat();
+  };
+
   const acc = (r: Row, k: string): number | string =>
     k === 'ad_only' ? (r.cpc_spend || 0) + (r.ai_spend || 0)
       : k === 'login_id' ? r.login_id
@@ -125,6 +149,44 @@ export default function GmarketDashboard() {
       </div>
 
       <div className="max-w-[1600px] mx-auto px-6 py-3 space-y-3">
+        {/* 상품별광고비 수집 상태 — 실패 요약 + 재크롤 */}
+        {cstat && (
+          <div className={`rounded-lg border px-4 py-2.5 text-[12px] ${(cstat.failed?.length ? 'bg-red-50 border-red-300' : 'bg-green-50 border-green-200')}`}>
+            <div className="flex items-center flex-wrap gap-2">
+              <b className="text-[#333]">상품별 광고비 수집:</b>
+              <span className="text-green-700">완료 {cstat.done}/{cstat.total}</span>
+              {cstat.failed?.length > 0 && <span className="text-red-600 font-bold">· 실패 {cstat.failed.length}계정</span>}
+              {cstat.running && <span className="text-orange-600 inline-flex items-center gap-1"><RefreshCw size={12} className="animate-spin" />수집 중</span>}
+              {cstat.failed?.length > 0 && (
+                <button onClick={recrawlFailed} disabled={recrawling || cstat.running}
+                  className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 rounded bg-red-600 text-white font-semibold disabled:opacity-50">
+                  <RefreshCw size={12} className={recrawling ? 'animate-spin' : ''} /> 실패계정 재크롤 ({cstat.failed.length})
+                </button>
+              )}
+              {cstat.errors?.length > 0 && (
+                <button onClick={() => setShowErrors(v => !v)} className="text-[11px] text-[#888] underline">
+                  {showErrors ? '원인 닫기' : `원인 보기(${cstat.errors.length})`}
+                </button>
+              )}
+            </div>
+            {cstat.failed?.length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {cstat.failed.map((f: any) => (
+                  <span key={f.login_id} className="px-1.5 py-0.5 rounded bg-white border border-red-200 text-red-700 text-[11px]">
+                    {f.login_id} <span className="text-[#aaa]">({f.last})</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {showErrors && cstat.errors?.length > 0 && (
+              <div className="mt-1.5 border-t border-red-200 pt-1.5 space-y-0.5 max-h-32 overflow-y-auto">
+                {cstat.errors.map((e: any, i: number) => (
+                  <div key={i} className="text-[11px] text-[#a00]">{e.at} [{e.account}] {e.msg}</div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className="text-[12px] text-[#888]">기간: <b className="text-[#333]">{data?.date_from} ~ {data?.date_to}</b></div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <Card icon={<Megaphone size={18} />} color="#e67700" label="CPC 광고비" value={`${fmt(t?.cpc_spend || 0)}원`} />
