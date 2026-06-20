@@ -20,7 +20,7 @@ from django.core.management.base import BaseCommand
 
 from apps.cpc.models import CrawlerAccount
 from crawlers.browser import create_driver
-from crawlers.eleven_crawler import _do_login
+from crawlers.eleven_crawler import _do_login, _save_cookies
 
 OTP_KEYWORDS = ('otpLoginForm', 'otp', 'auth_type_01')
 
@@ -87,7 +87,13 @@ class Command(BaseCommand):
                 if ok:
                     entry['status'] = 'success'
                     entry['message'] = final_url
-                    self.stdout.write(f'  ✅ 성공 → {final_url}')
+                    # ★ OTP 성공 세션을 쿠키로 저장 — 안 하면 last_otp_at만 갱신되고
+                    #   세션이 버려져 "OTP완료인데 인증 안됨"(다음 크롤이 또 OTP) 발생.
+                    try:
+                        _save_cookies(driver, acct)
+                        self.stdout.write(f'  ✅ 성공 → {final_url} (쿠키 저장)')
+                    except Exception as _e:
+                        self.stdout.write(f'  ✅ 성공 → {final_url} (⚠️ 쿠키저장 실패: {_e})')
                 else:
                     # OTP 페이지에 머물렀는지 확인
                     lower = (final_url or '').lower()

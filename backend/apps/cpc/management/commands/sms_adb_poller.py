@@ -53,6 +53,20 @@ def _adb_query_inbox(since_id=0):
         return None, str(e)
 
 
+def _restart_adb_server():
+    """adb 데몬이 죽거나(no devices) 멎었을 때 자가 복구 — kill/start-server 후 device 인식 확인.
+    폰이 물리적으로 꽂혀만 있으면 데몬 재기동으로 연결을 되살린다(2026-06-20 무음장애 대응)."""
+    try:
+        subprocess.run(['adb', 'kill-server'], capture_output=True, timeout=15)
+        time.sleep(1)
+        subprocess.run(['adb', 'start-server'], capture_output=True, timeout=15)
+        time.sleep(2)
+        chk = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=15)
+        return bool(re.search(r'\tdevice\b', chk.stdout or ''))
+    except Exception:
+        return False
+
+
 # Row: 0 _id=24211, address=01077610914, body=..., date=1775893330431, read=0
 ROW_RE = re.compile(
     r'Row:\s*\d+\s+_id=(?P<id>\d+),\s*address=(?P<addr>[^,]*),\s*body=(?P<body>.*?),\s*date=(?P<date>\d+),\s*read=(?P<read>\d+)',
@@ -252,6 +266,15 @@ class Command(BaseCommand):
                     consecutive_errors += 1
                     if consecutive_errors % 12 == 1:
                         self.stdout.write(self.style.WARNING(f'[adb-poller] adb 오류: {err}'))
+                    # 자가복구: 연속 실패가 누적되면(~2분마다) adb 데몬을 스스로 재기동.
+                    # 무한 'no devices' 루프로 백업경로가 며칠 죽어있던 문제 방지(2026-06-20).
+                    if not once and consecutive_errors % 24 == 0:
+                        ok = _restart_adb_server()
+                        self.stdout.write(self.style.WARNING(
+                            f'[adb-poller] 연속 {consecutive_errors}회 실패 → adb 자가복구 '
+                            f'{"성공(연결회복)" if ok else "실패(폰 USB 물리연결 확인 필요)"}'))
+                        if ok:
+                            consecutive_errors = 0
                     if once:
                         break
                     time.sleep(interval)

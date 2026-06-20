@@ -690,6 +690,9 @@ class ElevenSummaryView(views.APIView):
                 'fail_count': acct.fail_count,
                 'no_api': not bool(acct.api_key),   # api 없는 대기/정지 계정 (대시보드 주황 표시용)
                 'last_otp_at': acct.last_otp_at.isoformat() if acct.last_otp_at else None,
+                # 실제 인증/로그인 신선도 — 쿠키워밍·크롤 로그인 성공 시 갱신(쿠키 롤포워드 포함).
+                # OTP는 11번가가 요구할 때만 떠서 last_otp_at은 오래돼도 정상 → 인증상태는 이 값으로 판단.
+                'cookie_saved_at': acct.cookie_saved_at.isoformat() if acct.cookie_saved_at else None,
             }
 
             # 매출/상품순익/순수익 (매출데이터 기준, 셀러명 매칭)

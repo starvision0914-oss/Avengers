@@ -24,6 +24,7 @@ export async function getSt11Summary(
     fail_count: s.fail_count || 0,
     no_api: s.no_api || false,
     last_otp_at: s.last_otp_at || null,
+    cookie_saved_at: s.cookie_saved_at || null,
     grade: s.grade ?? null,
     grade_message: s.grade_message || '',
     cash: s.cash || 0,

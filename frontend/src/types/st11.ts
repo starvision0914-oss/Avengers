@@ -12,6 +12,7 @@ export interface St11SellerRow {
   fail_count?: number;
   no_api?: boolean;
   last_otp_at?: string | null;
+  cookie_saved_at?: string | null;
   grade?: number | null;
   grade_message?: string | null;
   // 오피스 현황

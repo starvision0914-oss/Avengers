@@ -40,7 +40,21 @@ print('1' if (h and (timezone.now()-h.last_seen_at).total_seconds() < 600) else 
 " 2>/dev/null)
     NOW=$(date +%s); LAST=$(cat /tmp/adb_watchdog_last_alert 2>/dev/null || echo 0)
     if [ "$HB_FRESH" = "1" ]; then
-        echo "$(date '+%F %T') adb 끊김이나 앱 하트비트 정상 → 문자/OTP 앱경로로 수신 중, 경보 억제" >> $LOG
+        # adb(백업)는 죽었지만 앱푸시는 정상 — 긴급은 아니나 백업경로가 며칠 죽어도 무경보로 묻히던 문제 방지.
+        # 하루 1회 저빈도 알림으로 USB 점검을 유도(2026-06-20).
+        LASTB=$(cat /tmp/adb_watchdog_backup_alert 2>/dev/null || echo 0)
+        if [ $((NOW - LASTB)) -gt 86400 ]; then
+            echo "$NOW" > /tmp/adb_watchdog_backup_alert
+            /usr/bin/python3 -c "
+import os,django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings'); django.setup()
+from apps.cpc import eleven_block_guard as g
+g._send_telegram_alert('⚠️ [adb 백업경로 끊김] 문자/OTP는 앱푸시로 정상 수신 중이나 USB(adb)가 끊겨 백업·알림읽기 경로가 죽어있습니다. 폰 USB 케이블/디버깅 모드 점검 권장. (하루 1회)')
+" >/dev/null 2>&1
+            echo "$(date '+%F %T') adb백업 끊김(앱정상) 저빈도 알림 발송(24h 스로틀)" >> $LOG
+        else
+            echo "$(date '+%F %T') adb 끊김이나 앱 하트비트 정상 → 앱경로 수신중, 백업알림 24h 스로틀로 생략" >> $LOG
+        fi
     elif [ $((NOW - LAST)) -gt 21600 ]; then
         # adb·앱 하트비트 모두 끊긴 진짜 오프라인 — 6시간에 1회만 경보(도배 방지)
         echo "$NOW" > /tmp/adb_watchdog_last_alert

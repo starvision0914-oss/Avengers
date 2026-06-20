@@ -59,7 +59,7 @@ function getVal(s: St11SellerRow, key: SortKey): number | string {
     case 'server_fee': return s.server_fee ?? 0;
     case 'reward': return s.reward ?? 0;
     case 'net_profit': return s.net_profit ?? 0;
-    case 'time': return s.last_otp_at ? new Date(s.last_otp_at).getTime() : 0;
+    case 'time': { const t = s.cookie_saved_at || s.last_otp_at; return t ? new Date(t).getTime() : 0; }
     case 'charge': return (s.charge || 0) + ((s as any).settle || 0) + (s.reward || 0) - (s.server_fee || 0);
     case 'balance': return s.balance ?? 0;
     case 'products': return s.products ?? 0;
@@ -92,7 +92,7 @@ const INIT_COLS: ColDef[] = [
   { key: 'ship', label: '이행', sortKey: 'ship', align: 'center', initWidth: 78, minWidth: 48 },
   { key: 'prod', label: '배송', sortKey: 'prod', align: 'center', initWidth: 78, minWidth: 48 },
   { key: 'cs', label: 'CS', sortKey: 'cs', align: 'center', initWidth: 78, minWidth: 48 },
-  { key: 'time', label: 'OTP인증', sortKey: 'time', align: 'left', initWidth: 96, minWidth: 56 },
+  { key: 'time', label: '인증(로그인)', sortKey: 'time', align: 'left', initWidth: 110, minWidth: 64 },
 ];
 
 export default function St11SummaryTable({ sellers, totals, selectedSeller, onSelectSeller, onCostClick, blockedIds, onDismissBlocked, unmatched }: Props) {
@@ -201,7 +201,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'ship': return <OfficeBadge value={s.fulfillment} />;
       case 'prod': return <OfficeBadge value={s.shipping} />;
       case 'cs': return <OfficeBadge value={s.inquiry} />;
-      case 'time': { const otp = s.last_otp_at ? new Date(s.last_otp_at) : null; if (!otp) return <span style={{ color: '#ccc' }}>-</span>; const hrs = (Date.now() - otp.getTime()) / 3600000; return <span title={`OTP 인증 ${Math.floor(hrs)}시간 전 (24시간마다 필요)`} style={{ fontSize: 12, color: hrs > 24 ? '#dc2626' : '#16a34a', fontWeight: 600 }}>🔑{otp.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>; }
+      case 'time': { const t = s.cookie_saved_at || s.last_otp_at; const dt = t ? new Date(t) : null; if (!dt) return <span style={{ color: '#ccc' }}>-</span>; const hrs = (Date.now() - dt.getTime()) / 3600000; const otpTxt = s.last_otp_at ? new Date(s.last_otp_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '없음'; return <span title={`마지막 로그인(쿠키) ${Math.floor(hrs)}시간 전 · 매일 02시 자동 재인증(쿠키워밍). ${hrs > 30 ? '⚠️ 30h 초과 — 로그인 실패 의심' : '정상'}\\n(참고) OTP 마지막 요구: ${otpTxt} — OTP는 11번가가 요구할 때만 떠서 오래돼도 정상`} style={{ fontSize: 12, color: hrs > 30 ? '#dc2626' : '#16a34a', fontWeight: 600 }}>{hrs > 30 ? '⚠️' : '🔑'}{dt.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>; }
       default: return null;
     }
   };
