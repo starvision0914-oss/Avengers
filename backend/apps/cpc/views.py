@@ -1202,9 +1202,16 @@ class GmarketControlStatusView(views.APIView):
             pass
         proc_count = len(procs)
 
+        # 광고제어 실행중 마커 — 대시보드 버튼은 스레드라 ps에 안 잡히므로 이 마커가 정확한 진행상태.
+        from apps.cpc import eleven_block_guard as guard
+        busy = guard.adcontrol_busy_info('gmarket')
+
         lockf = '/tmp/avengers_crawl_chrome_gmarket.lock'
         running = None
-        if proc_count > 0:
+        if busy:
+            since = busy['since'][11:19] if len(busy.get('since') or '') >= 19 else ''
+            running = {'name': busy['name'], 'since': since}
+        elif proc_count > 0:
             name, since = '실행중', ''
             try:
                 raw = (open(lockf).read() or '').strip().split('|')
@@ -1241,6 +1248,12 @@ class GmarketControlStatusView(views.APIView):
 class Cpc2ControlView(views.APIView):
     def post(self, request):
         import threading as th
+        from apps.cpc import eleven_block_guard as guard
+        busy = guard.adcontrol_busy_info('gmarket')
+        if busy:
+            return Response({'status': 'busy',
+                             'message': f'이미 광고제어 실행 중({busy["name"]}) — 끝난 뒤 다시 시도하세요.'},
+                            status=409)
         action = request.data.get('action', 'on')
         accounts = request.data.get('accounts')
         source = request.data.get('source', 'manual')
@@ -1254,6 +1267,12 @@ class Cpc2ControlView(views.APIView):
 class AiControlView(views.APIView):
     def post(self, request):
         import threading as th
+        from apps.cpc import eleven_block_guard as guard
+        busy = guard.adcontrol_busy_info('gmarket')
+        if busy:
+            return Response({'status': 'busy',
+                             'message': f'이미 광고제어 실행 중({busy["name"]}) — 끝난 뒤 다시 시도하세요.'},
+                            status=409)
         action = request.data.get('action', 'on')
         accounts = request.data.get('accounts')
         source = request.data.get('source', 'manual')

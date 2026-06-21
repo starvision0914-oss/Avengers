@@ -110,9 +110,14 @@ class Command(BaseCommand):
         from apps.cpc.models import CrawlerAccount, GmarketAiAdHistory
         from apps.cpc import eleven_block_guard as guard
 
+        # 중복/누적 방지: 이미 광고제어(수동버튼·다른 크론) 실행중이면 줄세우지 않고 즉시 스킵
+        if not guard.try_acquire_adcontrol('지마켓AI광고ON', platform='gmarket'):
+            self._log('⏭️ AI ON 스킵 — 이미 광고제어 실행 중(중복 방지)')
+            return
         # 동시접속 방지: 다른 지마켓 크롤(간편 등)이 돌고 있으면 끝날 때까지 대기(스킵 아님)
         ok, reason = guard.preflight('지마켓AI광고ON', platform='gmarket', wait=True, wait_timeout=1800)
         if not ok:
+            guard.clear_adcontrol_busy('gmarket')
             self._log(f'⏭️ AI ON 건너뜀 — {reason}')
             return
         guard.clear_control_stop('gmarket')   # 새 실행 — 묵은 중지플래그 제거
@@ -166,6 +171,7 @@ class Command(BaseCommand):
             stop_display()
             guard.release_global_lock(platform='gmarket')
             guard.clear_control_stop('gmarket')
+            guard.clear_adcontrol_busy('gmarket')
 
     def _next_business_day(self, base_date, holidays):
         d = base_date + timedelta(days=1)

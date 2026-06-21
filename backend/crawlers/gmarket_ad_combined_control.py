@@ -39,8 +39,14 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
     qs = (CrawlerAccount.objects.filter(platform='gmarket', is_active=True, login_id__in=union)
           .exclude(crawling_status='차단됨'))
 
+    # 중복/누적 방지: 이미 광고제어 실행중이면 즉시 스킵
+    if not guard.try_acquire_adcontrol('지마켓광고통합제어', platform='gmarket'):
+        _log(log_fn, '⏭️ 이미 광고제어 실행 중 — 중복 방지로 스킵')
+        return
+
     ok, reason = guard.preflight('지마켓광고통합제어', platform='gmarket', wait=True, wait_timeout=1800)
     if not ok:
+        guard.clear_adcontrol_busy('gmarket')
         _log(log_fn, f'⏭️ 건너뜀 — {reason}')
         return
 
@@ -112,4 +118,5 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
         stop_display()
         guard.release_global_lock(platform='gmarket')
         guard.clear_control_stop('gmarket')
+        guard.clear_adcontrol_busy('gmarket')
     _log(log_fn, f'통합광고제어 완료 — {done}개 계정 ({action})')

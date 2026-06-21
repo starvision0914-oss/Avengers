@@ -125,8 +125,15 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
     else:
         qs = [a for a in qs if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
 
+    # 중복/누적 방지: 이미 광고제어 실행중이면 즉시 스킵
+    if not guard.try_acquire_adcontrol('지마켓간편광고제어', platform='gmarket'):
+        if log_fn:
+            log_fn('⏭️ 이미 광고제어 실행 중 — 중복 방지로 스킵')
+        return []
+
     ok, reason = guard.preflight('지마켓간편광고제어', platform='gmarket', wait=True, wait_timeout=1800)
     if not ok:
+        guard.clear_adcontrol_busy('gmarket')
         if log_fn:
             log_fn(f'⏭️ 건너뜀 — {reason}')
         return []
@@ -221,4 +228,5 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
         stop_display()
         guard.release_global_lock(platform='gmarket')
         guard.clear_control_stop('gmarket')
+        guard.clear_adcontrol_busy('gmarket')
     return results

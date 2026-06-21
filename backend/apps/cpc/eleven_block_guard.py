@@ -397,6 +397,77 @@ def clear_control_stop(platform='gmarket'):
         pass
 
 
+# ===== 광고제어 실행중 마커 (누적/중복 실행 방지 + 정확한 진행상태) =====
+# 대시보드 버튼은 백엔드 스레드, 크론은 별도 프로세스로 도는데 ps로는 스레드를 못 잡아
+# 진행상태가 틀리고 중복 클릭/크론겹침이 줄서서 누적되던 문제 해결용. 파일 마커로 둘 다 커버.
+def _adcontrol_busy_path(platform='gmarket'):
+    return Path(f'/tmp/avengers_{platform}_adcontrol.busy')
+
+
+def adcontrol_busy_info(platform='gmarket', stale_minutes=45):
+    """광고제어 실행중이면 {'pid','name','since'} 반환, 아니면 None.
+    죽은 pid거나 stale_minutes 초과한 마커는 스테일로 보고 자동 해제 후 None."""
+    try:
+        p = _adcontrol_busy_path(platform)
+        if not p.exists():
+            return None
+        raw = (p.read_text() or '').strip().split('|')
+        pid = int(raw[0]) if raw and raw[0].isdigit() else 0
+        name = raw[1] if len(raw) > 1 else '광고제어'
+        since = raw[2] if len(raw) > 2 else ''
+        alive = False
+        if pid:
+            try:
+                import os as _os
+                _os.kill(pid, 0)
+                alive = True
+            except Exception:
+                alive = False
+        too_old = False
+        if since:
+            try:
+                import datetime as _dt
+                from django.utils import timezone as _tz
+                age = (_tz.now() - _dt.datetime.fromisoformat(since)).total_seconds() / 60.0
+                too_old = age > stale_minutes
+            except Exception:
+                too_old = False
+        if (not alive) or too_old:
+            clear_adcontrol_busy(platform)
+            return None
+        return {'pid': pid, 'name': name, 'since': since}
+    except Exception:
+        return None
+
+
+def try_acquire_adcontrol(name, platform='gmarket', stale_minutes=45):
+    """광고제어 실행 권한 원자적 획득. 이미 실행중(스테일 아님)이면 False(=중복, 스킵).
+    성공 시 마커 생성(pid|name|ISO시각) 후 True. 끝나면 반드시 release_adcontrol 호출."""
+    if adcontrol_busy_info(platform, stale_minutes) is not None:
+        return False  # 살아있는 실행 중 — 중복 방지
+    try:
+        import os as _os
+        from django.utils import timezone as _tz
+        p = _adcontrol_busy_path(platform)
+        fd = _os.open(str(p), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY, 0o644)
+        _os.write(fd, f'{_os.getpid()}|{name}|{_tz.now().isoformat()}'.encode())
+        _os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+    except Exception:
+        return False
+
+
+def clear_adcontrol_busy(platform='gmarket'):
+    try:
+        p = _adcontrol_busy_path(platform)
+        if p.exists():
+            p.unlink()
+    except Exception:
+        pass
+
+
 def live_reachable(timeout=10, platform='11st'):
     """해당 플랫폼 사이트에 실제로 닿는지 단건 확인 (HTTP 응답이 오면 도달)."""
     import urllib.request
