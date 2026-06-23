@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Third party
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
     # Local apps
@@ -121,6 +122,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://192.168.1.16:5173',
+    'http://192.168.45.100:5173',
 ]
 
 # DRF
@@ -141,10 +143,13 @@ REST_FRAMEWORK = {
     ],
 }
 
-# JWT
+# JWT — 재부팅 후에도 로그인 유지: 액세스 24h, 리프레시 30일 + 회전으로 사용 시마다 갱신
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': True,
 }
 
 # 매출 파일 업로드 한도 — 대용량 엑셀/정산파일(.xls/.xlsx) 대비 (기본 2.5MB는 너무 작음)
