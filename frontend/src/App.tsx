@@ -39,6 +39,7 @@ import RoadmapPage from './pages/Roadmap/RoadmapPage';
 import SalesMatchPage from './pages/Sales/SalesMatchPage';
 import TaxVatPage from './pages/Tax/TaxVatPage';
 import SmsWidget from './components/SmsWidget';
+import SmartStorePage from './pages/SmartStore/SmartStorePage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Navigate to="/login" replace />;
@@ -90,6 +91,7 @@ export default function App() {
           <Route path="st11-killlist" element={<ElevenKilllistPage />} />
           <Route path="sms" element={<SmsManagePage />} />
           <Route path="lotto" element={<LottoPage />} />
+          <Route path="smartstore" element={<SmartStorePage />} />
         </Route>
       </Routes>
     </BrowserRouter>

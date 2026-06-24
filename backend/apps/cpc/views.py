@@ -1395,12 +1395,16 @@ class St11AdStrategyRunsView(views.APIView):
     def get(self, request):
         from apps.cpc.models import St11AdStrategyLog
         from django.utils import timezone as tz
+        import datetime
         run_ids = list(St11AdStrategyLog.objects.values_list('run_id', flat=True)
                        .distinct().order_by('-run_id')[:20])
         out = []
         for rid in run_ids:
             rows = list(St11AdStrategyLog.objects.filter(run_id=rid).order_by('id'))
             if not rows:
+                continue
+            # 캠페인 조회(list_campaigns) run_id는 제외 — '캠페인 목록 조회'로 시작
+            if any(r.status == 'START' and '캠페인 목록 조회' in r.detail for r in rows):
                 continue
             accts = sorted({r.eleven_id for r in rows if r.eleven_id})
             camps = sorted({r.campaign_name for r in rows if r.campaign_name})
@@ -1412,7 +1416,10 @@ class St11AdStrategyRunsView(views.APIView):
                 if r.status == 'START':
                     mode = '실제적용' if '실제적용' in r.detail else '드라이런'
                     break
-            running = rows[-1].status != 'DONE'
+            # DONE 있으면 완료, 없어도 마지막 로그가 2시간 이상 지났으면 크래시로 간주해 완료처리
+            has_done = any(r.status == 'DONE' for r in rows)
+            stale = (tz.now() - rows[-1].created_at) > datetime.timedelta(hours=2)
+            running = not has_done and not stale
             out.append({
                 'run_id': rid, 'accounts': accts, 'campaigns': camps,
                 'mode': mode, 'applied': applied, 'skip': skip, 'error': err,

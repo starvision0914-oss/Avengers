@@ -522,7 +522,7 @@ def list_campaigns(eid, run_id=None):
     if not run_id:
         run_id = _t.strftime('%Y%m%d%H%M%S')
     _log(run_id, 'START', f'캠페인 목록 조회 — {eid}')
-    ok, reason = guard.preflight('11번가캠페인조회', wait=False, platform='11st')
+    ok, reason = guard.preflight('11번가캠페인조회', wait=True, wait_timeout=300, platform='11st')
     if not ok:
         _log(run_id, 'ERROR', f'전역락/접속 불가 — {reason}', eid)
         _log(run_id, 'DONE', '중단'); return run_id
@@ -603,7 +603,7 @@ def run_strategy(accounts, campaigns, on_start=8, on_end=16, weekdays=None,
     _log(run_id, 'START', f'시작 — 계정 {len(accounts)}개 / 모드={mode}')
     _log(run_id, 'INFO', f'작업순서(등급우선): {", ".join(accounts)}')
 
-    ok, reason = guard.preflight('11번가광고전략', wait=False, platform='11st')
+    ok, reason = guard.preflight('11번가광고전략', wait=True, wait_timeout=300, platform='11st')
     if not ok:
         _log(run_id, 'ERROR', f'전역락/접속 불가 — {reason}')
         _log(run_id, 'DONE', '중단')

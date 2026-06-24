@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/keyword/', include('apps.keyword.urls')),
     path('api/lotto/', include('apps.lotto.urls')),
     path('api/speedgo/', include('apps.speedgo.urls')),
+    path('api/smartstore/', include('apps.smartstore.urls')),
     # smsApp 호환 (root /api/settings/)
     path('api/settings/', SmsSettingsListView.as_view()),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

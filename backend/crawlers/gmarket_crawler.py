@@ -12,9 +12,20 @@ from django.utils import timezone
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import UnexpectedAlertPresentException, NoAlertPresentException
 
 from .browser import create_driver, stop_display
 from .utils import parse_int
+
+
+def _dismiss_alert(driver):
+    """'다른광고주가 선택되었습니다' 등 예기치 않은 alert 닫기. 있으면 True."""
+    try:
+        alert = driver.switch_to.alert
+        alert.accept()
+        return True
+    except (NoAlertPresentException, Exception):
+        return False
 
 logger = logging.getLogger('crawler')
 
@@ -169,8 +180,13 @@ def collect_one_account(driver, account, log_fn=None):
         _save_cookies(driver, account)
 
     # CPC 페이지 데이터 수집
-    driver.get(CPC_URL)
+    try:
+        driver.get(CPC_URL)
+    except UnexpectedAlertPresentException:
+        _dismiss_alert(driver)
+        driver.get(CPC_URL)
     time.sleep(3)
+    _dismiss_alert(driver)  # 진입 직후 '다른광고주' alert 선제 제거
 
     # 잔액 요소가 로드될 때까지 대기
     gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
@@ -183,16 +199,25 @@ def collect_one_account(driver, account, log_fn=None):
         if gmarket_balance != 0:
             break
         log(f'CPC 페이지 잔액 미로드, 새로고침 후 재시도 ({retry + 1}/2)...')
-        driver.refresh()
+        try:
+            driver.refresh()
+        except UnexpectedAlertPresentException:
+            _dismiss_alert(driver)
         time.sleep(8)
+        _dismiss_alert(driver)
         gmarket_balance = parse_int(_safe_text(driver, XPATHS['gmarket_balance'], timeout=20))
         auction_balance = parse_int(_safe_text(driver, XPATHS['auction_balance']))
         gmarket_cpc_raw = parse_int(_safe_text(driver, XPATHS['gmarket_cpc']))
         auction_cpc = parse_int(_safe_text(driver, XPATHS['auction_cpc']))
 
     # AI 페이지 데이터 수집
-    driver.get(AI_URL)
+    try:
+        driver.get(AI_URL)
+    except UnexpectedAlertPresentException:
+        _dismiss_alert(driver)
+        driver.get(AI_URL)
     time.sleep(2)
+    _dismiss_alert(driver)
 
     ai_usage = parse_int(_safe_text(driver, XPATHS['ai_usage']))
 
@@ -386,27 +411,23 @@ def run_all_accounts(log_fn=None, account_filter=None):
                     account_id=account.login_id
                 )
 
-                # 서브 계정 수집 (같은 로그인 세션 재사용)
+                # 서브 계정 — CPC 광고센터는 메인+서브 합계만 표시(분리 불가)이므로
+                # 스냅샷 저장 없이 상태만 갱신(저장 시 메인 값 복사 → 대시보드 합계 중복 오염)
                 sub_accounts = _get_sub_accounts(account.login_id)
                 for sub in sub_accounts:
                     try:
-                        sub_result = _collect_sub_account(driver, sub, log_fn)
-                        if sub_result:
-                            GmarketDepositSnapshot.objects.create(**sub_result)
-                            # 누적 차단 정책: 성공해도 fail_count 리셋하지 않음
-                            sub.crawling_status = '정상'
-                            sub.last_crawled_at = timezone.now()
-                            sub.save()
-                            collected += 1
-                            CrawlerLog.objects.create(
-                                platform='gmarket', level='success',
-                                message=f'서브계정 수집 완료: 합계={sub_result["total_usage"]:,}원',
-                                account_id=sub.login_id
-                            )
+                        sub.crawling_status = '정상'
+                        sub.last_crawled_at = timezone.now()
+                        sub.save()
+                        CrawlerLog.objects.create(
+                            platform='gmarket', level='success',
+                            message='서브계정 상태 갱신 (스냅샷 생략 — 메인 세션 공유잔액)',
+                            account_id=sub.login_id
+                        )
                     except Exception as e:
-                        logger.error(f'[서브:{sub.login_id}] 수집 실패: {e}')
+                        logger.error(f'[서브:{sub.login_id}] 상태 갱신 실패: {e}')
                         if log_fn:
-                            log_fn(f'[서브:{sub.login_id}] 수집 실패: {e}')
+                            log_fn(f'[서브:{sub.login_id}] 상태 갱신 실패: {e}')
             else:
                 raise Exception('수집 결과 없음')
 

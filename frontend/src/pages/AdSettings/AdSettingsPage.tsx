@@ -63,12 +63,13 @@ export default function AdSettingsPage() {
     getSt11StrategySchedule().then(d => {
       const s = d.schedule;
       if (!s) return;
-      // 공통 시간대 프리셋만 복원(계정/캠페인은 매번 직접 선택)
       setStratSched(s);
       setOnStart(s.on_start ?? 8);
       setOnEnd(s.on_end ?? 16);
       setStratWeekdays(s.weekdays?.length ? s.weekdays : [1, 2, 3, 4, 5]);
       setStratEnabled(!!s.enabled);
+      if (s.accounts?.length) setStratAccounts(s.accounts);
+      if (s.campaigns?.length) setStratCamps(s.campaigns);
     }).catch(() => {});
   };
   useEffect(() => { load(); }, []);
@@ -197,8 +198,11 @@ export default function AdSettingsPage() {
           clearInterval(poll); setStratRunning(false); setCampLoading(false);
           const names = (d.logs || []).filter((l: any) => l.status === 'CAMP').map((l: any) => l.detail);
           setCampOptions(names);
-          if (names.length === 0) toast('캠페인을 못 찾았습니다. 이름을 직접 입력하세요.', { icon: 'ℹ️' });
-          else toast.success(`캠페인 ${names.length}개 불러옴`);
+          if (names.length === 0) {
+            const errLog = (d.logs || []).find((l: any) => l.status === 'ERROR');
+            if (errLog) toast.error(`캠페인 조회 실패: ${errLog.detail}`);
+            else toast('캠페인을 못 찾았습니다. 이름을 직접 입력하세요.', { icon: 'ℹ️' });
+          } else toast.success(`캠페인 ${names.length}개 불러옴`);
         }
       }, 2000);
     } catch (e) { setCampLoading(false); toast.error('캠페인 조회 실패'); }
@@ -232,6 +236,7 @@ export default function AdSettingsPage() {
       const next = enabled === undefined ? stratEnabled : enabled;
       const r = await saveSt11StrategySchedule({
         on_start: onStart, on_end: onEnd, weekdays: stratWeekdays, enabled: next,
+        accounts: stratAccounts, campaigns: stratCamps,
       });
       setStratSched(r.schedule);
       setStratEnabled(!!r.schedule.enabled);
@@ -414,6 +419,43 @@ export default function AdSettingsPage() {
                 <h3 className="font-semibold mb-1 flex items-center gap-2"><Target size={16} /> 11번가 광고 그룹 전략설정 (노출 스케줄)</h3>
                 <p className="text-sm text-gray-500">계정 선택 → 캠페인 불러오기·선택 → 시간·요일 설정 → 순서대로 광고그룹('전체-') 스케줄을 일괄 적용합니다. <b>지정 시간·요일만 ON, 나머지·미선택 요일은 OFF.</b></p>
               </div>
+
+              {/* 예약 현황 박스 */}
+              {stratSched && (
+                <div className={`rounded-lg border p-4 text-sm ${stratSched.enabled ? 'bg-blue-50 border-blue-300' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className="flex items-center gap-2 font-semibold mb-2">
+                    <span className={stratSched.enabled ? 'text-blue-700' : 'text-gray-500'}>
+                      {stratSched.enabled ? '🟢 예약 활성' : '⏸ 예약 저장됨 (자동실행 OFF)'}
+                    </span>
+                    <span className="text-xs font-normal text-gray-400 ml-auto">수정: {stratSched.updated_at}</span>
+                  </div>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+                    <span className="text-gray-500 font-medium">시간·요일</span>
+                    <span>
+                      <b>{(stratSched.weekdays?.length ? stratSched.weekdays : [1,2,3,4,5]).map((v:number) => WEEKDAYS.find(w=>w.v===v)?.n).join('')}</b> 요일&nbsp;
+                      <b className="text-green-700">{stratSched.on_start}시</b> ~ <b className="text-red-600">{stratSched.on_end}시</b> ON
+                    </span>
+                    <span className="text-gray-500 font-medium">계정 ({(stratSched.accounts||[]).length}개)</span>
+                    <span className="text-gray-700">
+                      {(stratSched.accounts||[]).length === 0
+                        ? <span className="text-gray-400 italic">저장된 계정 없음</span>
+                        : (stratSched.accounts||[]).join(', ')}
+                    </span>
+                    <span className="text-gray-500 font-medium">캠페인 ({(stratSched.campaigns||[]).length}개)</span>
+                    <span className="text-gray-700">
+                      {(stratSched.campaigns||[]).length === 0
+                        ? <span className="text-gray-400 italic">저장된 캠페인 없음</span>
+                        : (stratSched.campaigns||[]).join(', ')}
+                    </span>
+                    {stratSched.last_applied_at && (
+                      <>
+                        <span className="text-gray-500 font-medium">마지막 적용</span>
+                        <span className="text-gray-600">{stratSched.last_applied_at}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* 1. 계정 선택 */}
               <div>

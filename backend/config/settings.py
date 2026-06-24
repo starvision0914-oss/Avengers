@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     'apps.keyword',
     'apps.lotto',
     'apps.speedgo',
+    'apps.smartstore',
 ]
 
 MIDDLEWARE = [

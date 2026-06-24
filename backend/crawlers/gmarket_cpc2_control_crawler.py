@@ -50,16 +50,30 @@ def _go_cpc2_tab(driver):
         time.sleep(3)
         _dismiss_alert(driver)
     driver.find_element(By.XPATH, '//*[@id="ulBidMngState"]/li[2]/a/strong').click()
-    time.sleep(1)
+    # 간편광고 탭 로딩 대기 — time.sleep(1)은 너무 짧아 서브탭이 미렌더링됨
     try:
-        driver.find_element(By.XPATH, "//*[@id='dvGroupAdSmartListTab']//a[contains(@href,'#smartAdviewList')]").click()
+        WebDriverWait(driver, 8).until(
+            EC.element_to_be_clickable((By.XPATH, "//*[@id='dvGroupAdSmartListTab']//a[contains(@href,'#smartAdviewList')]"))
+        ).click()
         time.sleep(0.5)
-        driver.find_element(By.XPATH, "//*[@id='smartAdviewList']//span[contains(text(),'전체 보기')]").click()
+    except Exception as e:
+        logger.warning(f'간편광고 서브탭 클릭 실패: {e}')
+    try:
+        WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, "//*[@id='smartAdviewList']//span[contains(text(),'전체 보기')]"))
+        ).click()
         time.sleep(2)
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f'전체 보기 클릭 실패: {e}')
 
-def _count_on_off(driver):
+def _count_on_off(driver, wait=12):
+    # 테이블 로딩 대기 — 12초로 늘려 느린 렌더링 대응
+    try:
+        WebDriverWait(driver, wait).until(
+            EC.presence_of_element_located((By.XPATH, '//*[@id="tbSmartGroupAdStateList"]/tr'))
+        )
+    except Exception:
+        pass
     on, off = 0, 0
     rows = driver.find_elements(By.XPATH, '//*[@id="tbSmartGroupAdStateList"]/tr')
     for row in rows:
@@ -76,12 +90,29 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
 
     _go_cpc2_tab(driver)
     before_on, before_off = _count_on_off(driver)
+
+    # 0건이면 "전체 보기" 재클릭 후 1회 재시도 (느린 탭 렌더링 대응)
+    if before_on + before_off == 0:
+        try:
+            WebDriverWait(driver, 5).until(
+                EC.element_to_be_clickable((By.XPATH, "//*[@id='smartAdviewList']//span[contains(text(),'전체 보기')]"))
+            ).click()
+            time.sleep(3)
+        except Exception:
+            pass
+        before_on, before_off = _count_on_off(driver, wait=15)
+
     log(f'현재: ON={before_on} OFF={before_off}')
 
-    if action == 'on' and before_off == 0:
+    total = before_on + before_off
+    if total == 0:
+        # 재시도 후에도 0건 → 실제 광고 없는 계정
+        log('간편광고 0건(재시도 후) — 건너뜀')
+        return {'success': False, 'skipped': True, 'before_on': 0, 'before_off': 0}
+    elif action == 'on' and before_off == 0:
         log('이미 전체 ON')
         return {'success': True, 'skipped': True, 'before_on': before_on, 'before_off': before_off}
-    if action == 'off' and before_on == 0:
+    elif action == 'off' and before_on == 0:
         log('이미 전체 OFF')
         return {'success': True, 'skipped': True, 'before_on': before_on, 'before_off': before_off}
 

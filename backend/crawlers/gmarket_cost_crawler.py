@@ -274,9 +274,33 @@ def _save(eid, market, sdt, edt, rows):
     return len(objs)
 
 
+def _collect_account_months(driver, login_id, months, log_fn):
+    """마스터·서브 공통 — 지마켓+옥션 월별 거래내역 수집 후 저장. (rows, ad_rows) 반환."""
+    acc_rows = acc_ad = 0
+    for page_url, endpoint, market, norm in (
+        (GMKT_PAGE, 'GmktSellBalanceUseListSearch', 'gmarket', _norm_gmkt),
+        (IAC_PAGE, 'IacSellBalanceUseListSearch', 'auction', _norm_iac),
+    ):
+        driver.get(page_url)
+        time.sleep(4)
+        for sdt, edt in months:
+            rows, ok = _fetch_month(driver, login_id, endpoint, str(sdt), str(edt), log_fn, norm)
+            if not ok:
+                continue
+            n = _save(login_id, market, sdt, edt, rows)
+            ad = sum(1 for r in rows if _classify(r.get('comment')) in AD_TYPES)
+            acc_rows += n
+            acc_ad += ad
+            _log(log_fn, f'[{login_id}] {market} {sdt:%Y-%m}: {n}건 (광고 {ad})')
+            time.sleep(0.5)
+    return acc_rows, acc_ad
+
+
 def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=None, wait=False):
     """지마켓 계정의 ESM 판매예치금 거래내역(광고비 포함)을 월 단위 수집.
-    wait=True면 다른 지마켓 크롤이 돌고 있어도 끝날 때까지 대기 후 수집(스킵 안 함) — 거래내역 누락 방지."""
+    wait=True면 다른 지마켓 크롤이 돌고 있어도 끝날 때까지 대기 후 수집(스킵 안 함) — 거래내역 누락 방지.
+    전략: 모든 계정 독립 로그인 시도 → 실패+origin_id 있으면 마스터 세션으로 재수집(rejoice235/236 대응).
+          starvisi처럼 origin_id 있어도 독립 로그인 가능한 계정은 그대로 독립 처리."""
     from apps.cpc.models import CrawlerAccount
     from apps.cpc import eleven_block_guard as guard
     from crawlers.browser import create_driver, stop_display
@@ -292,6 +316,8 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
     accounts = [a for a in qs if (not account_filter or a.login_id in account_filter)]
     months = _month_ranges(d0, d1)
     done = failed = total_rows = ad_rows = 0
+    # 로그인 실패한 서브 계정 → 마스터 처리 후 재수집
+    login_failed_subs = []
     driver = None
     try:
         for a in accounts:
@@ -304,41 +330,69 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                 if driver is None:
                     driver = create_driver(kill_existing=False)
                 driver.delete_all_cookies()
-                # 쿠키 재사용 우선 → 실패 시 풀로그인 후 쿠키 저장 (IP 안전: 로그인 횟수 최소화)
                 if _try_cookie_login(driver, a):
                     _log(log_fn, f'[{a.login_id}] 쿠키 로그인')
+                elif _esm_login(driver, a.login_id, a.password_enc):
+                    _log(log_fn, f'[{a.login_id}] 풀 로그인')
+                    _save_cookies(driver, a)
                 else:
-                    if not _esm_login(driver, a.login_id, a.password_enc):
+                    # 로그인 실패 — origin_id 있으면 마스터 세션 대기, 없으면 건너뜀
+                    if a.gmarket_origin_id:
+                        _log(log_fn, f'[{a.login_id}] 로그인 실패 → 마스터({a.gmarket_origin_id}) 세션 대기')
+                        login_failed_subs.append(a)
+                    else:
                         _log(log_fn, f'[{a.login_id}] 로그인 실패 — 건너뜀')
                         failed += 1
-                        continue
-                    _save_cookies(driver, a)
-                acc_rows = acc_ad = 0
-                # 지마켓·옥션을 각 페이지/엔드포인트로 분리 수집(searchAccount=평문 login_id).
-                for page_url, endpoint, market, norm in (
-                    (GMKT_PAGE, 'GmktSellBalanceUseListSearch', 'gmarket', _norm_gmkt),
-                    (IAC_PAGE, 'IacSellBalanceUseListSearch', 'auction', _norm_iac),
-                ):
-                    driver.get(page_url)
-                    time.sleep(4)
-                    for sdt, edt in months:
-                        rows, ok = _fetch_month(driver, a.login_id, endpoint, str(sdt), str(edt), log_fn, norm)
-                        if not ok:
-                            continue   # 실패월은 삭제·저장 안 함(기존 보존)
-                        n = _save(a.login_id, market, sdt, edt, rows)
-                        ad = sum(1 for r in rows if _classify(r.get('comment')) in AD_TYPES)
-                        acc_rows += n
-                        acc_ad += ad
-                        _log(log_fn, f'[{a.login_id}] {market} {sdt:%Y-%m}: {n}건 (광고 {ad})')
-                        time.sleep(0.5)
+                    continue
+                acc_rows, acc_ad = _collect_account_months(driver, a.login_id, months, log_fn)
                 total_rows += acc_rows
                 ad_rows += acc_ad
                 done += 1
                 _log(log_fn, f'[{a.login_id}] 완료 — 거래 {acc_rows}건 (광고 {acc_ad}건)')
+                # 이 계정이 마스터인 로그인 실패 서브들 즉시 수집
+                pending = [s for s in login_failed_subs if s.gmarket_origin_id == a.login_id]
+                for sub in pending:
+                    login_failed_subs.remove(sub)
+                    _log(log_fn, f'[{sub.login_id}] 서브 수집 (마스터 세션)...')
+                    try:
+                        s_rows, s_ad = _collect_account_months(driver, sub.login_id, months, log_fn)
+                        total_rows += s_rows
+                        ad_rows += s_ad
+                        _log(log_fn, f'[{sub.login_id}] 서브 완료 — 거래 {s_rows}건 (광고 {s_ad}건)')
+                    except Exception as se:
+                        _log(log_fn, f'[{sub.login_id}] 서브 오류: {str(se)[:120]}')
             except Exception as e:
                 _log(log_fn, f'[{a.login_id}] 오류: {str(e)[:140]}')
                 failed += 1
             time.sleep(3)
+        # 마스터가 루프에 없거나 순서상 먼저 온 서브 계정 — 마스터 재로그인 후 수집
+        if login_failed_subs:
+            master_map = {a.login_id: a for a in accounts}
+            processed_masters = set()
+            for sub in login_failed_subs:
+                mid = sub.gmarket_origin_id
+                ma = master_map.get(mid)
+                if not ma:
+                    _log(log_fn, f'[{sub.login_id}] 마스터({mid}) 미발견 — 건너뜀')
+                    failed += 1
+                    continue
+                if mid not in processed_masters:
+                    _log(log_fn, f'[{mid}] 마스터 재로그인 (미수집 서브 처리)...')
+                    driver.delete_all_cookies()
+                    if not (_try_cookie_login(driver, ma) or _esm_login(driver, ma.login_id, ma.password_enc)):
+                        _log(log_fn, f'[{mid}] 재로그인 실패 — 서브 건너뜀')
+                        failed += sum(1 for s in login_failed_subs if s.gmarket_origin_id == mid)
+                        continue
+                    processed_masters.add(mid)
+                _log(log_fn, f'[{sub.login_id}] 서브 수집 (재로그인 마스터 세션)...')
+                try:
+                    s_rows, s_ad = _collect_account_months(driver, sub.login_id, months, log_fn)
+                    total_rows += s_rows
+                    ad_rows += s_ad
+                    _log(log_fn, f'[{sub.login_id}] 서브 완료 — 거래 {s_rows}건')
+                except Exception as e:
+                    _log(log_fn, f'[{sub.login_id}] 오류: {str(e)[:120]}')
+                    failed += 1
     finally:
         try:
             if driver:
