@@ -311,6 +311,90 @@ def _fetch_ad_cost_screen(driver, start_date: date, end_date: date, log_fn=None)
 # 메인 크롤링 함수
 # ──────────────────────────────────────────
 
+def fetch_products(driver, log_fn=None):
+    """
+    스마트스토어 내부 API로 전체 상품 목록 수집.
+    Returns: [{product_no, channel_product_no, name, sale_price, stock_quantity,
+               status_type, seller_management_code, category_id, product_image_url}, ...]
+    """
+    log = log_fn or logger.info
+
+    driver.get('https://sell.smartstore.naver.com/#/products/manage')
+    time.sleep(4)
+
+    results = []
+    page = 1
+    size = 100
+
+    while True:
+        url = (
+            f'https://sell.smartstore.naver.com/v2/channel-products'
+            f'?page={page}&size={size}'
+        )
+        data = _execute_fetch(driver, url)
+
+        if not data:
+            # 폴백: origin-products API 시도
+            url2 = (
+                f'https://sell.smartstore.naver.com/v2/products/search'
+                f'?page={page}&size={size}'
+            )
+            data = _execute_fetch(driver, url2)
+
+        if not data:
+            log(f'[스마트] 상품 API 응답 없음 (page {page})')
+            break
+
+        contents = data.get('contents', data.get('data', data.get('content', [])))
+        if not contents:
+            break
+
+        for item in contents:
+            # channel-products 구조
+            if 'channelProductNo' in item:
+                results.append({
+                    'product_no': str(item.get('originProductNo', '') or item.get('channelProductNo', '')),
+                    'channel_product_no': str(item.get('channelProductNo', '') or ''),
+                    'name': (item.get('name', '') or '')[:500],
+                    'sale_price': int(item.get('salePrice', 0) or 0),
+                    'stock_quantity': int(item.get('stockQuantity', 0) or 0),
+                    'status_type': item.get('statusType', '') or '',
+                    'seller_management_code': (item.get('sellerManagementCode', '') or '')[:200],
+                    'category_id': str(item.get('categoryId', '') or ''),
+                    'product_image_url': '',
+                })
+            else:
+                # origin-products 구조
+                ch = (item.get('channelProducts', []) or [{}])[0] if item.get('channelProducts') else {}
+                img = ''
+                ri = ch.get('representativeImage')
+                if isinstance(ri, dict):
+                    img = ri.get('url', '')
+                results.append({
+                    'product_no': str(item.get('originProductNo', '') or ''),
+                    'channel_product_no': str(ch.get('channelProductNo', '') or ''),
+                    'name': ((ch.get('name') or item.get('name') or '') or '')[:500],
+                    'sale_price': int(ch.get('salePrice', 0) or 0),
+                    'stock_quantity': int(ch.get('stockQuantity', 0) or 0),
+                    'status_type': ch.get('statusType', '') or '',
+                    'seller_management_code': (ch.get('sellerManagementCode', '') or '')[:200],
+                    'category_id': str(ch.get('wholeCategoryId', '') or ''),
+                    'product_image_url': img,
+                })
+
+        total_pages = data.get('totalPages', 1) or 1
+        total_elements = data.get('totalElements', len(results))
+        log(f'[스마트] 상품 page {page}/{total_pages} — {len(results)}/{total_elements}건')
+
+        if page >= total_pages or len(results) >= total_elements:
+            break
+        page += 1
+        time.sleep(1)
+
+    log(f'[스마트] 상품 수집 완료: {len(results)}건')
+    return results
+
+
 def crawl_smartstore_account(driver, account, start_date: date, end_date: date, log_fn=None):
     """
     단일 계정 크롤링.

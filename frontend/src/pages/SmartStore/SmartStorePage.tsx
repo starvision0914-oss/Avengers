@@ -3,8 +3,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { RefreshCw, Settings, TrendingUp, ShoppingBag, DollarSign, Target, Lock } from 'lucide-react';
 import { useTheme } from '../../hooks/useTheme';
 import {
-  getAccounts, getDashboard,
-  type SmartStoreAccount, type DashboardResponse, type AccountRow,
+  getAccounts, getDashboard, getProductStats,
+  type SmartStoreAccount, type DashboardResponse, type AccountRow, type ProductStats,
 } from '../../api/smartstore';
 import AccountSettingsModal from './AccountSettingsModal';
 
@@ -33,6 +33,7 @@ export default function SmartStorePage() {
   const [accounts, setAccounts] = useState<SmartStoreAccount[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [dash, setDash] = useState<DashboardResponse | null>(null);
+  const [prodStats, setProdStats] = useState<ProductStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
@@ -52,12 +53,16 @@ export default function SmartStorePage() {
   const loadDash = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await getDashboard({
-        start: dateStart,
-        end: dateEnd,
-        account_id: selectedIds.length > 0 ? selectedIds : undefined,
-      });
+      const [data, ps] = await Promise.all([
+        getDashboard({
+          start: dateStart,
+          end: dateEnd,
+          account_id: selectedIds.length > 0 ? selectedIds : undefined,
+        }),
+        getProductStats(),
+      ]);
       setDash(data);
+      setProdStats(ps);
     } finally {
       setLoading(false);
     }
@@ -285,6 +290,59 @@ export default function SmartStorePage() {
               계정설정에서 비밀번호 입력 →
             </button>
           </div>
+        </div>
+      )}
+
+      {/* 상품 현황 */}
+      {prodStats && (
+        <div className={`${card} border rounded-xl p-4 mb-4`}>
+          <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <ShoppingBag size={16} className="text-[#03C75A]" />
+            상품 현황
+            <span className={`text-xs ${text2}`}>(총 {fmt(prodStats.total)}개)</span>
+          </h3>
+          {prodStats.total > 0 ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* 상태별 */}
+              <div>
+                <div className={`text-xs ${text2} mb-2`}>판매 상태별</div>
+                <div className="space-y-1.5">
+                  {Object.entries(prodStats.by_status).map(([status, cnt]) => {
+                    const pct = Math.round(cnt / prodStats.total * 100);
+                    const color = status === 'SALE' ? '#03C75A' : status === 'SUSPENSION' ? '#ef4444' : '#f97316';
+                    const label: Record<string, string> = { SALE: '판매중', SUSPENSION: '판매중지', OUTOFSTOCK: '품절', WAIT: '승인대기', PROHIBITION: '판매금지' };
+                    return (
+                      <div key={status}>
+                        <div className="flex justify-between text-xs mb-0.5">
+                          <span>{label[status] || status}</span>
+                          <span style={{ color }}>{fmt(cnt)}개 ({pct}%)</span>
+                        </div>
+                        <div className={`h-1.5 rounded-full ${dark ? 'bg-[#2d3144]' : 'bg-gray-100'}`}>
+                          <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* 계정별 */}
+              <div>
+                <div className={`text-xs ${text2} mb-2`}>계정별 상품수</div>
+                <div className="space-y-1">
+                  {prodStats.by_account.slice(0, 8).map(row => (
+                    <div key={row.account_id} className="flex items-center justify-between text-xs">
+                      <span className={dark ? 'text-gray-300' : 'text-gray-600'}>{row.account_name}</span>
+                      <span className="font-medium text-[#03C75A]">{fmt(row.count)}개</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className={`text-sm ${text2} text-center py-4`}>
+              상품 없음 — 01:00 cron 또는 수동 크롤링 후 표시됩니다
+            </div>
+          )}
         </div>
       )}
 

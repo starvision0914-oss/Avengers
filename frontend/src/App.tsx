@@ -40,6 +40,7 @@ import SalesMatchPage from './pages/Sales/SalesMatchPage';
 import TaxVatPage from './pages/Tax/TaxVatPage';
 import SmsWidget from './components/SmsWidget';
 import SmartStorePage from './pages/SmartStore/SmartStorePage';
+import NaverBlogPage from './pages/NaverBlog/NaverBlogPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Navigate to="/login" replace />;
@@ -63,7 +64,7 @@ export default function App() {
           <Route path="product-processing" element={<OwnerclanProductsPage workspace="processing" />} />
           <Route path="myproduct" element={<ElevenMyProductsPage />} />
           <Route path="myproduct-wholesale" element={<MyProductPage />} />
-          <Route path="keyword" element={<KeywordProductsPage />} />
+          <Route path="keyword" element={<Navigate to="/blog" replace />} />
           <Route path="eleven-my" element={<ElevenMyProductsPage />} />
           <Route path="gmarket-my" element={<GmarketMyProductsPage />} />
           <Route path="gmarket" element={<GmarketDashboard />} />
@@ -92,6 +93,8 @@ export default function App() {
           <Route path="sms" element={<SmsManagePage />} />
           <Route path="lotto" element={<LottoPage />} />
           <Route path="smartstore" element={<SmartStorePage />} />
+          <Route path="naver-blog" element={<Navigate to="/blog" replace />} />
+          <Route path="blog" element={<NaverBlogPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

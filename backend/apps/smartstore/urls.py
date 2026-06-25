@@ -5,5 +5,6 @@ urlpatterns = [
     path('accounts/', views.AccountListView.as_view()),
     path('accounts/<int:pk>/', views.AccountDetailView.as_view()),
     path('dashboard/', views.DashboardView.as_view()),
+    path('product-stats/', views.ProductStatsView.as_view()),
     path('crawl-status/', views.CrawlStatusView.as_view()),
 ]

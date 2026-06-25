@@ -63,6 +63,39 @@ class SmartStoreAdCost(models.Model):
         indexes = [models.Index(fields=['account', 'date'])]
 
 
+class SmartStoreProduct(models.Model):
+    """스마트스토어 상품 목록 (내부 API 수집)"""
+    STATUS_CHOICES = [
+        ('SALE', '판매중'),
+        ('SUSPENSION', '판매중지'),
+        ('OUTOFSTOCK', '품절'),
+        ('WAIT', '승인대기'),
+        ('PROHIBITION', '판매금지'),
+    ]
+    account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='products')
+    product_no = models.CharField(max_length=100, help_text='originProductNo')
+    channel_product_no = models.CharField(max_length=100, blank=True, default='')
+    name = models.CharField(max_length=500)
+    sale_price = models.IntegerField(default=0)
+    stock_quantity = models.IntegerField(default=0)
+    status_type = models.CharField(max_length=50, default='')
+    seller_management_code = models.CharField(max_length=200, blank=True, default='')
+    category_id = models.CharField(max_length=100, blank=True, default='')
+    product_image_url = models.TextField(blank=True, default='')
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'smartstore_product'
+        unique_together = [('account', 'product_no')]
+        indexes = [
+            models.Index(fields=['account', 'status_type']),
+            models.Index(fields=['seller_management_code']),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.product_no})"
+
+
 class SmartStoreCrawlLog(models.Model):
     STATUS_CHOICES = [('running', '실행중'), ('done', '완료'), ('error', '오류')]
     account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='crawl_logs', null=True)

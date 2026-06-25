@@ -147,17 +147,17 @@ def _otp_from_db(since_ms):
 
 
 def _wait_for_otp_any(since_ms, timeout=180):
-    """OTP 대기 — 폰 알림(adb, USB) + 앱푸시 SMS(DB, USB불필요) 둘 다 매 루프 확인.
-    since_ms 이후 도착분만 인정. USB가 끊겨 adb가 죽어도 DB 경로로 OTP를 잡는다."""
+    """OTP 대기 — DB(smsApp 네트워크 푸시, USB불필요) 우선, 폰 알림(adb, USB) 보조.
+    since_ms 이후 도착분만 인정. USB 없이도 DB 경로만으로 인증 완료 가능."""
     start = time.time()
     while time.time() - start < timeout:
-        code = _otp_from_adb_notification(since_ms)   # 폰 알림(USB 필요)
-        if code:
-            logger.info(f'[OTP] 알림에서 추출: {code}')
-            return code
-        code = _otp_from_db(since_ms)                 # 앱푸시 SMS(USB 불필요)
+        code = _otp_from_db(since_ms)                 # 앱푸시 SMS(USB 불필요) — 주경로
         if code:
             logger.info(f'[OTP] DB(앱푸시)에서 추출: {code}')
+            return code
+        code = _otp_from_adb_notification(since_ms)   # 폰 알림(USB 연결 시 보조)
+        if code:
+            logger.info(f'[OTP] 알림에서 추출: {code}')
             return code
         time.sleep(3)
     return None
@@ -517,11 +517,9 @@ def _do_login(driver, login_id, password):
                 logger.error(f'[11st:{login_id}] OTP 발송 단계 오류: {e}')
                 return False
 
-            # 3) OTP 대기 — 폰 알림(RCS/푸시) 우선 + SMS 보조 (OTP가 문자함에 안 들어와서 알림에서 읽음)
-            logger.info(f'[11st:{login_id}] OTP 대기 (폰 알림 우선, 최대 180초)...')
+            # 3) OTP 대기 — DB(smsApp 네트워크 푸시) 우선, USB 없이도 인증 가능
+            logger.info(f'[11st:{login_id}] OTP 대기 (DB+adb 병행, 최대 180초)...')
             otp_code = _wait_for_otp_any(otp_since_ms, timeout=180)
-            if not otp_code:
-                otp_code = _wait_for_otp_redis(timeout=60)   # 최후 보조: 문자함
             if not otp_code:
                 logger.warning(f'[11st:{login_id}] OTP 미수신 timeout')
                 return False

@@ -17,7 +17,7 @@ export interface TaxVatSummary {
   vat_payable: number;
 }
 
-export async function getTaxVatSummary(year = 2026): Promise<TaxVatSummary> {
-  const { data } = await api.get('/cpc/tax/vat/', { params: { year } });
+export async function getTaxVatSummary(year = 2026, platform = '11st'): Promise<TaxVatSummary> {
+  const { data } = await api.get('/cpc/tax/vat/', { params: { year, platform } });
   return data;
 }

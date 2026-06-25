@@ -3,7 +3,7 @@ from django.db.models import Sum, Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from .models import SmartStoreAccount, SmartStoreSales, SmartStoreAdCost, SmartStoreCrawlLog
+from .models import SmartStoreAccount, SmartStoreSales, SmartStoreAdCost, SmartStoreProduct, SmartStoreCrawlLog
 
 
 # ──── 계정 ────
@@ -179,6 +179,34 @@ class DashboardView(APIView):
             'by_account': account_list,
             'daily': daily,
         })
+
+
+# ──── 상품 통계 ────
+
+class ProductStatsView(APIView):
+    def get(self, request):
+        account_id = request.query_params.get('account_id')
+        qs = SmartStoreProduct.objects.all()
+        if account_id:
+            qs = qs.filter(account_id=account_id)
+
+        from django.db.models import Count
+        stats = qs.values('status_type').annotate(cnt=Count('id'))
+        total = qs.count()
+        by_status = {r['status_type']: r['cnt'] for r in stats}
+
+        # 계정별
+        by_account = []
+        for row in SmartStoreProduct.objects.values('account_id').annotate(cnt=Count('id')):
+            acc = SmartStoreAccount.objects.filter(id=row['account_id']).values('display_name', 'store_name').first()
+            by_account.append({
+                'account_id': row['account_id'],
+                'account_name': (acc['display_name'] or acc['store_name']) if acc else str(row['account_id']),
+                'count': row['cnt'],
+            })
+        by_account.sort(key=lambda x: -x['count'])
+
+        return Response({'total': total, 'by_status': by_status, 'by_account': by_account})
 
 
 # ──── 크롤 상태 ────

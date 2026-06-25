@@ -162,26 +162,31 @@ class ProfitDashboardView(views.APIView):
         ).values_list('latest_id', flat=True)
         snaps = {s.gmarket_id: s for s in GmarketDepositSnapshot.objects.filter(id__in=latest_ids)}
 
-        # 2) 이번 달 광고비 합계 — 거래내역(GmarketCostHistory) use_date 기준 CPC+AI매출업 합산.
-        #    스냅샷 total_usage는 '당일 실시간 누적'이라 자정 리셋 + 크롤 시각 의존(8~19시만)으로
-        #    월합산 시 실제의 ~1/8만 잡혀 부정확 → 거래원장으로 집계(멱등·정확).
-        #    스냅샷은 today_*(실시간 당일사용액)·잔액 표시용으로만 사용.
+        # 2) 이번 달 + 오늘 광고비 — 거래내역(GmarketCostHistory) use_date 기준 CPC+AI매출업 합산.
         from .models import GmarketCostHistory
         month_cost_map = {}
+        today_cost_map = {}
         for r in (GmarketCostHistory.objects
                   .filter(use_date__gte=month_start, use_date__lte=today,
                           transaction_type__in=['CPC', 'AI매출업'])
-                  .exclude(comment__icontains='판매예치금')   # 판매예치금 송금 등 비광고 차감 제외
-                  .values('seller_id', 'transaction_type')
+                  .exclude(comment__icontains='판매예치금')
+                  .values('seller_id', 'transaction_type', 'use_date')
                   .annotate(amt=Sum('amount'))):
             gid = r['seller_id']
             m = month_cost_map.setdefault(gid, {'cpc': 0, 'ai': 0, 'total': 0})
-            spend = abs(r['amt'] or 0)   # amount는 차감(음수) → 절대값이 광고비
+            spend = abs(r['amt'] or 0)
             if r['transaction_type'] == 'CPC':
                 m['cpc'] += spend
-            else:  # AI매출업
+            else:
                 m['ai'] += spend
             m['total'] += spend
+            if r['use_date'] == today:
+                t = today_cost_map.setdefault(gid, {'cpc': 0, 'ai': 0, 'total': 0})
+                if r['transaction_type'] == 'CPC':
+                    t['cpc'] += spend
+                else:
+                    t['ai'] += spend
+                t['total'] += spend
 
         # 3) AI 상태
         ai_map = {}
@@ -234,10 +239,12 @@ class ProfitDashboardView(views.APIView):
             gid = acct.login_id
             snap = snaps.get(gid)
             mc = month_cost_map.get(gid, {'cpc': 0, 'ai': 0, 'total': 0})
+            tc = today_cost_map.get(gid, {})
 
-            today_cpc = snap.gmarket_cpc if snap else 0
-            today_ai = snap.ai_usage if snap else 0
-            today_ad = snap.total_usage if snap else 0
+            # 거래내역 우선, 없으면 스냅샷 폴백 (스냅샷은 수집 시각 이후 광고비 누락 가능)
+            today_cpc = tc.get('cpc') or (snap.gmarket_cpc if snap else 0)
+            today_ai  = tc.get('ai')  or (snap.ai_usage if snap else 0)
+            today_ad  = tc.get('total') or (snap.total_usage if snap else 0)
             balance = snap.total_balance if snap else 0
 
             row = {
@@ -922,15 +929,44 @@ class OverviewView(views.APIView):
             if (s.get('cpc_spend', 0) or 0) == 0:
                 zero_ad.append({'platform': '11st', 'seller': s.get('seller_alias')})
 
+        # ── 스마트스토어 집계 ──
+        from apps.smartstore.models import (
+            SmartStoreSales as SSSales, SmartStoreAdCost as SSAdCost,
+            SmartStoreAccount as SSAccount,
+        )
+        from django.db.models import Sum as _Sum
+        ss_accounts = SSAccount.objects.filter(is_active=True).count()
+        ss_sales_agg = SSSales.objects.filter(
+            date__gte=start_d, date__lte=end_d
+        ).aggregate(settlement=_Sum('settlement_amount'), orders=_Sum('order_count'))
+        ss_ad_agg = SSAdCost.objects.filter(
+            date__gte=start_d, date__lte=end_d
+        ).aggregate(cost=_Sum('cost'))
+
+        ss_settlement = ss_sales_agg['settlement'] or 0
+        ss_orders = ss_sales_agg['orders'] or 0
+        ss_ad = ss_ad_agg['cost'] or 0
+        ss_net = ss_settlement - ss_ad
+
+        if ss_settlement > 0 or ss_ad > 0:
+            markets.append({
+                'key': 'smartstore', 'label': '스마트스토어', 'color': '#03c75a',
+                'ad_cost': ss_ad, 'cpc': ss_ad, 'ai': 0,
+                'balance': 0,
+                'accounts': ss_accounts, 'normal': ss_accounts, 'failed': 0,
+                'sales': ss_settlement, 'profit': ss_settlement, 'net_after_ad': ss_net,
+                'orders': ss_orders, 'last_collected': None,
+            })
+
         totals = {
-            'ad_cost': g_ad + e_ad,
+            'ad_cost': g_ad + e_ad + ss_ad,
             'balance': g_bal + e_bal,
-            'accounts': g_total + e_total,
-            'normal': g_normal + e_normal,
+            'accounts': g_total + e_total + ss_accounts,
+            'normal': g_normal + e_normal + ss_accounts,
             'failed': g_failed + e_failed,
-            'sales': g_sales + e_sales,
-            'profit': g_profit + e_profit,                 # 상품순익(광고 전, 양 마켓 동일기준)
-            'net_after_ad': g_net + e_net,                 # 순수익(광고+서버 차감 후)
+            'sales': g_sales + e_sales + ss_settlement,
+            'profit': g_profit + e_profit + ss_settlement,
+            'net_after_ad': g_net + e_net + ss_net,
         }
 
         return Response({
@@ -3279,28 +3315,20 @@ class GmarketDashboardView(views.APIView):
                 v['cpc'] += _cpc; v['ai'] += _ai; v['days'] += 1
             if _d > _cut_a_by[_gid]:
                 v['auction'] += _au
-        # 광고비 — 판매예치금 거래내역(GmarketCostHistory, market 태그)이 정확한 출처.
-        # (광고센터 스냅샷은 '당일 소진액'이라 기간 누적이 비어 0으로 나왔음 → 거래내역으로 대체)
-        # 지마켓(market='gmarket') CPC/AI/서버 + 옥션(market='auction') 별도 집계.
-        # market 파라미터로 지마켓/옥션 전환(위에서 이미 해석). 'auction'키 = 반대(他) 마켓 합계.
+        # 광고비 — ESM 계정은 지마켓/옥션 광고비가 같은 잔액에서 차감되어 market 태그가
+        # 'gmarket'/'auction' 혼재 기록됨. market 필터 대신 seller_id(계정) 기반 전체 합산.
         other = 'auction' if market == 'gmarket' else 'gmarket'
+        acct_ids = [a.login_id for a in accts]
         TYPE_KEY = {'CPC': 'cpc', 'AI매출업': 'ai', '서버비용': 'server'}
         cost = defaultdict(lambda: {'cpc': 0, 'ai': 0, 'server': 0, 'auction': 0, 'cnt': 0})
         for r in (GmarketCostHistory.objects
-                  .filter(market=market, transaction_type__in=list(TYPE_KEY.keys()),
+                  .filter(seller_id__in=acct_ids,
+                          transaction_type__in=list(TYPE_KEY.keys()),
                           use_date__gte=d0, use_date__lte=d1)
-                  .exclude(comment__icontains='판매예치금')   # 판매예치금 송금 등 비광고 차감 제외
+                  .exclude(comment__icontains='판매예치금')
                   .values('seller_id', 'transaction_type').annotate(spend=Sum('amount'), cnt=Count('id'))):
             c = cost[r['seller_id']]
             c[TYPE_KEY[r['transaction_type']]] += abs(r['spend'] or 0)
-            c['cnt'] += r['cnt']
-        for r in (GmarketCostHistory.objects
-                  .filter(market=other, transaction_type__in=list(TYPE_KEY.keys()),
-                          use_date__gte=d0, use_date__lte=d1)
-                  .exclude(comment__icontains='판매예치금')   # 판매예치금 송금 등 비광고 차감 제외
-                  .values('seller_id').annotate(spend=Sum('amount'), cnt=Count('id'))):
-            c = cost[r['seller_id']]
-            c['auction'] += abs(r['spend'] or 0)   # 他 마켓 광고비 합계
             c['cnt'] += r['cnt']
         # 계정별 상품수
         prod = {r['account__login_id']: r['n'] for r in (
@@ -3688,16 +3716,22 @@ class ElevenBlockClearView(views.APIView):
 
 
 class TaxVatSummaryView(views.APIView):
-    """11번가 부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률"""
+    """부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률. platform=11st|gmarket"""
     def get(self, request):
+        from django.db.models import Q
         from apps.cpc.models import TaxVatMonthly, CrawlerAccount
         year = int(request.query_params.get('year') or 2026)
-        qs = TaxVatMonthly.objects.filter(platform='11st', year=year)
-        # 셀러명 앞 3글자로 그룹 합산 (예: 스타코1/2/3 → 스타코) + 그룹별 대표 아이디(login_id)
+        platform = request.query_params.get('platform', '11st')
+        qs = TaxVatMonthly.objects.filter(platform=platform, year=year)
         groups = {}
         monthly_totals = {}
         for r in qs.values('login_id', 'seller_name', 'month').annotate(taxable=Sum('taxable_sales')):
-            key = (r['seller_name'] or '?')[:3]
+            if platform == '11st':
+                # 11번가: 셀러명 앞 3글자로 그룹 합산 (스타코1/2/3 → 스타코)
+                key = (r['seller_name'] or '?')[:3]
+            else:
+                # 지마켓: seller_name을 그대로 표시 (login_id를 fallback)
+                key = r['seller_name'] or r['login_id']
             g = groups.setdefault(key, {'group': key, 'months': {}, 'total': 0, '_members': {}})
             g['months'][str(r['month'])] = g['months'].get(str(r['month']), 0) + r['taxable']
             g['total'] += r['taxable']
@@ -3705,16 +3739,22 @@ class TaxVatSummaryView(views.APIView):
             monthly_totals[str(r['month'])] = monthly_totals.get(str(r['month']), 0) + r['taxable']
         for g in groups.values():
             members = g.pop('_members')
-            # 대표 아이디 = 그룹 내 과세매출 최대 계정
             g['rep_login_id'] = max(members.items(), key=lambda x: x[1])[0] if members else ''
             g['member_count'] = len(members)
         accounts = sorted(groups.values(), key=lambda x: -x['total'])
-        target = CrawlerAccount.objects.filter(platform='11st', is_active=True).exclude(api_key='').count()
+        if platform == '11st':
+            target = CrawlerAccount.objects.filter(platform='11st', is_active=True).exclude(api_key='').count()
+        else:
+            # 지마켓: 마스터계정 수 (서브 제외)
+            target = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).filter(
+                Q(gmarket_origin_id__isnull=True) | Q(gmarket_origin_id='')
+            ).count()
         collected = qs.values('login_id').distinct().count()
         last = qs.order_by('-collected_at').first()
         grand = sum(monthly_totals.values())
         return Response({
             'year': year,
+            'platform': platform,
             'progress': {
                 'collected': collected, 'target': target,
                 'last_collected_at': last.collected_at.isoformat() if last else None,
@@ -3797,7 +3837,11 @@ class AllMallProfitView(views.APIView):
         st11_ad = abs(ElevenCostHistory.objects.filter(
             transaction_datetime__gte=_s, transaction_datetime__lt=_e,
             transaction_type='CPC', amount__lt=0).aggregate(s=Sum('amount'))['s'] or 0)
-        ad_map = {'gmarket': ad.get('gmarket', 0), 'auction': ad.get('auction', 0), '11st': st11_ad}
+        # 스마트스토어 광고비 (SmartStoreAdCost)
+        from apps.smartstore.models import SmartStoreAdCost as _SSAdCost
+        _ss_ad = _SSAdCost.objects.filter(date__gte=ms, date__lte=me).aggregate(s=Sum('cost'))['s'] or 0
+        ad_map = {'gmarket': ad.get('gmarket', 0), 'auction': ad.get('auction', 0),
+                  '11st': st11_ad, 'smartstore': _ss_ad}
 
         # 3) 플랫폼 행 구성
         LABELS = {'gmarket': '지마켓', 'auction': '옥션', '11st': '11번가',

@@ -75,3 +75,16 @@ export async function getDashboard(params: {
   const { data } = await api.get<DashboardResponse>('/smartstore/dashboard/', { params });
   return data;
 }
+
+export interface ProductStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_account: { account_id: number; account_name: string; count: number }[];
+}
+
+export async function getProductStats(account_id?: number): Promise<ProductStats> {
+  const { data } = await api.get<ProductStats>('/smartstore/product-stats/', {
+    params: account_id ? { account_id } : {},
+  });
+  return data;
+}

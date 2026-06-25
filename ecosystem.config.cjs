@@ -10,6 +10,8 @@ module.exports = {
       interpreter: '/usr/bin/python3',
       env: {
         PYTHONPATH: '/home/rejoice888/.local/lib/python3.12/site-packages',
+        NAVER_CLIENT_ID: 'ZB7fEbSJwUrWryyYoUl_',
+        NAVER_CLIENT_SECRET: '841MnNgeuY',
       },
     },
     {

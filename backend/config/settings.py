@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'apps.lotto',
     'apps.speedgo',
     'apps.smartstore',
+    'apps.naver_blog',
 ]
 
 MIDDLEWARE = [

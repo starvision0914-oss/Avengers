@@ -13,6 +13,7 @@ const navItems = [
   { to: '/gmarket-my', icon: Store, label: '지마켓 상품' },
   { to: '/gmarket-roas', icon: TrendingUp, label: '지마켓/옥션 ROAS' },
   { to: '/smartstore', icon: ShoppingCart, label: '스마트스토어' },
+  { to: '/blog', icon: MessageSquare, label: '블로그' },
   { to: '/st11', icon: Store, label: '11번가' },
   { to: '/st11-killlist', icon: TrendingUp, label: '11번가 광고킬' },
   { to: '/cpc', icon: BarChart3, label: 'CPC 광고비' },
@@ -31,7 +32,6 @@ const navItems = [
   { to: '/telegram', icon: MessageSquare, label: '텔레그램' },
   { to: '/ad-settings', icon: Sliders, label: '광고 설정' },
   { to: '/settings', icon: Settings, label: '설정' },
-  { to: '/keyword', icon: Tags, label: '키워드추출기' },
 ];
 
 export default function Sidebar() {
