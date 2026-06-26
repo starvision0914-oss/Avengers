@@ -23,11 +23,12 @@ PAGE_SIZE = 500
 SELL_STATUS = {'11': '판매중', '21': '판매중', '22': '판매중지', '23': '품절', '24': '판매종료', '25': '판매불가'}
 
 # 같은 origin(iframe=item.esmplus.com)에서 상품검색 API 호출
+# sellStatus 인자(3번째): JS 배열 문자열 — [] = 판매중(11,21), [22] = 판매중지, [25] = 판매불가
 _SEARCH_JS = (
-    "var cb=arguments[arguments.length-1];var idx=arguments[0];var size=arguments[1];"
+    "var cb=arguments[arguments.length-1];var idx=arguments[0];var size=arguments[1];var ss=arguments[2]||[];"
     "fetch('/api/ea/goods/search',{method:'POST',credentials:'include',"
     "headers:{'Content-Type':'application/json'},"
-    "body:JSON.stringify({query:{goodsIds:'',keyword:'',sellStatus:[],category:{},"
+    "body:JSON.stringify({query:{goodsIds:'',keyword:'',sellStatus:ss,category:{},"
     "registrationDate:{},shipping:{},additionalService:[]},pageIndex:idx,pageSize:size})})"
     ".then(function(r){return r.text();}).then(function(t){cb(t);}).catch(function(e){cb('ERR:'+e);});"
 )
@@ -117,14 +118,14 @@ def _enter_goods_iframe(driver):
     return False
 
 
-def _fetch_all_goods(driver, eid, log_fn):
-    """상품검색 API를 페이지 단위로 호출해 전체 상품 수집."""
+def _fetch_goods_by_status(driver, eid, log_fn, sell_status_filter):
+    """sellStatus 필터별 상품 페이징 수집. sell_status_filter: [] = 판매중, [22] = 판매중지, [25] = 판매불가."""
     items = []
     page = 1
     while page <= 500:
-        txt = driver.execute_async_script(_SEARCH_JS, page, PAGE_SIZE)
+        txt = driver.execute_async_script(_SEARCH_JS, page, PAGE_SIZE, sell_status_filter)
         if not txt or txt.startswith('ERR:'):
-            _log(log_fn, f'[{eid}] API 오류 p{page}: {str(txt)[:80]}')
+            _log(log_fn, f'[{eid}] API 오류 p{page} filter={sell_status_filter}: {str(txt)[:80]}')
             break
         try:
             data = json.loads(txt).get('data') or {}
@@ -135,11 +136,31 @@ def _fetch_all_goods(driver, eid, log_fn):
         if not batch:
             break
         items.extend(batch)
-        _log(log_fn, f'[{eid}] p{page}: +{len(batch)} (누적 {len(items)})')
         if len(batch) < PAGE_SIZE:
             break
         page += 1
         time.sleep(0.6)
+    return items
+
+
+def _fetch_all_goods(driver, eid, log_fn):
+    """판매중 + 판매중지(22) + 판매불가(25) 를 각각 쿼리해 합산 반환.
+    sellStatus:[] = 판매중(11,21)만 반환, 판매중지/판매불가는 별도 쿼리 필요."""
+    # 판매중 (기본)
+    items = _fetch_goods_by_status(driver, eid, log_fn, [])
+    _log(log_fn, f'[{eid}] 판매중: {len(items)}개')
+
+    # 판매중지 (22) — 판매자가 직접 중지, 소수 예상
+    paused = _fetch_goods_by_status(driver, eid, log_fn, [22])
+    _log(log_fn, f'[{eid}] 판매중지: {len(paused)}개')
+    items.extend(paused)
+
+    # 판매불가 (25) — 플랫폼 차단, 계정당 20-30개 예상
+    unavail = _fetch_goods_by_status(driver, eid, log_fn, [25])
+    _log(log_fn, f'[{eid}] 판매불가: {len(unavail)}개')
+    items.extend(unavail)
+
+    _log(log_fn, f'[{eid}] 전체: {len(items)}개')
     return items
 
 

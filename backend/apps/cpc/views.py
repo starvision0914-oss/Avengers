@@ -241,10 +241,10 @@ class ProfitDashboardView(views.APIView):
             mc = month_cost_map.get(gid, {'cpc': 0, 'ai': 0, 'total': 0})
             tc = today_cost_map.get(gid, {})
 
-            # 거래내역 우선, 없으면 스냅샷 폴백 (스냅샷은 수집 시각 이후 광고비 누락 가능)
-            today_cpc = tc.get('cpc') or (snap.gmarket_cpc if snap else 0)
-            today_ai  = tc.get('ai')  or (snap.ai_usage if snap else 0)
-            today_ad  = tc.get('total') or (snap.total_usage if snap else 0)
+            # 거래내역 기반 — 스냅샷 제거(수집 시각 의존 오차 방지)
+            today_cpc = tc.get('cpc', 0)
+            today_ai  = tc.get('ai', 0)
+            today_ad  = tc.get('total', 0)
             balance = snap.total_balance if snap else 0
 
             row = {
@@ -363,6 +363,74 @@ class ProfitDashboardView(views.APIView):
         totals['eleven_month_net_profit'] = eleven_totals['month_net_profit']
         totals['eleven_count'] = eleven_totals['account_count']
 
+        # === 스마트스토어 데이터 ===
+        from apps.smartstore.models import (
+            SmartStoreSales as SSSales, SmartStoreAdCost as SSAdCost,
+            SmartStoreAccount as SSAccount, SmartStoreCrawlLog,
+        )
+        ss_accounts_qs = SSAccount.objects.filter(is_active=True).order_by('display_order')
+        ss_account_count = ss_accounts_qs.count()
+
+        # 이번 달 판매통계 (계정별)
+        ss_sales_by_acc = {}
+        for r in SSSales.objects.filter(
+            date__gte=month_start, date__lte=today
+        ).values('account_id').annotate(
+            settlement=Sum('settlement_amount'),
+            orders=Sum('order_count'),
+            sales=Sum('sales_amount'),
+        ):
+            ss_sales_by_acc[r['account_id']] = r
+
+        # 이번 달 광고비 (계정별)
+        ss_ad_by_acc = {}
+        for r in SSAdCost.objects.filter(
+            date__gte=month_start, date__lte=today
+        ).values('account_id').annotate(cost=Sum('cost')):
+            ss_ad_by_acc[r['account_id']] = r['cost'] or 0
+
+        # 최근 크롤 시각 (계정별)
+        ss_last_crawl = {}
+        for r in SmartStoreCrawlLog.objects.filter(
+            status='done'
+        ).values('account_id').annotate(last=Max('ended_at')):
+            ss_last_crawl[r['account_id']] = r['last']
+
+        ss_sellers = []
+        ss_totals = {
+            'month_sales': 0, 'month_settlement': 0,
+            'month_ad': 0, 'month_net': 0, 'account_count': ss_account_count,
+        }
+        for acc in ss_accounts_qs:
+            aid = acc.id
+            sr = ss_sales_by_acc.get(aid, {})
+            settlement = sr.get('settlement') or 0
+            sales = sr.get('sales') or 0
+            orders = sr.get('orders') or 0
+            ad = ss_ad_by_acc.get(aid, 0)
+            net = settlement - ad
+            last = ss_last_crawl.get(aid)
+            ss_sellers.append({
+                'id': aid,
+                'display_name': acc.display_name,
+                'login_id': acc.login_id,
+                'month_sales': sales,
+                'month_settlement': settlement,
+                'month_orders': orders,
+                'month_ad': ad,
+                'month_net': net,
+                'last_crawled': last.isoformat() if last else None,
+            })
+            ss_totals['month_sales'] += sales
+            ss_totals['month_settlement'] += settlement
+            ss_totals['month_ad'] += ad
+            ss_totals['month_net'] += net
+
+        totals['ss_month_sales'] = ss_totals['month_settlement']
+        totals['ss_month_ad'] = ss_totals['month_ad']
+        totals['ss_month_net'] = ss_totals['month_net']
+        totals['ss_count'] = ss_account_count
+
         # 전체 광고비 합계 (지마켓 + 11번가) — 참고용
         totals['total_ad_all'] = totals['month_ad'] + eleven_totals['month_cost']
         # 지마켓 순이익 = 지마켓 상품순익(정산-수수료-원가) - 지마켓 광고비 (11번가와 동일 기준)
@@ -375,6 +443,8 @@ class ProfitDashboardView(views.APIView):
             'sellers': sellers,
             'eleven_sellers': eleven_sellers,
             'eleven_totals': eleven_totals,
+            'ss_sellers': ss_sellers,
+            'ss_totals': ss_totals,
         })
 
 
@@ -854,6 +924,8 @@ class OverviewView(views.APIView):
             end_d, start_d = today, today - timedelta(days=6)
         elif period in ('mtd', 'thismonth'):
             end_d, start_d = today, today.replace(day=1)   # 이번 달 1일~오늘
+        elif period in ('year', '1y', '365d'):
+            end_d, start_d = today, today - timedelta(days=364)
         else:                                   # 기본 = 어제(완성된 최신일)
             start_d = end_d = yesterday
         if end_d < start_d:
@@ -948,15 +1020,14 @@ class OverviewView(views.APIView):
         ss_ad = ss_ad_agg['cost'] or 0
         ss_net = ss_settlement - ss_ad
 
-        if ss_settlement > 0 or ss_ad > 0:
-            markets.append({
-                'key': 'smartstore', 'label': '스마트스토어', 'color': '#03c75a',
-                'ad_cost': ss_ad, 'cpc': ss_ad, 'ai': 0,
-                'balance': 0,
-                'accounts': ss_accounts, 'normal': ss_accounts, 'failed': 0,
-                'sales': ss_settlement, 'profit': ss_settlement, 'net_after_ad': ss_net,
-                'orders': ss_orders, 'last_collected': None,
-            })
+        markets.append({
+            'key': 'smartstore', 'label': '스마트스토어', 'color': '#03c75a',
+            'ad_cost': ss_ad, 'cpc': ss_ad, 'ai': 0,
+            'balance': 0,
+            'accounts': ss_accounts, 'normal': ss_accounts, 'failed': 0,
+            'sales': ss_settlement, 'profit': ss_settlement, 'net_after_ad': ss_net,
+            'orders': ss_orders, 'last_collected': None,
+        })
 
         totals = {
             'ad_cost': g_ad + e_ad + ss_ad,
@@ -3250,7 +3321,7 @@ class GmarketDashboardView(views.APIView):
         d0 = datetime.strptime(df, '%Y-%m-%d').date() if _re.match(r'^\d{4}-\d{2}-\d{2}$', df or '') else (d1 - timedelta(days=30))
 
         market = request.query_params.get('market') or 'gmarket'
-        if market not in ('gmarket', 'auction'):
+        if market not in ('gmarket', 'auction', 'combined'):
             market = 'gmarket'
         accts = list(CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
                      .order_by('display_order', 'login_id'))
@@ -3279,56 +3350,35 @@ class GmarketDashboardView(views.APIView):
                             'auction_cpc', 'collected_at').first())
             if last:
                 bal[s['gmarket_id']] = last
-        # 계정별 기간 CPC/AI — 광고센터 스냅샷은 '당일 소진액'(매일 리셋)이므로
-        # 기간 내 각 날짜의 '마지막 스냅샷'을 골라 일별로 합산해야 기간 총액이 됨.
+        # 광고비 — 판매예치금 거래내역(GmarketCostHistory)만 사용. 스냅샷 보충 제거.
+        # market('gmarket'/'auction')로 분리 집계해 탭별 정확한 값 표시.
         from collections import defaultdict
-        import pytz as _pytz
-        _kst = _pytz.timezone('Asia/Seoul')
-        _start = _kst.localize(datetime.combine(d0, datetime.min.time()))
-        _end = _kst.localize(datetime.combine(d1, datetime.min.time()) + timedelta(days=1))
-        _daily = {}  # (gid, KST일자) -> (collected_at, cpc, ai, auction)  그날 마지막값
-        for s in (GmarketDepositSnapshot.objects
-                  .filter(collected_at__gte=_start, collected_at__lt=_end)
-                  .values('gmarket_id', 'collected_at', 'gmarket_cpc', 'ai_usage', 'auction_cpc')):
-            ca = s['collected_at']
-            key = (s['gmarket_id'], ca.astimezone(_kst).date())
-            prev = _daily.get(key)
-            if prev is None or ca > prev[0]:
-                _daily[key] = (ca, s['gmarket_cpc'] or 0, s['ai_usage'] or 0, s['auction_cpc'] or 0)
-        # 거래내역(GmarketCostHistory)은 1~2일 지연 기록 → 최신 반영일 이후(미반영일)는
-        # 광고센터 당일소진액 스냅샷(계정별 그날 마지막값)으로 실시간 보충. 반영일까지는 거래내역만 써 중복 방지.
-        # ★ 차단선은 반드시 '계정별'로 — 전역이면 한 계정이 최신 거래내역을 받는 순간
-        #   아직 못 받은 다른 계정의 미수집일까지 보충이 꺼져 광고비가 갑자기 0으로 떨어짐(부분수집/백필 중 사고).
-        _def_cut = d0 - timedelta(days=1)
-        _cut_g_by = defaultdict(lambda: _def_cut)
-        for r in (GmarketCostHistory.objects.filter(market='gmarket', use_date__lte=d1)
-                  .values('seller_id').annotate(m=Max('use_date'))):
-            _cut_g_by[r['seller_id']] = r['m']
-        _cut_a_by = defaultdict(lambda: _def_cut)
-        for r in (GmarketCostHistory.objects.filter(market='auction', use_date__lte=d1)
-                  .values('seller_id').annotate(m=Max('use_date'))):
-            _cut_a_by[r['seller_id']] = r['m']
-        snap = defaultdict(lambda: {'cpc': 0, 'ai': 0, 'auction': 0, 'days': 0})
-        for (_gid, _d), (_ca, _cpc, _ai, _au) in _daily.items():
-            v = snap[_gid]
-            if _d > _cut_g_by[_gid]:
-                v['cpc'] += _cpc; v['ai'] += _ai; v['days'] += 1
-            if _d > _cut_a_by[_gid]:
-                v['auction'] += _au
-        # 광고비 — ESM 계정은 지마켓/옥션 광고비가 같은 잔액에서 차감되어 market 태그가
-        # 'gmarket'/'auction' 혼재 기록됨. market 필터 대신 seller_id(계정) 기반 전체 합산.
-        other = 'auction' if market == 'gmarket' else 'gmarket'
+        other = 'auction' if market == 'gmarket' else ('gmarket' if market == 'auction' else None)
         acct_ids = [a.login_id for a in accts]
-        TYPE_KEY = {'CPC': 'cpc', 'AI매출업': 'ai', '서버비용': 'server'}
-        cost = defaultdict(lambda: {'cpc': 0, 'ai': 0, 'server': 0, 'auction': 0, 'cnt': 0})
+        cost = defaultdict(lambda: {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0, 'server': 0, 'cnt': 0})
         for r in (GmarketCostHistory.objects
                   .filter(seller_id__in=acct_ids,
-                          transaction_type__in=list(TYPE_KEY.keys()),
+                          transaction_type__in=['CPC', 'AI매출업', '서버비용'],
                           use_date__gte=d0, use_date__lte=d1)
                   .exclude(comment__icontains='판매예치금')
-                  .values('seller_id', 'transaction_type').annotate(spend=Sum('amount'), cnt=Count('id'))):
+                  .values('seller_id', 'transaction_type', 'market')
+                  .annotate(spend=Sum('amount'), cnt=Count('id'))):
             c = cost[r['seller_id']]
-            c[TYPE_KEY[r['transaction_type']]] += abs(r['spend'] or 0)
+            amt = abs(r['spend'] or 0)
+            mkt = r['market']
+            tx = r['transaction_type']
+            if tx == 'CPC':
+                if mkt == 'auction':
+                    c['auct_cpc'] += amt
+                else:
+                    c['gmkt_cpc'] += amt
+            elif tx == 'AI매출업':
+                if mkt == 'auction':
+                    c['auct_ai'] += amt
+                else:
+                    c['ai'] += amt
+            elif tx == '서버비용':
+                c['server'] += amt
             c['cnt'] += r['cnt']
         # 계정별 상품수
         prod = {r['account__login_id']: r['n'] for r in (
@@ -3360,8 +3410,9 @@ class GmarketDashboardView(views.APIView):
                       .annotate(n=Count('id')).order_by('-n')):
                 name2lid.setdefault(_norm_shop(r['shop_name']), r['seller__seller_id'])
             # 고아 seller_id의 대표 상호 → 부모 login_id
+            _sale_platforms = ['gmarket', 'auction'] if market == 'combined' else [market]
             orphan_rep = {}
-            for r in (SalesRecord.objects.filter(platform=market, order_date__gte=d0, order_date__lte=d1)
+            for r in (SalesRecord.objects.filter(platform__in=_sale_platforms, order_date__gte=d0, order_date__lte=d1)
                       .exclude(seller__seller_id__in=active_lids)
                       .values('seller__seller_id', 'shop_name')
                       .annotate(n=Count('id')).order_by('-n')):
@@ -3369,7 +3420,7 @@ class GmarketDashboardView(views.APIView):
                 if sid and sid not in orphan_rep:
                     orphan_rep[sid] = name2lid.get(_norm_shop(r['shop_name']))
             for r in (SalesRecord.objects
-                      .filter(platform=market, order_date__gte=d0, order_date__lte=d1)
+                      .filter(platform__in=_sale_platforms, order_date__gte=d0, order_date__lte=d1)
                       .values('seller__seller_id')
                       .annotate(revenue=Sum('total_price'), profit=Sum('net_profit'), orders=Count('id'))):
                 sid = r['seller__seller_id']
@@ -3409,18 +3460,23 @@ class GmarketDashboardView(views.APIView):
         for a in accts:
             lid = a.login_id
             b = bal.get(lid) or {}
-            c = cost.get(lid) or {'cpc': 0, 'ai': 0, 'server': 0, 'auction': 0, 'cnt': 0}
-            sp = snap.get(lid) or {'cpc': 0, 'ai': 0, 'auction': 0, 'days': 0}
-            # CPC/AI/서버 = 판매예치금 거래내역(반영일까지) + 미반영일(오늘 등) 광고센터 스냅샷 실시간 보충
-            if market == 'gmarket':
-                cpc = c['cpc'] + sp['cpc']; ai = c['ai'] + sp['ai']
-                auction = c['auction'] + sp['auction']        # 他마켓(옥션) 실시간 보충
-            else:
-                cpc = c['cpc'] + sp['auction']; ai = c['ai']  # 옥션 CPC 실시간 보충
-                auction = c['auction'] + sp['cpc'] + sp['ai']  # 他마켓(지마켓) 실시간 보충
+            c = cost.get(lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0, 'server': 0, 'cnt': 0}
+            # 판매예치금 거래내역 기준, market별 분리
+            if market == 'combined':
+                cpc = c['gmkt_cpc'] + c['auct_cpc']
+                ai = c['ai'] + c['auct_ai']
+                auction = 0
+            elif market == 'gmarket':
+                cpc = c['gmkt_cpc']
+                ai = c['ai']
+                auction = c['auct_cpc']   # 참고용(他마켓)
+            else:  # auction
+                cpc = c['auct_cpc']
+                ai = c['auct_ai']
+                auction = c['gmkt_cpc'] + c['ai']   # 참고용(他마켓)
             server = c['server']
             spend = cpc + ai + server   # 광고비합계 = 현재 마켓(지마켓/옥션 토글)만 — 마켓별 완전 분리
-            pc = prod_mkt.get((lid, market), 0)   # 현재 마켓 상품수만 (지마켓/옥션 분리)
+            pc = (prod_mkt.get((lid, 'gmarket'), 0) + prod_mkt.get((lid, 'auction'), 0)) if market == 'combined' else prod_mkt.get((lid, market), 0)
             sl = sales.get(lid) or {'revenue': 0, 'profit': 0, 'orders': 0}
             revenue = sl['revenue']; profit = sl['profit']
             net_after_ad = profit - spend   # 실질순이익 = 순수익(매출-원가) - 광고비
@@ -3490,9 +3546,7 @@ class GmarketCostDetailView(views.APIView):
 
 
 class GmarketAdDailyView(views.APIView):
-    """지마켓 계정의 기간 광고비 '시간대별' 내역 — 판매예치금 거래원장(GmarketCostHistory)의
-    거래시각(traded_at)을 '시(時)' 단위로 묶어 그 시간대에 실제 나간 CPC/AI/서버 광고비를 표시.
-    합계(cpc_spend/ai_spend)는 대시보드 셀과 동일. 스냅샷이 아니라 실제 거래내역 기반이라 정확."""
+    """지마켓 계정의 기간 광고비 원본 거래내역 — GmarketCostHistory 행을 가공 없이 반환."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -3509,36 +3563,27 @@ class GmarketAdDailyView(views.APIView):
         d0 = datetime.strptime(df, '%Y-%m-%d').date() if _re.match(r'^\d{4}-\d{2}-\d{2}$', df or '') else (d1 - timedelta(days=30))
         TYPE_KEY = {'CPC': 'cpc', 'AI매출업': 'ai', '서버비용': 'server'}
         qs = (GmarketCostHistory.objects
-              .filter(market='gmarket', use_date__gte=d0, use_date__lte=d1,
+              .filter(use_date__gte=d0, use_date__lte=d1,
                       transaction_type__in=list(TYPE_KEY.keys()))
-              .exclude(comment__icontains='판매예치금'))   # 판매예치금 송금 등 비광고 차감 제외
+              .exclude(comment__icontains='판매예치금'))
         if sid:
             qs = qs.filter(seller_id=sid)
-        # 거래시각(traded_at)을 KST '시' 단위로 버킷팅 → 그 시간대 실제 발생 광고비
-        buckets = {}   # (date, hour) -> dict
-        for r in qs.values('traded_at', 'use_date', 'transaction_type', 'amount'):
+        rows = []
+        for r in qs.values('traded_at', 'use_date', 'transaction_type', 'use_type', 'comment', 'amount', 'seq', 'market').order_by('-use_date', '-traded_at'):
             ta = r['traded_at']
             if ta is not None:
-                lt = ta.astimezone(kst)
-                key = (lt.strftime('%Y-%m-%d'), lt.hour)
-                hh = '%02d:00~%02d:59' % (lt.hour, lt.hour)
-                dlabel = lt.strftime('%Y-%m-%d')
+                dt_kst = ta.astimezone(kst).strftime('%Y-%m-%d %H:%M:%S')
             else:
-                key = (str(r['use_date']), -1)
-                hh = '시각미상'
-                dlabel = str(r['use_date'])
-            b = buckets.setdefault(key, {'cpc': 0, 'ai': 0, 'server': 0, 'cnt': 0, 'hh': hh, 'date': dlabel})
-            b[TYPE_KEY[r['transaction_type']]] += abs(r['amount'] or 0)
-            b['cnt'] += 1
-        rows = []
-        for (d, h), b in sorted(buckets.items(), key=lambda x: (x[0][0], x[0][1]), reverse=True):
-            tot = b['cpc'] + b['ai'] + b['server']
+                dt_kst = str(r['use_date'])
             rows.append({
-                'datetime': f"{b['date']} {b['hh']}", 'date': b['date'], 'time': b['hh'],
-                'cpc': b['cpc'], 'ai': b['ai'], 'auction': 0, 'server': b['server'],
-                'total': tot, 'count': b['cnt'],
-                # 시간 버킷 자체가 그 시간대 실제 발생액
-                'd_cpc': b['cpc'], 'd_ai': b['ai'], 'd_total': tot,
+                'traded_at': dt_kst,
+                'use_date': str(r['use_date']),
+                'transaction_type': r['transaction_type'],
+                'use_type': r['use_type'] or '',
+                'comment': r['comment'] or '',
+                'amount': abs(r['amount'] or 0),
+                'seq': r['seq'] or '',
+                'market': r['market'] or '',
             })
         bt = {x['transaction_type']: abs(x['s'] or 0)
               for x in qs.values('transaction_type').annotate(s=Sum('amount'))}
@@ -3546,7 +3591,7 @@ class GmarketAdDailyView(views.APIView):
             'seller_id': sid, 'date_from': str(d0), 'date_to': str(d1),
             'cpc_spend': bt.get('CPC', 0), 'ai_spend': bt.get('AI매출업', 0),
             'ad_spend': bt.get('CPC', 0) + bt.get('AI매출업', 0) + bt.get('서버비용', 0),
-            'points': len(rows), 'rows': rows,
+            'total_count': len(rows), 'rows': rows,
         })
 
 
@@ -3766,6 +3811,117 @@ class TaxVatSummaryView(views.APIView):
         })
 
 
+_VERIFY_LOCK = '/tmp/eleven_verify_otp_running.lock'
+
+
+class ElevenAuthStatusView(views.APIView):
+    """11번가 계정별 OTP 인증 현황 — last_otp_at 기준 경과시간 반환."""
+    def get(self, request):
+        import os
+        from datetime import timedelta
+        from apps.cpc.models import CrawlerAccount, ReceivedSmsMessage
+        from django.utils import timezone
+        now = timezone.now()
+        accounts = CrawlerAccount.objects.filter(platform='11st', is_active=True).order_by('display_order')
+
+        # 최근 48h OTP SMS 목록 (received_at DESC)
+        otp_smses = list(
+            ReceivedSmsMessage.objects
+            .filter(message__contains='[11번가] 인증번호', received_at__gte=now - timedelta(hours=48))
+            .order_by('-received_at')
+            .values_list('received_at', flat=True)
+        )
+
+        result = []
+        for a in accounts:
+            otp_hours = None
+            if a.last_otp_at:
+                otp_hours = (now - a.last_otp_at).total_seconds() / 3600
+            if otp_hours is None or otp_hours >= 24:
+                status = 'expired'
+            elif otp_hours >= 22:
+                status = 'warning'
+            else:
+                status = 'ok'
+
+            # last_otp_at 5분 이내에 수신된 가장 가까운 OTP SMS
+            sms_received_at = None
+            if a.last_otp_at:
+                window_start = a.last_otp_at - timedelta(minutes=5)
+                for sms_ts in otp_smses:
+                    if window_start <= sms_ts <= a.last_otp_at:
+                        sms_received_at = sms_ts.isoformat()
+                        break
+
+            result.append({
+                'login_id': a.login_id,
+                'seller_name': a.seller_name or a.login_id,
+                'last_otp_at': a.last_otp_at.isoformat() if a.last_otp_at else None,
+                'sms_received_at': sms_received_at,
+                'otp_hours': round(otp_hours, 1) if otp_hours is not None else None,
+                'status': status,
+            })
+        running = os.path.exists(_VERIFY_LOCK)
+        running_ids = []
+        if running:
+            try:
+                running_ids = open(_VERIFY_LOCK).read().strip().split(',')
+            except Exception:
+                pass
+        return Response({'accounts': result, 'running': running, 'running_ids': running_ids})
+
+
+class ElevenVerifyOtpView(views.APIView):
+    """특정 계정 또는 만료계정 전체 OTP 인증 트리거 (백그라운드)."""
+    def post(self, request):
+        import os, threading, subprocess, pathlib
+        from apps.cpc.models import CrawlerAccount
+        from django.utils import timezone
+
+        if os.path.exists(_VERIFY_LOCK):
+            try:
+                ids = open(_VERIFY_LOCK).read().strip()
+            except Exception:
+                ids = '?'
+            return Response({'error': f'이미 인증 진행 중입니다. ({ids})'}, status=400)
+
+        login_ids = request.data.get('login_ids') or []
+        auto = request.data.get('auto', False)
+
+        if auto or not login_ids:
+            now = timezone.now()
+            # 24시간 10분 초과 계정 자동 선택
+            threshold = 24 + 10 / 60
+            expired = [
+                a.login_id for a in CrawlerAccount.objects.filter(platform='11st', is_active=True)
+                if a.last_otp_at is None or (now - a.last_otp_at).total_seconds() / 3600 >= threshold
+            ]
+            if not expired and not login_ids:
+                return Response({'message': '만료된 계정 없음 (24h10m 기준)', 'count': 0})
+            login_ids = list(set(login_ids) | set(expired)) if login_ids else expired
+
+        if not login_ids:
+            return Response({'error': 'login_ids 없음'}, status=400)
+
+        def run():
+            pathlib.Path(_VERIFY_LOCK).write_text(','.join(login_ids))
+            try:
+                cmd = (
+                    'cd /home/rejoice888/Avengers/backend && '
+                    f'python3 manage.py verify_11st_logins --only {",".join(login_ids)} '
+                    '>> /tmp/eleven_verify_auto.log 2>&1'
+                )
+                subprocess.run(['bash', '-c', cmd], timeout=7200)
+            finally:
+                try:
+                    os.remove(_VERIFY_LOCK)
+                except Exception:
+                    pass
+
+        threading.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'count': len(login_ids), 'login_ids': login_ids})
+
+
 class ElevenGradeLatestView(views.APIView):
     """계정별 최신 등급 (최신이 null이면 직전 실제 등급으로 보정) — 등급현황 모달용. 페이지네이션 없음."""
     def get(self, request):
@@ -3802,13 +3958,21 @@ class AllMallProfitView(views.APIView):
         from apps.cpc.models import GmarketCostHistory, ElevenCostHistory
 
         mp = request.query_params.get('month')  # 'YYYY-MM'
+        df = request.query_params.get('date_from')
+        dt_param = request.query_params.get('date_to')
         today = dt_date.today()
-        if mp:
+        if df and dt_param:
+            ms = dt_dt.strptime(df, '%Y-%m-%d').date()
+            me = dt_dt.strptime(dt_param, '%Y-%m-%d').date()
+            y, m = ms.year, ms.month  # 월 레이블용(시작월)
+        elif mp:
             y, m = int(mp[:4]), int(mp[5:7])
+            ms = dt_date(y, m, 1)
+            me = dt_date(y + (m // 12), (m % 12) + 1, 1) - __import__('datetime').timedelta(days=1)
         else:
             y, m = today.year, today.month
-        ms = dt_date(y, m, 1)
-        me = dt_date(y + (m // 12), (m % 12) + 1, 1) - __import__('datetime').timedelta(days=1)
+            ms = dt_date(y, m, 1)
+            me = dt_date(y + (m // 12), (m % 12) + 1, 1) - __import__('datetime').timedelta(days=1)
 
         # 1) 매출/원가/순익 (플랫폼별)
         base = {}

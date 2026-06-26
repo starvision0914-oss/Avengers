@@ -31,6 +31,19 @@ export default function St11Dashboard() {
   const [crawlerStats, setCrawlerStats] = useState<{ total: number; active: number; blocked: number; success: number; pending: number } | null>(null);
   const [crawlRunning, setCrawlRunning] = useState(false);
   const [costLastAt, setCostLastAt] = useState<string>('');
+  const [showAuthPanel, setShowAuthPanel] = useState(false);
+  const [authData, setAuthData] = useState<{
+    accounts: {
+      login_id: string;
+      seller_name: string;
+      last_otp_at: string | null;
+      sms_received_at: string | null;
+      otp_hours: number | null;
+      status: 'ok' | 'warning' | 'expired';
+    }[];
+    running: boolean;
+    running_ids: string[];
+  } | null>(null);
   const navigate = useNavigate();
 
   const onCostClick = useCallback((sellerId: string, alias: string, kind?: string) => setCostModal({ sellerId, alias, kind }), []);
@@ -55,6 +68,15 @@ export default function St11Dashboard() {
       alert(r.data?.message || '크롤을 중지했습니다.');
     } catch (e: any) {
       alert(e?.response?.data?.error || '중지 실패');
+    }
+  }, []);
+  const onVerifyOtp = useCallback(async (loginIds?: string[]) => {
+    try {
+      const body = loginIds ? { login_ids: loginIds } : { auto: true };
+      const r = await api.post('/cpc/eleven/verify-otp/', body);
+      alert(r.data?.message || `인증 시작 (${r.data?.count ?? 0}개 계정)`);
+    } catch (e: any) {
+      alert(e?.response?.data?.error || '인증 시작 실패');
     }
   }, []);
   const onGradeCrawl = useCallback(async () => {
@@ -85,6 +107,14 @@ export default function St11Dashboard() {
         setCrawlerStats({ total: accts.length, active: accts.length, blocked, success, pending });
       })
       .catch(() => {});
+  }, []);
+
+  // 인증 현황 30초 폴링
+  useEffect(() => {
+    const fetch = () => api.get('/cpc/eleven/auth-status/').then(r => setAuthData(r.data)).catch(() => {});
+    fetch();
+    const t = setInterval(fetch, 30000);
+    return () => clearInterval(t);
   }, []);
 
   // 크롤 실행 상태 폴링 (버튼 표시용)
@@ -231,6 +261,72 @@ export default function St11Dashboard() {
                   className="px-2.5 py-1 text-[12px] font-semibold bg-[#555] text-white rounded hover:bg-[#444]">등급현황</button>
               </div>
             )}
+
+            {/* 인증(로그인) 현황 */}
+            {authData && (() => {
+              const expired = authData.accounts.filter(a => a.status === 'expired').length;
+              const warning = authData.accounts.filter(a => a.status === 'warning').length;
+              const toKst = (iso: string | null) => {
+                if (!iso) return '-';
+                const d = new Date(iso);
+                return d.toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).replace(/\. /g, '-').replace('.', '');
+              };
+              return (
+                <div className="bg-white border border-[#e0e0e0] rounded">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-1.5 cursor-pointer select-none"
+                    onClick={() => setShowAuthPanel(p => !p)}>
+                    <span className="font-bold text-[#333] text-[12px]">인증(로그인) 현황</span>
+                    {expired > 0 && <span className="text-[11px] font-bold text-[#dc2626]">만료 {expired}개</span>}
+                    {warning > 0 && <span className="text-[11px] font-bold text-[#d97706]">경고 {warning}개</span>}
+                    {authData.running && (
+                      <span className="text-[11px] text-[#1e6fd9] animate-pulse font-semibold">인증 진행 중…</span>
+                    )}
+                    <button
+                      onClick={e => { e.stopPropagation(); onVerifyOtp(); }}
+                      disabled={authData.running}
+                      className="ml-auto px-2.5 py-1 text-[11px] font-semibold bg-[#e67700] text-white rounded hover:bg-[#bf5600] disabled:opacity-40 disabled:cursor-not-allowed">
+                      만료계정 자동인증
+                    </button>
+                    <span className="text-[11px] text-[#999]">{showAuthPanel ? '▲' : '▼'}</span>
+                  </div>
+                  {showAuthPanel && (
+                    <div className="border-t border-[#e0e0e0] px-4 py-3">
+                      <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
+                        {authData.accounts.map(a => {
+                          const bg = a.status === 'expired' ? 'bg-[#fef2f2] border-[#fecaca]'
+                            : a.status === 'warning' ? 'bg-[#fffbeb] border-[#fde68a]'
+                            : 'bg-[#f0fdf4] border-[#bbf7d0]';
+                          const nameColor = a.status === 'expired' ? 'text-[#dc2626]'
+                            : a.status === 'warning' ? 'text-[#d97706]'
+                            : 'text-[#16a34a]';
+                          const isRunning = authData.running_ids.includes(a.login_id);
+                          return (
+                            <div key={a.login_id} className={`border rounded p-2 text-[11px] ${bg}`}>
+                              <div className="flex items-center justify-between mb-0.5">
+                                <span className={`font-bold ${nameColor}`}>{a.seller_name}</span>
+                                {isRunning
+                                  ? <span className="text-[10px] text-[#1e6fd9] animate-pulse">인증중…</span>
+                                  : <button
+                                      onClick={() => onVerifyOtp([a.login_id])}
+                                      disabled={authData.running}
+                                      className="text-[10px] px-1.5 py-0.5 bg-[#e67700] text-white rounded disabled:opacity-40">
+                                      인증
+                                    </button>
+                                }
+                              </div>
+                              <div className="text-[#666]">
+                                {a.otp_hours !== null ? `${a.otp_hours}h 전` : '미인증'}
+                                {a.otp_hours !== null && ` · ${toKst(a.sms_received_at ?? a.last_otp_at)}`}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             <St11SummaryTable
               sellers={summary.sellers} totals={summary.totals}

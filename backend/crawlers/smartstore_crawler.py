@@ -9,11 +9,11 @@ import time
 import json
 import logging
 import re
-import subprocess
 import os
 from datetime import date, timedelta
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
@@ -31,22 +31,6 @@ STATS_BASE = 'https://sell.smartstore.naver.com'
 # 헬퍼
 # ──────────────────────────────────────────
 
-def _xtype(text, display_env):
-    env = {**os.environ, 'DISPLAY': display_env}
-    subprocess.run(['xclip', '-selection', 'clipboard'],
-                   input=text.encode(), check=True, env=env)
-    subprocess.run(['xdotool', 'key', 'ctrl+v'], env=env)
-
-
-def _xkey(key, display_env):
-    env = {**os.environ, 'DISPLAY': display_env}
-    subprocess.run(['xdotool', 'key', key], env=env)
-
-
-def _get_display():
-    return os.environ.get('DISPLAY', ':0')
-
-
 def _parse_int(text):
     if not text:
         return 0
@@ -60,7 +44,6 @@ def _parse_int(text):
 
 def login_smartstore(driver, login_id, login_pw, log_fn=None):
     log = log_fn or logger.info
-    display = _get_display()
 
     log(f'[스마트] 로그인 시도: {login_id}')
     driver.get(LOGIN_URL)
@@ -73,17 +56,19 @@ def login_smartstore(driver, login_id, login_pw, log_fn=None):
         )
         id_input.click()
         time.sleep(0.3)
-        _xtype(login_id, display)
+        id_input.clear()
+        id_input.send_keys(login_id)
         time.sleep(0.3)
 
         # PW 입력
         pw_input = driver.find_element(By.XPATH, '//input[@type="password"]')
         pw_input.click()
         time.sleep(0.3)
-        _xtype(login_pw, display)
+        pw_input.clear()
+        pw_input.send_keys(login_pw)
         time.sleep(0.3)
 
-        _xkey('Return', display)
+        pw_input.send_keys(Keys.RETURN)
         time.sleep(8)
 
     except Exception as e:
@@ -94,6 +79,18 @@ def login_smartstore(driver, login_id, login_pw, log_fn=None):
     if 'sell.smartstore' in current or 'login-callback' in current:
         log(f'[스마트] 로그인 성공')
         time.sleep(3)
+        # 모달 팝업 닫기 (스토어 전환 클릭 방해 방지)
+        try:
+            driver.execute_script("""
+                var modals = document.querySelectorAll('[uib-modal-window], .modal.in');
+                modals.forEach(function(m) { m.style.display = 'none'; });
+                var backdrops = document.querySelectorAll('.modal-backdrop');
+                backdrops.forEach(function(b) { b.remove(); });
+                document.body.classList.remove('modal-open');
+            """)
+            time.sleep(0.5)
+        except Exception:
+            pass
         return True
 
     log(f'[스마트] 로그인 실패? URL: {current}')
@@ -136,80 +133,220 @@ def switch_store(driver, store_slug, log_fn=None):
 
 
 # ──────────────────────────────────────────
-# 판매 통계 (XHR API)
+# GraphQL 헬퍼
 # ──────────────────────────────────────────
 
-def _execute_fetch(driver, url, method='GET', body=None):
-    """Selenium으로 XHR 실행 후 JSON 반환."""
-    script = f"""
-    return new Promise((resolve, reject) => {{
-        fetch('{url}', {{
-            method: '{method}',
-            credentials: 'include',
-            headers: {{'Content-Type': 'application/json'}},
-            {f'body: JSON.stringify({json.dumps(body)}),' if body else ''}
-        }})
-        .then(r => r.json())
-        .then(resolve)
-        .catch(reject);
-    }});
+GRAPHQL_URL = 'https://sell.smartstore.naver.com/e/v3/graphql'
+
+_GQL_DAILY_SETTLE = """
+mutation findDailySettlesUsingPOST($merchantNo: String!, $data: DailySettleParamsInput) {
+  DailySettleList: findDailySettlesUsingPOST(merchantNo: $merchantNo, data: $data) {
+    elements {
+      settleAmount
+      paySettleAmount
+      normalSettleAmount
+      commissionSettleAmount
+      settleBasisStartYmd
+      settleBasisEndYmd
+      settleExpectYmd
+      settleCompleteYmd
+      settleStatusType
+      merchantNo
+      __typename
+    }
+    pagination {
+      page
+      size
+      totalElements
+      totalPages
+      __typename
+    }
+    __typename
+  }
+}
+"""
+
+def _gql_fetch(driver, operation_name, query, variables):
+    """Selenium 세션에서 GraphQL mutation 실행."""
+    body = json.dumps({
+        'operationName': operation_name,
+        'variables': variables,
+        'query': query,
+    })
+    script = """
+    var cb = arguments[arguments.length - 1];
+    fetch(arguments[0], {
+        method: 'POST',
+        credentials: 'include',
+        headers: {'Content-Type': 'application/json'},
+        body: arguments[1]
+    })
+    .then(function(r) { return r.json(); })
+    .then(cb)
+    .catch(function(e) { cb({error: String(e)}); });
     """
     try:
-        return driver.execute_async_script(
-            script.replace('return new Promise', 'var cb = arguments[arguments.length-1]; new Promise')
-            .replace('.then(resolve)', '.then(cb)')
-            .replace('.catch(reject)', '.catch(cb)')
-        )
-    except Exception:
+        return driver.execute_async_script(script, GRAPHQL_URL, body)
+    except Exception as e:
+        logger.warning('GraphQL fetch 실패: %s', e)
         return None
 
 
-def fetch_daily_sales(driver, start_date: date, end_date: date, log_fn=None):
+def _extract_merchant_no_from_perf(driver):
+    """performance 로그에서 merchantNo 추출."""
+    try:
+        logs = driver.get_log('performance')
+        for entry in reversed(logs):
+            msg = json.loads(entry['message'])
+            method = msg.get('message', {}).get('method', '')
+            if method == 'Network.requestWillBeSent':
+                req = msg['message']['params'].get('request', {})
+                if GRAPHQL_URL in req.get('url', ''):
+                    body = req.get('postData', '')
+                    if body:
+                        bd = json.loads(body)
+                        merchant_no = bd.get('variables', {}).get('merchantNo', '')
+                        if merchant_no:
+                            return merchant_no
+    except Exception:
+        pass
+    return ''
+
+
+def _extract_merchant_no_from_js(driver):
+    """AngularJS rootScope 또는 window에서 merchantNo 직접 추출."""
+    try:
+        result = driver.execute_script("""
+        try {
+            var inj = angular.element(document.body).injector();
+            var services = ['SellerChannelService','sellerService','SellerService',
+                            'AccountService','MerchantService','channelService'];
+            for (var s of services) {
+                try {
+                    var svc = inj.get(s);
+                    if (svc && (svc.merchantNo || svc.getMerchantNo)) {
+                        return String(svc.merchantNo || svc.getMerchantNo());
+                    }
+                } catch(e) {}
+            }
+            var rs = inj.get('$rootScope');
+            if (rs && rs.merchantNo) return String(rs.merchantNo);
+            if (rs && rs.seller && rs.seller.merchantNo) return String(rs.seller.merchantNo);
+        } catch(e) {}
+        // URL에서 추출 시도
+        var m = location.hash.match(/merchantNo[=\/](\d+)/);
+        if (m) return m[1];
+        return null;
+        """)
+        return result or ''
+    except Exception:
+        return ''
+
+
+def fetch_merchant_no(driver, account, log_fn=None):
+    """merchantNo를 확보하고 DB에 저장. 이미 있으면 재사용."""
+    log = log_fn or logger.info
+
+    if account.merchant_no:
+        return account.merchant_no
+
+    log('[스마트] merchantNo 탐색 중...')
+
+    # 1차: 정산 페이지 이동 후 performance 로그에서 추출
+    try:
+        driver.execute_script(
+            "angular.element(document.body).injector().get('$state')"
+            ".go('main.naverpay_settlemgt_sellerdailysettle')"
+        )
+    except Exception:
+        driver.get('https://sell.smartstore.naver.com/#/naverpay/settlemgt/sellerdailysettle')
+    time.sleep(6)
+
+    merchant_no = _extract_merchant_no_from_perf(driver)
+
+    # 2차: 주문통계 페이지에서 시도 (정산 데이터 없는 계정 대비)
+    if not merchant_no:
+        try:
+            driver.execute_script(
+                "angular.element(document.body).injector().get('$state').go('main.orderstats')"
+            )
+        except Exception:
+            driver.get('https://sell.smartstore.naver.com/#/orderstats')
+        time.sleep(5)
+        merchant_no = _extract_merchant_no_from_perf(driver)
+
+    # 3차: JavaScript로 직접 추출
+    if not merchant_no:
+        merchant_no = _extract_merchant_no_from_js(driver)
+
+    if merchant_no:
+        account.merchant_no = merchant_no
+        account.save(update_fields=['merchant_no'])
+        log(f'[스마트] merchantNo={merchant_no} 저장')
+    else:
+        log('[스마트] merchantNo 추출 실패')
+    return merchant_no
+
+
+# ──────────────────────────────────────────
+# 판매 통계 (GraphQL)
+# ──────────────────────────────────────────
+
+def fetch_daily_sales(driver, start_date: date, end_date: date, log_fn=None, merchant_no=''):
     """
-    스마트스토어 내부 API로 일별 판매 통계 수집.
-    Returns: [{date, order_count, sales_amount, cancel_amount, settlement_amount}, ...]
+    스마트스토어 GraphQL로 일별 정산 데이터 수집.
+    Returns: [{date, order_count, sales_amount, settlement_amount, commission_amount}, ...]
     """
     log = log_fn or logger.info
 
-    # 스마트스토어센터 메인 페이지로 이동 (세션 유지)
-    driver.get('https://sell.smartstore.naver.com/#/home/dashboard')
-    time.sleep(3)
+    if not merchant_no:
+        log('[스마트] merchantNo 없음 — 판매통계 건너뜀')
+        return []
+
+    start_str = start_date.strftime('%Y%m%d')
+    end_str = end_date.strftime('%Y%m%d')
+
+    variables = {
+        'merchantNo': merchant_no,
+        'data': {
+            'startYmd': start_str,
+            'endYmd': end_str,
+            'maskAccountNumber': True,
+            'paging': {'page': 1, 'size': 100},
+            'merchantNos': [],
+            'orderingType': 'ASCENDING',
+        }
+    }
+
+    data = _gql_fetch(driver, 'findDailySettlesUsingPOST', _GQL_DAILY_SETTLE, variables)
+    if not data or 'error' in data:
+        log(f'[스마트] GraphQL 응답 없음: {data}')
+        return []
+
+    elements = (data.get('data', {})
+                    .get('DailySettleList', {})
+                    .get('elements', []))
 
     results = []
-    current = start_date
-    while current <= end_date:
-        date_str = current.strftime('%Y%m%d')
-        url = (
-            f'https://sell.smartstore.naver.com/v2/seller-statistics/sellActivityStats'
-            f'?startDate={date_str}&endDate={date_str}&timeUnit=day'
-        )
-        data = _execute_fetch(driver, url)
-        if data:
-            items = data.get('content', data.get('data', []))
-            if isinstance(items, list):
-                for item in items:
-                    results.append({
-                        'date': current,
-                        'order_count': int(item.get('orderCount', 0) or 0),
-                        'sales_amount': int(item.get('payAmount', item.get('salesAmount', 0)) or 0),
-                        'cancel_amount': int(item.get('cancelAmount', 0) or 0),
-                        'return_amount': int(item.get('returnAmount', 0) or 0),
-                        'settlement_amount': int(item.get('settlementAmount', item.get('expectedSettlementAmount', 0)) or 0),
-                        'commission_amount': int(item.get('commissionAmount', 0) or 0),
-                    })
-            elif isinstance(items, dict):
-                results.append({
-                    'date': current,
-                    'order_count': int(items.get('orderCount', 0) or 0),
-                    'sales_amount': int(items.get('payAmount', items.get('salesAmount', 0)) or 0),
-                    'cancel_amount': int(items.get('cancelAmount', 0) or 0),
-                    'return_amount': int(items.get('returnAmount', 0) or 0),
-                    'settlement_amount': int(items.get('settlementAmount', items.get('expectedSettlementAmount', 0)) or 0),
-                    'commission_amount': int(items.get('commissionAmount', 0) or 0),
-                })
-        current += timedelta(days=1)
+    for el in elements:
+        settle_ymd = el.get('settleExpectYmd') or el.get('settleBasisStartYmd') or ''
+        if not settle_ymd or len(settle_ymd) != 8:
+            continue
+        try:
+            settle_date = date(int(settle_ymd[:4]), int(settle_ymd[4:6]), int(settle_ymd[6:8]))
+        except ValueError:
+            continue
+        results.append({
+            'date': settle_date,
+            'order_count': 0,
+            'sales_amount': int(el.get('paySettleAmount', 0) or 0),
+            'cancel_amount': 0,
+            'return_amount': 0,
+            'settlement_amount': int(el.get('settleAmount', 0) or 0),
+            'commission_amount': int(el.get('commissionSettleAmount', 0) or 0),
+        })
 
-    log(f'[스마트] 판매통계 {len(results)}건 수집 ({start_date}~{end_date})')
+    log(f'[스마트] 정산 {len(results)}건 수집 ({start_date}~{end_date})')
     return results
 
 
@@ -254,57 +391,10 @@ def fetch_settlement(driver, year_month: str, log_fn=None):
 # ──────────────────────────────────────────
 
 def fetch_ad_cost(driver, start_date: date, end_date: date, log_fn=None):
-    """
-    스마트스토어 광고센터(NSA) API로 광고비 수집.
-    Returns: [{date, ad_type, cost, impression, click, conversion_count, conversion_amount}, ...]
-    """
+    """스마트스토어 광고비 수집 (미구현 — 빈 결과 반환)."""
     log = log_fn or logger.info
-
-    start_str = start_date.strftime('%Y-%m-%d')
-    end_str = end_date.strftime('%Y-%m-%d')
-
-    # NSA 광고 리포트 API
-    url = (
-        f'https://api.naver.com/nsa/api/v1/report/daily'
-        f'?startDate={start_str}&endDate={end_str}'
-    )
-    data = _execute_fetch(driver, url)
-
-    results = []
-    if data and isinstance(data.get('data'), list):
-        for item in data['data']:
-            results.append({
-                'date': date.fromisoformat(item.get('date', start_str)),
-                'ad_type': 'shopping',
-                'cost': int(item.get('cost', 0) or 0),
-                'impression': int(item.get('impression', 0) or 0),
-                'click': int(item.get('click', 0) or 0),
-                'conversion_count': int(item.get('conversionCount', 0) or 0),
-                'conversion_amount': int(item.get('conversionAmount', 0) or 0),
-            })
-    else:
-        log(f'[스마트] NSA 광고비 API 미응답 — 화면 크롤링 시도')
-        results = _fetch_ad_cost_screen(driver, start_date, end_date, log)
-
-    log(f'[스마트] 광고비 {len(results)}건 수집')
-    return results
-
-
-def _fetch_ad_cost_screen(driver, start_date: date, end_date: date, log_fn=None):
-    """NSA 광고센터 화면 크롤링 대안."""
-    log = log_fn or logger.info
-    results = []
-
-    try:
-        driver.get('https://nsa.naver.com/nsa2/main')
-        time.sleep(5)
-
-        # 날짜 범위 설정 후 테이블 파싱 (구조 확인 후 구현)
-        log('[스마트] NSA 화면 크롤링 — 추후 DOM 구조 확인 필요')
-    except Exception as e:
-        log(f'[스마트] NSA 광고비 화면 크롤링 실패: {e}')
-
-    return results
+    log('[스마트] 광고비 수집 미구현 — 건너뜀')
+    return []
 
 
 # ──────────────────────────────────────────

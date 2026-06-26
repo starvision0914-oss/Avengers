@@ -142,7 +142,7 @@ def _kill_stale_chrome():
                 pass
 
 
-def create_driver(download_dir=None, kill_existing=True, user_data_dir=None):
+def create_driver(download_dir=None, kill_existing=True, user_data_dir=None, enable_perf_log=False):
     """시스템 Chrome + Selenium 드라이버. kill_existing=False면 pkill 없이 생성.
     user_data_dir 지정 시 전용 프로필 사용 → 다른 크롤러의 임시정리에 안 지워짐(격리)."""
     from selenium import webdriver
@@ -186,8 +186,12 @@ def create_driver(download_dir=None, kill_existing=True, user_data_dir=None):
                 'profile.default_content_setting_values.notifications': 2,
             }
             opts.add_experimental_option('prefs', prefs)
+            if enable_perf_log:
+                opts.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
             driver = webdriver.Chrome(options=opts)
+            if enable_perf_log:
+                driver.execute_cdp_cmd('Network.enable', {})
             driver.implicitly_wait(10)
             driver.set_page_load_timeout(60)
 

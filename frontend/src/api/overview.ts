@@ -81,7 +81,7 @@ export interface MallProfitResponse {
   };
 }
 
-export async function getMallProfit(month?: string): Promise<MallProfitResponse> {
-  const { data } = await api.get('/cpc/all-mall-profit/', { params: month ? { month } : {} });
+export async function getMallProfit(params?: { month?: string; date_from?: string; date_to?: string }): Promise<MallProfitResponse> {
+  const { data } = await api.get('/cpc/all-mall-profit/', { params: params || {} });
   return data;
 }

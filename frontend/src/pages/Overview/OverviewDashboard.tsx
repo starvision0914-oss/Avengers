@@ -11,20 +11,45 @@ function ydayKST(): string {
   d.setDate(d.getDate() - 1);
   return d.toLocaleDateString('en-CA');
 }
-function curMonth(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+function daysAgoKST(n: number): string {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+  d.setDate(d.getDate() - n);
+  return d.toLocaleDateString('en-CA');
 }
 
-type PeriodKey = 'yesterday' | '7d' | 'month' | 'mtd' | 'today' | 'custom';
+type PeriodKey = 'year' | 'month' | 'today' | 'yesterday' | 'custom';
 const PERIODS: { key: PeriodKey; label: string }[] = [
+  { key: 'year', label: '1년' },
+  { key: 'month', label: '한달' },
+  { key: 'today', label: '오늘' },
   { key: 'yesterday', label: '어제' },
-  { key: '7d', label: '최근 7일' },
-  { key: 'month', label: '최근 30일' },
-  { key: 'mtd', label: '이번 달' },
-  { key: 'today', label: '오늘(미완성)' },
-  { key: 'custom', label: '기간 직접' },
+  { key: 'custom', label: '기간별' },
 ];
+
+function periodToOverviewParam(period: PeriodKey, cFrom: string, cTo: string): OverviewParams {
+  if (period === 'custom') return { date_from: cFrom, date_to: cTo };
+  if (period === 'year') return { period: 'year' };
+  if (period === 'month') return { period: 'month' };
+  if (period === 'today') return { period: 'today' };
+  return { period: 'yesterday' };
+}
+
+function periodToMallProfitParam(period: PeriodKey, cFrom: string, cTo: string) {
+  const today = todayKST();
+  if (period === 'custom') return { date_from: cFrom, date_to: cTo };
+  if (period === 'year') return { date_from: daysAgoKST(364), date_to: today };
+  if (period === 'month') return { date_from: daysAgoKST(29), date_to: today };
+  if (period === 'today') return { date_from: today, date_to: today };
+  return { date_from: ydayKST(), date_to: ydayKST() };
+}
+
+function periodLabel(period: PeriodKey, dateFrom: string, dateTo: string): string {
+  if (period === 'year') return '최근 1년';
+  if (period === 'month') return '최근 한달';
+  if (period === 'today') return '오늘';
+  if (period === 'yesterday') return '어제';
+  return dateFrom === dateTo ? dateFrom : `${dateFrom} ~ ${dateTo}`;
+}
 
 // 쇼핑몰 브랜드 색/아이콘
 const MALL: Record<string, { color: string; emoji: string; grad: string }> = {
@@ -43,35 +68,38 @@ const CARD: React.CSSProperties = {
 };
 
 export default function OverviewDashboard() {
-  const [period, setPeriod] = useState<PeriodKey>('mtd');
+  const [period, setPeriod] = useState<PeriodKey>('month');
   const [cFrom, setCFrom] = useState(ydayKST());
   const [cTo, setCTo] = useState(ydayKST());
-  const [month, setMonth] = useState(curMonth());
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [profit, setProfit] = useState<MallProfitResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const ovParams = useMemo<OverviewParams>(
-    () => (period === 'custom' ? { date_from: cFrom, date_to: cTo } : { period }),
+    () => periodToOverviewParam(period, cFrom, cTo),
+    [period, cFrom, cTo]
+  );
+  const profitParams = useMemo(
+    () => periodToMallProfitParam(period, cFrom, cTo),
     [period, cFrom, cTo]
   );
 
-  const fetchData = useCallback(async (p: OverviewParams, m: string) => {
+  const fetchData = useCallback(async (p: OverviewParams, pp: ReturnType<typeof periodToMallProfitParam>) => {
     setLoading(true); setErr(null);
     try {
-      const [ov, pf] = await Promise.all([getOverview(p), getMallProfit(m)]);
+      const [ov, pf] = await Promise.all([getOverview(p), getMallProfit(pp)]);
       setData(ov); setProfit(pf);
     } catch (e: any) {
       setErr(e?.message || '불러오기 실패');
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { fetchData(ovParams, month); }, [ovParams, month, fetchData]);
+  useEffect(() => { fetchData(ovParams, profitParams); }, [ovParams, profitParams, fetchData]);
   useEffect(() => {
-    const t = setInterval(() => fetchData(ovParams, month), 5 * 60 * 1000);
+    const t = setInterval(() => fetchData(ovParams, profitParams), 5 * 60 * 1000);
     return () => clearInterval(t);
-  }, [ovParams, month, fetchData]);
+  }, [ovParams, profitParams, fetchData]);
 
   const pie = useMemo(() => {
     if (!data) return [];
@@ -87,6 +115,7 @@ export default function OverviewDashboard() {
   const maxNet = useMemo(() => Math.max(1, ...profitRows.map(r => Math.abs(r.net_profit))), [profitRows]);
 
   const winColor = (n: number) => (n >= 0 ? '#16a34a' : '#dc2626');
+  const pLabel = data ? periodLabel(period, data.date_from, data.date_to) : '';
 
   return (
     <div style={{ padding: '20px 20px 48px', maxWidth: 1240, margin: '0 auto', background: '#f6f7f9', minHeight: '100%' }}>
@@ -101,7 +130,31 @@ export default function OverviewDashboard() {
       {/* 헤더 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 24, fontWeight: 800, margin: 0, letterSpacing: -0.5 }}>📊 통합 현황</h1>
-        <button className="ovh-btn" onClick={() => fetchData(ovParams, month)} disabled={loading}
+
+        {/* 기간 선택 */}
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {PERIODS.map(p => (
+            <button key={p.key} onClick={() => setPeriod(p.key)}
+              style={{
+                padding: '5px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 13, fontWeight: 700,
+                border: period === p.key ? '1px solid #0ea5e9' : '1px solid #d1d5db',
+                background: period === p.key ? '#0ea5e9' : '#fff',
+                color: period === p.key ? '#fff' : '#374151',
+              }}>{p.label}</button>
+          ))}
+        </div>
+
+        {period === 'custom' && (
+          <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <input type="date" value={cFrom} max={cTo} onChange={e => setCFrom(e.target.value)}
+              style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+            <span style={{ color: '#9ca3af' }}>~</span>
+            <input type="date" value={cTo} min={cFrom} onChange={e => setCTo(e.target.value)}
+              style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+          </span>
+        )}
+
+        <button className="ovh-btn" onClick={() => fetchData(ovParams, profitParams)} disabled={loading}
           style={{ padding: '6px 14px', border: '1px solid #d1d5db', borderRadius: 8, background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
           {loading ? <span className="ovh-spin">↻</span> : '↻'} {loading ? ' 불러오는 중' : ' 새로고침'}
         </button>
@@ -124,9 +177,7 @@ export default function OverviewDashboard() {
           boxShadow: '0 10px 30px rgba(2,132,199,.18)',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 14, fontWeight: 700, opacity: .92 }}>이번 달 종합 순수익</span>
-            <input type="month" value={month} onChange={e => setMonth(e.target.value)}
-              style={{ padding: '4px 8px', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, color: '#111' }} />
+            <span style={{ fontSize: 14, fontWeight: 700, opacity: .92 }}>종합 순수익 — {pLabel}</span>
             <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 800, padding: '5px 14px', borderRadius: 999, background: 'rgba(255,255,255,.22)' }}>
               {pt.net_profit >= 0 ? '🟢 흑자' : '🔴 적자'}
             </span>
@@ -167,7 +218,6 @@ export default function OverviewDashboard() {
                       {win ? '+' : ''}{formatKRW(r.net_profit)}<span style={{ fontSize: 14, fontWeight: 700 }}> 원</span>
                     </div>
                     <div style={{ fontSize: 11.5, color: '#9ca3af', marginBottom: 10 }}>순수익률 {r.net_margin}%</div>
-                    {/* 비교 바 */}
                     <div style={{ height: 6, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden', marginBottom: 12 }}>
                       <div style={{ width: `${barW}%`, height: '100%', background: win ? '#22c55e' : '#ef4444' }} />
                     </div>
@@ -190,28 +240,8 @@ export default function OverviewDashboard() {
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 12px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 16, fontWeight: 800 }}>📅 기간별 실적</span>
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-              {PERIODS.map(p => (
-                <button key={p.key} onClick={() => setPeriod(p.key)}
-                  style={{
-                    padding: '5px 12px', borderRadius: 999, cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
-                    border: period === p.key ? '1px solid #0ea5e9' : '1px solid #d1d5db',
-                    background: period === p.key ? '#0ea5e9' : '#fff',
-                    color: period === p.key ? '#fff' : '#374151',
-                  }}>{p.label}</button>
-              ))}
-            </div>
-            {period === 'custom' && (
-              <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-                <input type="date" value={cFrom} max={cTo} onChange={e => setCFrom(e.target.value)}
-                  style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
-                <span style={{ color: '#9ca3af' }}>~</span>
-                <input type="date" value={cTo} min={cFrom} onChange={e => setCTo(e.target.value)}
-                  style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
-              </span>
-            )}
             {data?.date_from && (
-              <span style={{ fontSize: 12, color: '#6b7280', marginLeft: 'auto' }}>
+              <span style={{ fontSize: 12, color: '#6b7280' }}>
                 {data.date_from === data.date_to ? data.date_from : `${data.date_from} ~ ${data.date_to}`}
               </span>
             )}
@@ -240,7 +270,7 @@ export default function OverviewDashboard() {
                 </ResponsiveContainer>
               ) : (
                 <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', fontSize: 13 }}>
-                  당일 광고비 없음
+                  광고비 없음
                 </div>
               )}
             </div>
@@ -255,11 +285,11 @@ export default function OverviewDashboard() {
                   <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
                     <div><span style={{ fontSize: 12, color: '#6b7280' }}>매출 </span><b style={{ color: '#0891b2' }}>{formatKRW(m.sales || 0)}원</b></div>
                     <div><span style={{ fontSize: 12, color: '#6b7280' }}>광고비 </span><b style={{ color: '#f59e0b' }}>{formatKRW(m.ad_cost)}원</b>
-                      {m.ai > 0 && <span style={{ fontSize: 11, color: '#9ca3af' }}> (CPC {formatKRW(m.cpc)}/AI {formatKRW(m.ai)})</span>}</div>
+                      {(m.ai || 0) > 0 && <span style={{ fontSize: 11, color: '#9ca3af' }}> (CPC {formatKRW(m.cpc)}/AI {formatKRW(m.ai || 0)})</span>}</div>
                     <div><span style={{ fontSize: 12, color: '#6b7280' }}>순수익 </span>
                       <b style={{ color: (m.net_after_ad || 0) >= 0 ? '#16a34a' : '#dc2626' }}>{(m.net_after_ad || 0) >= 0 ? '+' : ''}{formatKRW(m.net_after_ad || 0)}원</b></div>
-                    <div><span style={{ fontSize: 12, color: '#6b7280' }}>잔액 </span><b style={{ color: '#0369a1' }}>{formatKRW(m.balance)}원</b>
-                      {m.key === '11st' && m.cash != null && <span style={{ fontSize: 11, color: '#9ca3af' }}> (셀러캐시 {formatKRW(m.cash)})</span>}</div>
+                    {m.balance > 0 && <div><span style={{ fontSize: 12, color: '#6b7280' }}>잔액 </span><b style={{ color: '#0369a1' }}>{formatKRW(m.balance)}원</b>
+                      {m.key === '11st' && m.cash != null && <span style={{ fontSize: 11, color: '#9ca3af' }}> (셀러캐시 {formatKRW(m.cash)})</span>}</div>}
                   </div>
                 </div>
               ))}

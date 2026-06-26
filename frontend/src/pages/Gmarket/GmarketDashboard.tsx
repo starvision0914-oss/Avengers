@@ -31,8 +31,8 @@ export default function GmarketDashboard() {
   const [to, setTo] = useState(sv(new Date()));
   const [sortKey, setSortKey] = useState<string>('no');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  const [costModal, setCostModal] = useState<{ seller: string } | null>(null);
-  const [market, setMarket] = useState<'gmarket' | 'auction'>('gmarket');
+  const [costModal, setCostModal] = useState<{ seller: string; type?: string } | null>(null);
+  const [market, setMarket] = useState<'gmarket' | 'auction' | 'combined'>('combined');
 
   const applyMode = (m: PMode) => {
     const now = new Date();
@@ -142,6 +142,7 @@ export default function GmarketDashboard() {
           <button onClick={() => navigate('/gmarket-adgroup')} className="px-2.5 py-1 bg-[#e67700] text-white rounded font-semibold">광고그룹별</button>
           <button onClick={() => navigate('/gmarket-roas')} className="px-2.5 py-1 bg-[#2563eb] text-white rounded font-semibold">지마켓/옥션 상품 ROAS</button>
           <div className="inline-flex rounded overflow-hidden border border-[#ccc] ml-1">
+            <button onClick={() => setMarket('combined')} className={`px-3 py-1 text-[12px] font-bold ${market === 'combined' ? 'bg-[#555] text-white' : 'bg-white text-[#666]'}`}>종합</button>
             <button onClick={() => setMarket('gmarket')} className={`px-3 py-1 text-[12px] font-bold ${market === 'gmarket' ? 'bg-[#00a651] text-white' : 'bg-white text-[#666]'}`}>지마켓</button>
             <button onClick={() => setMarket('auction')} className={`px-3 py-1 text-[12px] font-bold ${market === 'auction' ? 'bg-[#e4002b] text-white' : 'bg-white text-[#666]'}`}>옥션</button>
           </div>
@@ -249,11 +250,11 @@ export default function GmarketDashboard() {
                   <td className={cell}><span className="font-mono">{r.login_id}</span> <span className="text-[#1e6fd9] text-[11px] font-semibold">{r.shop_name && r.shop_name !== r.login_id ? r.shop_name.slice(0, 4) : ''}</span></td>
                   <td className={`${cell} text-right`}>{fmt(r.balance)}</td>
                   <td className={`${cell} text-right text-[#e67700] cursor-pointer hover:underline`}
-                    title="클릭 → 광고비 내역" onClick={() => setCostModal({ seller: r.login_id })}>{fmt(r.cpc_spend)}</td>
+                    title="클릭 → CPC 내역" onClick={() => setCostModal({ seller: r.login_id, type: 'CPC' })}>{fmt(r.cpc_spend)}</td>
                   <td className={`${cell} text-right text-[#9333ea] cursor-pointer hover:underline`}
-                    onClick={() => setCostModal({ seller: r.login_id })}>{fmt(r.ai_spend)}</td>
+                    title="클릭 → AI매출업 내역" onClick={() => setCostModal({ seller: r.login_id, type: 'AI매출업' })}>{fmt(r.ai_spend)}</td>
                   <td className={`${cell} text-right text-[#dc2626] cursor-pointer hover:underline`}
-                    onClick={() => setCostModal({ seller: r.login_id })}>{fmt(r.server_spend)}</td>
+                    onClick={() => setCostModal({ seller: r.login_id, type: '서버비용' })}>{fmt(r.server_spend)}</td>
                   <td className={`${cell} text-right font-bold cursor-pointer hover:underline`}
                     onClick={() => setCostModal({ seller: r.login_id })}>{fmt(r.ad_spend)}</td>
                   <td className={`${cell} text-right text-[#1e6fd9]`}>{fmt(r.revenue)}</td>
@@ -271,49 +272,83 @@ export default function GmarketDashboard() {
         <p className="text-[11px] text-[#aaa]">※ CPC·AI매출업 = ESM 광고센터 '당일 소진액'을 기간 내 일별로 합산. 숫자를 클릭하면 일별 내역이 모달로 보입니다. (크롤이 안 된 날은 합산에서 빠집니다)</p>
       </div>
 
-      {costModal && <CostModal seller={costModal.seller} from={from} to={to} onClose={() => setCostModal(null)} />}
+      {costModal && <CostModal seller={costModal.seller} type={costModal.type} from={from} to={to} onClose={() => setCostModal(null)} />}
     </div>
   );
 }
 
-function CostModal({ seller, from, to, onClose }: { seller: string; from: string; to: string; onClose: () => void }) {
+const TYPE_COLOR: Record<string, { bg: string; text: string }> = {
+  CPC:    { bg: '#e7f5ff', text: '#228be6' },
+  AI매출업: { bg: '#fff3e0', text: '#e08000' },
+  서버비용:  { bg: '#f3e5f5', text: '#7b1fa2' },
+};
+
+function CostModal({ seller, type, from, to, onClose }: { seller: string; type?: string; from: string; to: string; onClose: () => void }) {
   const [d, setD] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     api.get('/cpc/gmarket/ad-daily/', { params: { seller_id: seller, date_from: from, date_to: to } })
       .then(r => setD(r.data)).catch(() => setD(null)).finally(() => setLoading(false));
   }, [seller, from, to]);
+
+  const rows = type ? (d?.rows || []).filter((x: any) => x.transaction_type === type) : (d?.rows || []);
+  const filteredTotal = rows.reduce((s: number, x: any) => s + x.amount, 0);
+  const typeLabel = type ? ` · ${type}` : '';
+
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
-      <div className="bg-white rounded-lg shadow-xl w-[680px] max-w-[95%] max-h-[85vh] overflow-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-lg shadow-xl w-[780px] max-w-[95%] max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex flex-wrap items-center gap-2 px-5 py-3 border-b sticky top-0 bg-white">
-          <h3 className="text-[12px] font-bold">광고비 시간대별 내역 — {seller}</h3>
+          <h3 className="text-[12px] font-bold">광고비 거래내역 — {seller}{typeLabel}</h3>
           <span className="text-[12px] text-[#888]">{from} ~ {to}</span>
-          {d && <span className="text-[12px] font-bold ml-2"><span className='text-[#e67700]'>CPC {fmt(d.cpc_spend)}</span> · <span className='text-[#9333ea]'>AI {fmt(d.ai_spend)}</span> · 합계 {fmt(d.ad_spend)}원 ({fmt(d.points)} 시간대)</span>}
+          {d && (
+            <span className="text-[12px] font-bold ml-2">
+              {type ? (
+                <span style={{ color: TYPE_COLOR[type]?.text || '#333' }}>{type} {fmt(filteredTotal)}원</span>
+              ) : (
+                <>
+                  <span className='text-[#e67700]'>CPC {fmt(d.cpc_spend)}</span>
+                  {' · '}
+                  <span className='text-[#9333ea]'>AI {fmt(d.ai_spend)}</span>
+                  {' · '}합계 {fmt(d.ad_spend)}원
+                </>
+              )}
+              <span className="text-[#aaa] font-normal ml-1">({rows.length}건)</span>
+            </span>
+          )}
           <button onClick={onClose} className="ml-auto text-[#888] hover:text-black"><X size={18} /></button>
         </div>
-        <table className="w-full text-[12px]">
-          <thead className="bg-[#f7f7f7] text-[#666]"><tr>
-            <th className="px-3 py-1.5 text-left">시간대</th>
-            <th className="px-3 py-1.5 text-right">CPC</th><th className="px-3 py-1.5 text-right">AI매출업</th>
-            <th className="px-3 py-1.5 text-right">합계</th>
-            <th className="px-3 py-1.5 text-right">건수</th>
-          </tr></thead>
-          <tbody className="divide-y divide-[#f0f0f0]">
-            {loading ? <tr><td colSpan={5} className="px-3 py-8 text-center text-[#aaa]">불러오는 중…</td></tr>
-              : !d?.rows?.length ? <tr><td colSpan={5} className="px-3 py-8 text-center text-[#aaa]">거래내역 없음</td></tr>
-                : d.rows.map((x: any, i: number) => (
-                  <tr key={i} className="hover:bg-[#fafafa]">
-                    <td className="px-3 py-1.5">{x.datetime}</td>
-                    <td className="px-3 py-1.5 text-right text-[#e67700]">{fmt(x.cpc)}</td>
-                    <td className="px-3 py-1.5 text-right text-[#9333ea]">{fmt(x.ai)}</td>
-                    <td className="px-3 py-1.5 text-right font-bold">{fmt(x.total)}</td>
-                    <td className="px-3 py-1.5 text-right text-[#555]">{fmt(x.count)}</td>
-                  </tr>
-                ))}
-          </tbody>
-        </table>
-        <p className="px-5 py-2 text-[11px] text-[#aaa]">※ 판매예치금 거래원장(실제 거래시각 기준)을 '시(時)' 단위로 묶어 그 시간대에 실제 나간 CPC·AI·서버 광고비를 표시합니다. 합계는 대시보드 셀과 동일. (데이터는 수집 시점 기준 — 13·16·18·22시 자동 새로고침)</p>
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-[12px]">
+            <thead className="bg-[#f7f7f7] text-[#666] sticky top-0"><tr>
+              <th className="px-3 py-1.5 text-left whitespace-nowrap">거래일시</th>
+              <th className="px-3 py-1.5 text-left">구분</th>
+              <th className="px-3 py-1.5 text-right whitespace-nowrap">금액</th>
+              <th className="px-3 py-1.5 text-left">거래내용</th>
+              <th className="px-3 py-1.5 text-left text-[#bbb]">마켓</th>
+            </tr></thead>
+            <tbody className="divide-y divide-[#f0f0f0]">
+              {loading
+                ? <tr><td colSpan={5} className="px-3 py-8 text-center text-[#aaa]">불러오는 중…</td></tr>
+                : !rows.length
+                  ? <tr><td colSpan={5} className="px-3 py-8 text-center text-[#aaa]">거래내역 없음</td></tr>
+                  : rows.map((x: any, i: number) => {
+                    const c = TYPE_COLOR[x.transaction_type] || { bg: '#f5f5f5', text: '#666' };
+                    return (
+                      <tr key={i} className={`hover:bg-[#fafafa] ${i % 2 ? 'bg-[#fafafa]' : 'bg-white'}`}>
+                        <td className="px-3 py-1.5 text-[#888] whitespace-nowrap">{x.traded_at}</td>
+                        <td className="px-3 py-1.5">
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: c.bg, color: c.text }}>{x.transaction_type}</span>
+                        </td>
+                        <td className="px-3 py-1.5 text-right font-medium">{x.amount.toLocaleString()}원</td>
+                        <td className="px-3 py-1.5 text-[#555]">{x.comment}</td>
+                        <td className="px-3 py-1.5 text-[#bbb] text-[11px]">{x.market}</td>
+                      </tr>
+                    );
+                  })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

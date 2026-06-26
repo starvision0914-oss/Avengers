@@ -274,24 +274,36 @@ def _save(eid, market, sdt, edt, rows):
     return len(objs)
 
 
+def _get_auction_seller_id(login_id):
+    """옥션 seller_id 반환 — auction_seller_id 설정 시 그 값, 없으면 login_id."""
+    try:
+        from apps.cpc.models import CrawlerAccount
+        a = CrawlerAccount.objects.filter(platform='gmarket', login_id=login_id).values_list('auction_seller_id', flat=True).first()
+        return a or login_id
+    except Exception:
+        return login_id
+
+
 def _collect_account_months(driver, login_id, months, log_fn):
     """마스터·서브 공통 — 지마켓+옥션 월별 거래내역 수집 후 저장. (rows, ad_rows) 반환."""
     acc_rows = acc_ad = 0
+    auction_sid = _get_auction_seller_id(login_id)
     for page_url, endpoint, market, norm in (
         (GMKT_PAGE, 'GmktSellBalanceUseListSearch', 'gmarket', _norm_gmkt),
         (IAC_PAGE, 'IacSellBalanceUseListSearch', 'auction', _norm_iac),
     ):
         driver.get(page_url)
         time.sleep(4)
+        save_id = auction_sid if market == 'auction' else login_id
         for sdt, edt in months:
             rows, ok = _fetch_month(driver, login_id, endpoint, str(sdt), str(edt), log_fn, norm)
             if not ok:
                 continue
-            n = _save(login_id, market, sdt, edt, rows)
+            n = _save(save_id, market, sdt, edt, rows)
             ad = sum(1 for r in rows if _classify(r.get('comment')) in AD_TYPES)
             acc_rows += n
             acc_ad += ad
-            _log(log_fn, f'[{login_id}] {market} {sdt:%Y-%m}: {n}건 (광고 {ad})')
+            _log(log_fn, f'[{login_id}→{save_id}] {market} {sdt:%Y-%m}: {n}건 (광고 {ad})')
             time.sleep(0.5)
     return acc_rows, acc_ad
 

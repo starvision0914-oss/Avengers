@@ -14,6 +14,7 @@ from crawlers.browser import create_driver
 from crawlers.smartstore_crawler import (
     login_smartstore, switch_store,
     fetch_daily_sales, fetch_ad_cost, fetch_products,
+    fetch_merchant_no,
 )
 
 LOCK_FILE = '/tmp/smartstore_crawl.lock'
@@ -85,7 +86,7 @@ class Command(BaseCommand):
             crawl_log = SmartStoreCrawlLog.objects.create(account=account, status='running')
             driver = None
             try:
-                driver = create_driver()
+                driver = create_driver(enable_perf_log=True)
                 self.stdout.write(f'  [{account.display_name}] 로그인 중...')
 
                 if not login_smartstore(driver, account.login_id, account.login_pw,
@@ -100,6 +101,12 @@ class Command(BaseCommand):
                 if account.store_slug:
                     switch_store(driver, account.store_slug,
                                  log_fn=lambda msg: self.stdout.write('    ' + msg))
+
+                # ── merchantNo 확보 ──
+                merchant_no = fetch_merchant_no(
+                    driver, account,
+                    log_fn=lambda msg: self.stdout.write('    ' + msg)
+                )
 
                 messages = []
 
@@ -132,7 +139,8 @@ class Command(BaseCommand):
                 # ── 판매통계 ──
                 if not skip_sales:
                     sales = fetch_daily_sales(driver, start, end,
-                                              log_fn=lambda msg: self.stdout.write('    ' + msg))
+                                              log_fn=lambda msg: self.stdout.write('    ' + msg),
+                                              merchant_no=merchant_no)
                     sales_saved = 0
                     for row in sales:
                         SmartStoreSales.objects.update_or_create(

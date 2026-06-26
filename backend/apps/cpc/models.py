@@ -63,6 +63,7 @@ class CrawlerAccount(models.Model):
     cookie_saved_at = models.DateTimeField(null=True, blank=True)
     sub_accounts = models.TextField(default='[]', blank=True)
     gmarket_origin_id = models.CharField(max_length=50, null=True, blank=True)
+    auction_seller_id = models.CharField(max_length=50, null=True, blank=True, help_text='ESM 옥션 seller_id (지마켓 login_id와 다를 때만 설정 — 예: rejoice666→rejoice7942)')
     cost_type = models.CharField(max_length=20, default='sellerpoint', choices=[('sellerpoint','셀러포인트'),('sellercash','셀러캐시')])
     display_order = models.IntegerField(default=0)
     is_focused = models.BooleanField(default=False, help_text='집중관리 대상 표시')

@@ -8,6 +8,9 @@ class SmartStoreAccount(models.Model):
     store_slug = models.CharField(max_length=200, blank=True, default='', help_text='스토어 URL ID (네이버ID)')
     display_name = models.CharField(max_length=200, blank=True, default='')
     memo = models.CharField(max_length=300, blank=True, default='')
+    commerce_api_key = models.CharField(max_length=200, blank=True, default='', help_text='네이버 커머스 API Client ID')
+    commerce_secret_key = models.TextField(blank=True, default='', help_text='네이버 커머스 API Client Secret (bcrypt)')
+    merchant_no = models.CharField(max_length=50, blank=True, default='', help_text='스마트스토어 merchantNo (GraphQL)')
     is_active = models.BooleanField(default=True)
     display_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -82,6 +85,7 @@ class SmartStoreProduct(models.Model):
     seller_management_code = models.CharField(max_length=200, blank=True, default='')
     category_id = models.CharField(max_length=100, blank=True, default='')
     product_image_url = models.TextField(blank=True, default='')
+    ownerclan_soldout = models.BooleanField(default=False, help_text='오너클랜 품절 여부 (W코드 자동처리 대상)')
     synced_at = models.DateTimeField(auto_now=True)
 
     class Meta:

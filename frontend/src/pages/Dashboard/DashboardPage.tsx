@@ -18,6 +18,7 @@ const fmtShort = (n: number) => {
 interface DashboardData {
   date: string; month: string;
   totals: any; sellers: any[]; eleven_sellers: any[]; eleven_totals: any;
+  ss_sellers: any[]; ss_totals: any;
 }
 
 export default function DashboardPage() {
@@ -47,7 +48,7 @@ export default function DashboardPage() {
   if (loading && !data) return <div className={`p-8 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>로딩 중...</div>;
   if (!data) return <div className="p-8 text-red-500">데이터 로드 실패</div>;
 
-  const { totals: t, sellers, eleven_sellers, eleven_totals } = data;
+  const { totals: t, sellers, eleven_sellers, eleven_totals, ss_sellers = [], ss_totals = {} } = data;
   const onlineDevs = smsDevices.filter((d: any) => d.is_online).length;
 
   // 도넛 차트 데이터
@@ -93,6 +94,8 @@ export default function DashboardPage() {
           <SumCard label="11번가 매출" value={t.eleven_month_sales || 0} sub={`${eleven_totals?.account_count || 0}개 계정`} color="#0369a1" dark={dark} />
           <SumCard label="11번가 광고비" value={t.eleven_month_cost} sub={`순수익 ${fmtShort(t.eleven_month_net_profit || 0)}`} color="#ff5a2e" dark={dark} />
           <SumCard label="11번가 순수익" value={t.eleven_month_net_profit || 0} color={(t.eleven_month_net_profit || 0) >= 0 ? '#16a34a' : '#dc2626'} dark={dark} />
+          <SumCard label="스마트스토어 매출" value={t.ss_month_sales || 0} sub={`${t.ss_count || 0}개 계정`} color="#03c75a" dark={dark} />
+          <SumCard label="스마트스토어 순수익" value={t.ss_month_net || 0} color={(t.ss_month_net || 0) >= 0 ? '#16a34a' : '#dc2626'} dark={dark} />
           <SumCard label="오늘 매출" value={t.today_sales} color="#059669" dark={dark} />
           <SumCard label="총 잔액" value={t.balance + (t.eleven_balance || 0)} sub={`G ${fmtShort(t.balance)} / 11 ${fmtShort(t.eleven_balance || 0)}`} color="#8b5cf6" dark={dark} />
           <SumCard label="지마켓+11번가 순이익" value={(t.net_profit || 0) + (t.eleven_month_net_profit || 0)} sub={`G ${fmtShort(t.net_profit || 0)} / 11 ${fmtShort(t.eleven_month_net_profit || 0)}`} color={((t.net_profit || 0) + (t.eleven_month_net_profit || 0)) >= 0 ? '#16a34a' : '#dc2626'} dark={dark} highlight />
@@ -299,6 +302,66 @@ export default function DashboardPage() {
                   <td className="px-3 py-2 text-right">{fmt(eleven_totals?.month_sales || 0)}</td>
                   <td className={`px-3 py-2 text-right ${(eleven_totals?.month_net_profit || 0) >= 0 ? 'text-green-600' : 'text-red-500'}`}>{fmt(eleven_totals?.month_net_profit || 0)}</td>
                   <td></td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+
+        {/* 스마트스토어 테이블 */}
+        <div className={`rounded-xl border ${card} overflow-hidden`}>
+          <div className="px-4 py-3 border-b" style={{ borderColor: dark ? '#2a2b35' : '#e5e7eb' }}>
+            <div className="flex items-center gap-2">
+              <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#03c75a' }} />
+              <span className={`text-[12px] font-bold ${text1}`}>스마트스토어</span>
+              <span className={`text-[11px] ${text3}`}>{ss_sellers.length}개 계정</span>
+              <span className={`ml-auto text-[10px] ${text3}`}>
+                정산 합계: <span className={`font-bold ${text1}`}>{fmt(ss_totals.month_settlement || 0)}원</span>
+              </span>
+            </div>
+          </div>
+          <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
+            <table className="w-full text-[12px]">
+              <thead className={`sticky top-0 ${dark ? 'bg-[#0f1117]' : 'bg-gray-50'}`}>
+                <tr className={text2}>
+                  <th className="px-3 py-2 text-left font-medium">계정</th>
+                  <th className="px-3 py-2 text-right font-medium">{data.month} 매출</th>
+                  <th className="px-3 py-2 text-right font-medium">{data.month} 정산</th>
+                  <th className="px-3 py-2 text-right font-medium">주문건</th>
+                  <th className="px-3 py-2 text-right font-medium">광고비</th>
+                  <th className="px-3 py-2 text-right font-medium">순수익</th>
+                  <th className="px-3 py-2 text-right font-medium">수집</th>
+                </tr>
+              </thead>
+              <tbody className={`divide-y ${dark ? 'divide-[#2a2b35]' : 'divide-gray-100'}`}>
+                {ss_sellers.map((s: any) => (
+                  <tr key={s.id} className={dark ? 'hover:bg-[#1f2029]' : 'hover:bg-gray-50'}>
+                    <td className={`px-3 py-1.5 font-medium ${text1}`}>
+                      <div>{s.display_name}</div>
+                      <div className={`text-[10px] ${text3}`}>{s.login_id}</div>
+                    </td>
+                    <td className={`px-3 py-1.5 text-right ${text2}`}>{s.month_sales ? fmt(s.month_sales) : '-'}</td>
+                    <td className={`px-3 py-1.5 text-right ${text1}`}>{s.month_settlement ? fmt(s.month_settlement) : '-'}</td>
+                    <td className={`px-3 py-1.5 text-right ${text2}`}>{s.month_orders ? fmt(s.month_orders) : '-'}</td>
+                    <td className={`px-3 py-1.5 text-right ${text2}`}>{s.month_ad ? fmt(s.month_ad) : '-'}</td>
+                    <td className={`px-3 py-1.5 text-right font-semibold ${s.month_settlement || s.month_ad ? (s.month_net >= 0 ? 'text-green-600' : 'text-red-500') : text3}`}>
+                      {(s.month_settlement || s.month_ad) ? fmt(s.month_net) : '-'}
+                    </td>
+                    <td className={`px-3 py-1.5 text-right text-[10px] ${text3}`}>
+                      {s.last_crawled ? new Date(s.last_crawled).toLocaleDateString('ko-KR', { month: '2-digit', day: '2-digit' }) : '미수집'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className={`sticky bottom-0 ${dark ? 'bg-[#0f1117]' : 'bg-gray-100'}`}>
+                <tr className={`font-bold ${text1}`}>
+                  <td className="px-3 py-2">합계 ({ss_sellers.length}개)</td>
+                  <td className="px-3 py-2 text-right">{fmt(ss_totals.month_sales || 0)}</td>
+                  <td className="px-3 py-2 text-right">{fmt(ss_totals.month_settlement || 0)}</td>
+                  <td className="px-3 py-2 text-right">-</td>
+                  <td className="px-3 py-2 text-right">{fmt(ss_totals.month_ad || 0)}</td>
+                  <td className={`px-3 py-2 text-right ${(ss_totals.month_net || 0) >= 0 ? 'text-green-600' : 'text-red-500'}`}>{fmt(ss_totals.month_net || 0)}</td>
                   <td></td>
                 </tr>
               </tfoot>
