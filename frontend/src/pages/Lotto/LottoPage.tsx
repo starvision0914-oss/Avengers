@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
-import { Dices, RefreshCw, Upload, Download, AlertCircle, TrendingUp, Database, X, FolderOpen, Trash2, Save, Clock, Trophy } from 'lucide-react';
+import { Dices, RefreshCw, Upload, Download, AlertCircle, TrendingUp, Database, X, FolderOpen, Trash2, Save, Clock, Trophy, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { lottoApi, type LottoStats, type LottoHistoryItem, type LottoCombination, type LottoScoreTier, type SavedPrediction } from '../../api/lotto';
+import { lottoApi, type LottoStats, type LottoHistoryItem, type LottoCombination, type LottoScoreTier, type SavedPrediction, type LottoPositionStat } from '../../api/lotto';
 
 function BallBadge({ n }: { n: number }) {
   // 동행복권 공식 색상
@@ -64,7 +64,12 @@ export default function LottoPage() {
       const r = await lottoApi.sync();
       setLog(prev => [...prev, ...r.log, `== 신규 ${r.saved}건 저장, DB 총 ${r.count}회 ==`].slice(-200));
       if (r.blocked) {
-        toast.error('⛔ dhlottery WAF 차단 감지 — CSV 임포트로 우회하세요');
+        if (r.saved > 0) {
+          toast.success(`네이버 폴백으로 ${r.saved}건 저장 (dhlottery 일시 차단)`);
+        } else {
+          // saved=0이고 DB에 데이터 있으면 → 단순 최신상태
+          toast(`dhlottery 차단 · 네이버 폴백 실행 · DB 최신 (${r.count}회까지)`, { icon: 'ℹ️' });
+        }
       } else if (r.saved > 0) {
         toast.success(`${r.saved}건 추가됨`);
       } else {
@@ -87,6 +92,7 @@ export default function LottoPage() {
   const [currentTarget, setCurrentTarget] = useState<number | null>(null); // 마지막 표시된 점수대
   const [savedPredictions, setSavedPredictions] = useState<SavedPrediction[]>([]);
   const [saving, setSaving] = useState(false);
+  const [followResult, setFollowResult] = useState<{ prevRound: number; prevNums: number[]; posStats: LottoPositionStat[] } | null>(null);
 
   const refreshPredictions = useCallback(async () => {
     try {
@@ -192,6 +198,7 @@ export default function LottoPage() {
   const onPredict = async () => {
     setSearchedTargets([]);
     setCombos([]);
+    setFollowResult(null);
     await runBrute(100);
   };
 
@@ -207,7 +214,27 @@ export default function LottoPage() {
     toast('검색 중단');
   };
 
+  const onPredictFollowNext = async () => {
+    setPredicting(true);
+    setLog(prev => [...prev, '== 이후회차 연속성 분석 시작 =='].slice(-300));
+    try {
+      const r = await lottoApi.predictFollowNext(10);
+      setCombos(r.combinations);
+      setTotalDraws(r.total_draws);
+      setFollowResult({ prevRound: r.prev_round, prevNums: r.prev_numbers, posStats: r.position_stats });
+      setCurrentTarget(null);
+      if (r.log) setLog(prev => [...prev, ...r.log].slice(-400));
+      toast.success(`${r.prev_round}회 기반 이후연속 분석 — 10조합 생성`);
+    } catch (e: any) {
+      toast.error(`예측 실패: ${e.message || e}`);
+      setLog(prev => [...prev, `오류: ${e.message || e}`].slice(-300));
+    } finally {
+      setPredicting(false);
+    }
+  };
+
   const onPredictMirrorPrev = async () => {
+    setFollowResult(null);
     setPredicting(true);
     setLog(prev => [...prev,
       '== 전회차 패턴 학습 예측 시작 ==',
@@ -344,6 +371,14 @@ export default function LottoPage() {
           <Dices className={`w-5 h-5 ${predicting ? 'animate-spin' : ''}`} />
           {predicting ? '검색 중...' : `5. 전회차 패턴 학습 예측`}
         </button>
+
+        <button
+          onClick={onPredictFollowNext} disabled={predicting || stats.count === 0}
+          className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-teal-600 to-cyan-600 text-white font-semibold rounded-lg shadow hover:from-teal-700 hover:to-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          title="전회차 각 공(1~6번)이 등장한 직후 회차에서 가장 많이 나온 번호 TOP10으로 10조합 생성">
+          <ArrowRight className={`w-5 h-5 ${predicting ? 'animate-spin' : ''}`} />
+          {predicting ? '분석 중...' : '6. 이후회차 연속성 분석 (10조합)'}
+        </button>
       </div>
 
       {/* 안내 */}
@@ -359,6 +394,53 @@ export default function LottoPage() {
             <p className="mt-1 text-xs text-amber-700">
               CSV 컬럼: drwNo, drwNoDate, num1~num6, bnusNo (한글 헤더도 인식)
             </p>
+          </div>
+        </div>
+      )}
+
+      {/* 이후회차 연속성 분석 — 포지션별 TOP10 */}
+      {followResult && (
+        <div className="bg-white rounded-lg shadow border border-teal-200 mb-6">
+          <div className="px-5 py-3 border-b border-teal-200 bg-teal-50">
+            <h3 className="font-semibold text-teal-900 flex items-center gap-2">
+              <ArrowRight className="w-5 h-5 text-teal-600" />
+              {followResult.prevRound}회 이후회차 연속성 분석
+              <span className="ml-2 text-xs font-normal text-teal-700">
+                전회차 번호: {followResult.prevNums.map((n, i) => (
+                  <span key={i} className="inline-flex items-center justify-center w-7 h-7 rounded-full font-bold text-xs mx-0.5
+                    bg-teal-600 text-white">{n}</span>
+                ))}
+              </span>
+            </h3>
+            <p className="text-xs text-teal-700 mt-1">각 공이 과거에 나온 직후 회차에서 빈출된 번호 TOP10 — 조합은 각 포지션 순위별로 구성</p>
+          </div>
+          <div className="p-4 overflow-x-auto">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 min-w-[600px]">
+              {followResult.posStats.map((ps) => (
+                <div key={ps.position} className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <BallBadge n={ps.ball} />
+                    <div>
+                      <div className="text-xs font-bold text-gray-700">{ps.position}번공</div>
+                      <div className="text-[10px] text-gray-500">{ps.used_draws}회 분석</div>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    {ps.top10.length === 0 ? (
+                      <div className="text-[10px] text-gray-400">데이터 없음</div>
+                    ) : ps.top10.map(([num, cnt], rank) => (
+                      <div key={num} className="flex items-center gap-1.5">
+                        <span className={`text-[10px] font-bold w-4 text-right ${rank < 3 ? 'text-teal-700' : 'text-gray-400'}`}>
+                          {rank + 1}
+                        </span>
+                        <BallBadge n={num} />
+                        <span className="text-[10px] text-gray-500">{cnt}회</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

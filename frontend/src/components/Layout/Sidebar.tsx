@@ -12,7 +12,7 @@ const navItems = [
   { to: '/myproduct', icon: BadgeCheck, label: '나의 상품' },
   { to: '/gmarket-my', icon: Store, label: '지마켓 상품' },
   { to: '/gmarket-roas', icon: TrendingUp, label: '지마켓/옥션 ROAS' },
-  { to: '/smartstore', icon: ShoppingCart, label: '스마트스토어' },
+  { to: '/smartstore', icon: ShoppingCart, label: '스스' },
   { to: '/blog', icon: MessageSquare, label: '블로그' },
   { to: '/st11', icon: Store, label: '11번가' },
   { to: '/st11-killlist', icon: TrendingUp, label: '11번가 광고킬' },
@@ -48,7 +48,7 @@ export default function Sidebar() {
         <h1 className="text-xl font-bold">Avengers</h1>
         <p className="text-xs text-gray-400 mt-1">업무 관리 시스템</p>
       </div>
-      <nav className="flex-1 py-4">
+      <nav className="flex-1 py-4 overflow-y-auto">
         {navItems.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}

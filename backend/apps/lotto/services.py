@@ -921,6 +921,15 @@ def check_prediction(pred_id):
         log.append(f'⌛ {p.target_round}회는 아직 추첨되지 않았습니다 (DB 최신: '
                    f'{LottoHistory.objects.order_by("-drw_no").first().drw_no if LottoHistory.objects.exists() else "-"}회).')
         log.append('동행복권 추첨일 이후 "1. 최신 데이터 동기화"를 누르면 자동으로 결과 확인 가능합니다.')
+        log.append('─' * 60)
+        log.append('[ 조합 구성 상세 ]')
+        for i, c in enumerate(p.combinations, 1):
+            log.append(f'┌── 조합 {i}: {c["numbers"]}')
+            reason = c.get('reason', '')
+            if reason:
+                for part in reason.split(' | '):
+                    log.append(f'│  {part}')
+            log.append(f'└─')
         return {
             'pending': True,
             'log': log,
@@ -950,6 +959,10 @@ def check_prediction(pred_id):
         log.append(
             f'{emoji} 조합 {i} {c["numbers"]} → 일치 {mc}개 {matched}{suffix} → {rk_label}'
         )
+        reason = c.get('reason', '')
+        if reason:
+            for part in reason.split(' | '):
+                log.append(f'     {part}')
         combos_result.append({
             'numbers': c['numbers'],
             'score': c.get('score'),
@@ -989,6 +1002,152 @@ def check_prediction(pred_id):
 def delete_prediction(pred_id):
     n, _ = LottoPrediction.objects.filter(id=pred_id).delete()
     return {'deleted': n}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 이후회차 연속성 분석 — 전회차 각 포지션 번호 이후 출현 빈도 기반 조합 생성
+# ─────────────────────────────────────────────────────────────────────────────
+
+def predict_follow_next(count=10):
+    """전회차 각 포지션(1~6번공)의 번호가 과거에 등장한 직후 회차에서
+    가장 많이 나온 번호 TOP10으로 10개 조합 생성.
+    중복 시 다음 순위 번호로 대체."""
+    qs = LottoHistory.objects.order_by('drw_no')
+    all_draws = list(qs.values('drw_no', 'num1', 'num2', 'num3', 'num4', 'num5', 'num6'))
+
+    if len(all_draws) < 2:
+        return {'error': 'DB가 비어있거나 회차가 부족합니다.', 'combinations': [], 'log': []}
+
+    # 실제 다음 회차 매핑 (연속 drw_no가 없을 수 있으므로)
+    next_draw_map = {}
+    for i in range(len(all_draws) - 1):
+        next_draw_map[all_draws[i]['drw_no']] = all_draws[i + 1]
+
+    latest = all_draws[-1]
+    prev_drw_no = latest['drw_no']
+    prev_nums = [latest['num1'], latest['num2'], latest['num3'],
+                 latest['num4'], latest['num5'], latest['num6']]
+
+    log = []
+    log.append(f'═══ 이후회차 연속성 분석 (전회차 {prev_drw_no}회) ═══')
+    log.append(f'전회차 번호: {prev_nums}')
+    log.append('─' * 60)
+
+    position_fields = ['num1', 'num2', 'num3', 'num4', 'num5', 'num6']
+    position_top_lists = []   # 6개, 각 [(num, freq), ...]  최대 15개
+    position_stats = []
+
+    historical_draws = all_draws[:-1]  # 최신회차 제외
+
+    for i, field in enumerate(position_fields):
+        target_num = prev_nums[i]
+        matching = [d for d in historical_draws if d[field] == target_num]
+
+        freq = Counter()
+        used = 0
+        for d in matching:
+            nxt = next_draw_map.get(d['drw_no'])
+            if nxt:
+                for f in position_fields:
+                    freq[nxt[f]] += 1
+                used += 1
+
+        top15 = freq.most_common(15)
+        position_top_lists.append(top15)
+        position_stats.append({
+            'position': i + 1,
+            'ball': target_num,
+            'matching_draws': len(matching),
+            'used_draws': used,
+            'top10': top15[:10],
+        })
+
+        log.append(f'{i+1}번공({target_num}) — 과거 {len(matching)}회 출현 / {used}회 다음회차 분석')
+        if top15:
+            top_str = ', '.join(f'{n}({c}회)' for n, c in top15[:10])
+            log.append(f'  이후 TOP10: {top_str}')
+        else:
+            log.append('  이후 데이터 없음 — 전체 빈출 번호로 대체')
+
+    log.append('─' * 60)
+
+    # 전체 빈출 순위 (포지션 데이터 없을 때 fallback)
+    overall_freq = Counter()
+    for d in historical_draws:
+        for f in position_fields:
+            overall_freq[d[f]] += 1
+    overall_ranked = [n for n, _ in overall_freq.most_common()]
+
+    count = min(max(1, count), 10)
+    combinations = []
+
+    for k in range(count):
+        combo = []
+        detail_parts = []
+        log.append(f'┌── 조합 {k+1} (각 포지션 {k+1}순위 번호 기준) ──')
+
+        for pos in range(6):
+            top_list = position_top_lists[pos]  # [(num, freq), ...]
+            ball = prev_nums[pos]
+            skipped = []
+
+            # k번째부터 시도, 중복이면 다음 순위
+            chosen_num = None
+            chosen_rank = None
+            chosen_freq = 0
+            idx = k
+            while idx < len(top_list):
+                num, freq = top_list[idx]
+                if num not in combo:
+                    chosen_num = num
+                    chosen_rank = idx + 1
+                    chosen_freq = freq
+                    break
+                else:
+                    skipped.append(f'{idx+1}위 {num}번({freq}회)→중복')
+                idx += 1
+
+            # 목록 소진 시 overall_ranked에서 선택
+            if chosen_num is None:
+                for n in overall_ranked:
+                    if n not in combo:
+                        chosen_num = n
+                        chosen_rank = 99
+                        chosen_freq = 0
+                        break
+
+            combo.append(chosen_num)
+            detail_parts.append(f'{pos+1}번({ball})→{chosen_num}[{chosen_rank}위]')
+
+            skip_str = f'  ⤵ 스킵: {", ".join(skipped)}' if skipped else ''
+            freq_label = f'{chosen_freq}회' if chosen_freq else '(전체빈출폴백)'
+            log.append(
+                f'│  {pos+1}번공 [{ball:2d}] → {chosen_rank:2d}위 {chosen_num:2d}번 ({freq_label})'
+                + (f'  ※ {" / ".join(skipped)}' if skipped else '')
+            )
+
+        sorted_combo = sorted(combo)
+        combinations.append({
+            'numbers': sorted_combo,
+            'score': None,
+            'reason': ' | '.join(detail_parts),
+            'breakdown': detail_parts,
+        })
+        log.append(f'└→ 최종: {sorted_combo}')
+        log.append('')
+
+    log.append('─' * 60)
+    log.append(f'※ 역대 데이터 {len(all_draws)}회 기반. 각 포지션 번호가 등장한 직후 회차에서 빈출 번호 TOP10 추출.')
+
+    return {
+        'mode': 'follow_next',
+        'prev_round': prev_drw_no,
+        'prev_numbers': prev_nums,
+        'combinations': combinations,
+        'position_stats': position_stats,
+        'log': log,
+        'total_draws': len(all_draws),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

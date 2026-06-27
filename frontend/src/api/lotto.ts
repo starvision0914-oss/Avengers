@@ -99,6 +99,24 @@ export interface LottoPredictBruteResult {
   log: string[];
 }
 
+export interface LottoPositionStat {
+  position: number;
+  ball: number;
+  matching_draws: number;
+  used_draws: number;
+  top10: [number, number][];
+}
+
+export interface LottoPredictFollowResult {
+  mode: 'follow_next';
+  prev_round: number;
+  prev_numbers: number[];
+  combinations: LottoCombination[];
+  position_stats: LottoPositionStat[];
+  log: string[];
+  total_draws: number;
+}
+
 export interface LottoImportResult extends LottoStats {
   added: number;
   skipped: number;
@@ -120,6 +138,9 @@ export const lottoApi = {
     api.get<LottoPredictBruteResult & { prev_round: number; prev_numbers: number[] }>(
       `/lotto/predict-mirror-prev/?count=${count}`,
       { timeout: 300_000 }).then(r => r.data),
+  predictFollowNext: (count = 10) =>
+    api.get<LottoPredictFollowResult>(
+      `/lotto/predict-follow-next/?count=${count}`).then(r => r.data),
   // 저장된 예측 폴더
   listPredictions: () => api.get<{ items: SavedPrediction[] }>('/lotto/predictions/').then(r => r.data),
   savePrediction: (combinations: LottoCombination[], score_threshold: number) =>

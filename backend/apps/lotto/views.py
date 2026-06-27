@@ -88,6 +88,18 @@ class PredictMirrorPrevView(views.APIView):
         return Response(services.predict_mirror_prev_round(count=max(1, min(count, 20))))
 
 
+class PredictFollowNextView(views.APIView):
+    """전회차 각 포지션 번호 이후 회차 빈출 기반 예측."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            count = int(request.query_params.get('count', 10))
+        except (TypeError, ValueError):
+            count = 10
+        return Response(services.predict_follow_next(count=max(1, min(count, 10))))
+
+
 class PredictBruteView(views.APIView):
     """전수조사 예측 — target_score 이상 조합 검색."""
     permission_classes = [IsAuthenticated]

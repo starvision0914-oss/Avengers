@@ -17,19 +17,27 @@ function daysAgoKST(n: number): string {
   return d.toLocaleDateString('en-CA');
 }
 
-type PeriodKey = 'year' | 'month' | 'today' | 'yesterday' | 'custom';
+type PeriodKey = 'year' | 'month' | 'mtd' | 'today' | 'yesterday' | 'custom';
 const PERIODS: { key: PeriodKey; label: string }[] = [
   { key: 'year', label: '1년' },
   { key: 'month', label: '한달' },
+  { key: 'mtd', label: '당월' },
   { key: 'today', label: '오늘' },
   { key: 'yesterday', label: '어제' },
   { key: 'custom', label: '기간별' },
 ];
 
+function firstDayOfMonthKST(): string {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+  d.setDate(1);
+  return d.toLocaleDateString('en-CA');
+}
+
 function periodToOverviewParam(period: PeriodKey, cFrom: string, cTo: string): OverviewParams {
   if (period === 'custom') return { date_from: cFrom, date_to: cTo };
   if (period === 'year') return { period: 'year' };
   if (period === 'month') return { period: 'month' };
+  if (period === 'mtd') return { period: 'mtd' };
   if (period === 'today') return { period: 'today' };
   return { period: 'yesterday' };
 }
@@ -39,6 +47,7 @@ function periodToMallProfitParam(period: PeriodKey, cFrom: string, cTo: string) 
   if (period === 'custom') return { date_from: cFrom, date_to: cTo };
   if (period === 'year') return { date_from: daysAgoKST(364), date_to: today };
   if (period === 'month') return { date_from: daysAgoKST(29), date_to: today };
+  if (period === 'mtd') return { date_from: firstDayOfMonthKST(), date_to: today };
   if (period === 'today') return { date_from: today, date_to: today };
   return { date_from: ydayKST(), date_to: ydayKST() };
 }
@@ -46,6 +55,7 @@ function periodToMallProfitParam(period: PeriodKey, cFrom: string, cTo: string) 
 function periodLabel(period: PeriodKey, dateFrom: string, dateTo: string): string {
   if (period === 'year') return '최근 1년';
   if (period === 'month') return '최근 한달';
+  if (period === 'mtd') return '이번 달';
   if (period === 'today') return '오늘';
   if (period === 'yesterday') return '어제';
   return dateFrom === dateTo ? dateFrom : `${dateFrom} ~ ${dateTo}`;

@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import (
     StatsView, HistoryView, SyncView, ImportCsvView, PredictView,
-    PredictBruteView, PredictMirrorPrevView, ExportCsvView,
+    PredictBruteView, PredictMirrorPrevView, PredictFollowNextView, ExportCsvView,
     PredictionListView, PredictionCheckView, PredictionDeleteView,
 )
 
@@ -14,6 +14,7 @@ urlpatterns = [
     path('predict/', PredictView.as_view()),
     path('predict-brute/', PredictBruteView.as_view()),
     path('predict-mirror-prev/', PredictMirrorPrevView.as_view()),
+    path('predict-follow-next/', PredictFollowNextView.as_view()),
     path('predictions/', PredictionListView.as_view()),
     path('predictions/<int:pk>/check/', PredictionCheckView.as_view()),
     path('predictions/<int:pk>/', PredictionDeleteView.as_view()),

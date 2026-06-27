@@ -10,12 +10,12 @@ import { logout } from '../../api/auth';
 
 const primary = [
   { to: '/overview', icon: Layers, label: '통합현황' },
-  { to: '/dashboard', icon: LayoutDashboard, label: '대시보드' },
   { to: '/ownerclan', icon: Package, label: '예비상품' },
   { to: '/myproduct', icon: BadgeCheck, label: '나의 상품' },
   { to: '/gmarket-my', icon: ShoppingBag, label: '지마켓상품' },
   { to: '/st11', icon: Store, label: '11번가' },
   { to: '/gmarket', icon: Store, label: '지마켓' },
+  { to: '/smartstore', icon: ShoppingCart, label: '스스' },
   { to: '/cpc', icon: BarChart3, label: 'CPC' },
   { to: '/sales', icon: ShoppingCart, label: '매출' },
   { to: '/tax', icon: Receipt, label: '세무' },
@@ -26,6 +26,7 @@ const primary = [
 ];
 
 const more = [
+  { to: '/dashboard', icon: LayoutDashboard, label: '대시보드' },
   { to: '/roadmap', icon: Map, label: '개발로드맵' },
   { to: '/eleven-my', icon: ShoppingBag, label: '11번가 나의 상품' },
   { to: '/accounts', icon: Users, label: '판매자 계정' },
