@@ -12,11 +12,19 @@ interface Props {
 type FormState = {
   login_id: string; login_pw: string; store_name: string; store_slug: string;
   display_name: string; memo: string; commerce_api_key: string; commerce_secret_key: string;
+  naver_ad_customer_id: string; naver_ad_access_license: string; naver_ad_secret_key: string;
+  naver_ad_ai_customer_id: string; naver_ad_ai_access_license: string; naver_ad_ai_secret_key: string;
+  naver_ad_account_id: string; naver_ad_login_id: string;
+  purchase_rate: string;
 };
 
 const EMPTY_FORM: FormState = {
   login_id: '', login_pw: '', store_name: '', store_slug: '',
   display_name: '', memo: '', commerce_api_key: '', commerce_secret_key: '',
+  naver_ad_customer_id: '', naver_ad_access_license: '', naver_ad_secret_key: '',
+  naver_ad_ai_customer_id: '', naver_ad_ai_access_license: '', naver_ad_ai_secret_key: '',
+  naver_ad_account_id: '', naver_ad_login_id: '',
+  purchase_rate: '',
 };
 
 export default function AccountSettingsModal({ accounts, onClose, onSaved }: Props) {
@@ -40,6 +48,13 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
       store_name: a.store_name, store_slug: a.store_slug,
       display_name: a.display_name, memo: a.memo,
       commerce_api_key: '', commerce_secret_key: '',
+      naver_ad_customer_id: (a as any).naver_ad_customer_id || '',
+      naver_ad_access_license: '', naver_ad_secret_key: '',
+      naver_ad_ai_customer_id: (a as any).naver_ad_ai_customer_id || '',
+      naver_ad_ai_access_license: '', naver_ad_ai_secret_key: '',
+      naver_ad_account_id: (a as any).naver_ad_account_id || '',
+      naver_ad_login_id: (a as any).naver_ad_login_id || '',
+      purchase_rate: String(a.purchase_rate ?? 0),
     });
     setShowAdd(false);
   };
@@ -56,6 +71,15 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
         payload.memo = form.memo;
         if (form.commerce_api_key) payload.commerce_api_key = form.commerce_api_key;
         if (form.commerce_secret_key) payload.commerce_secret_key = form.commerce_secret_key;
+        payload.naver_ad_customer_id = form.naver_ad_customer_id;
+        if (form.naver_ad_access_license) payload.naver_ad_access_license = form.naver_ad_access_license;
+        if (form.naver_ad_secret_key) payload.naver_ad_secret_key = form.naver_ad_secret_key;
+        payload.naver_ad_ai_customer_id = form.naver_ad_ai_customer_id;
+        if (form.naver_ad_ai_access_license) payload.naver_ad_ai_access_license = form.naver_ad_ai_access_license;
+        if (form.naver_ad_ai_secret_key) payload.naver_ad_ai_secret_key = form.naver_ad_ai_secret_key;
+        payload.naver_ad_account_id = form.naver_ad_account_id;
+        payload.naver_ad_login_id = form.naver_ad_login_id;
+        payload.purchase_rate = String(parseInt(form.purchase_rate || '0', 10));
         await updateAccount(editId, payload);
         setEditId(null);
       } else {
@@ -147,6 +171,58 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
                     </div>
                   </div>
 
+                  {/* 네이버 검색광고 CPC API */}
+                  <div className={`p-3 rounded-lg space-y-2 ${dark ? 'bg-[#0d1a10]' : 'bg-green-50'}`}>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold mb-1" style={{ color: '#03C75A' }}>
+                      <Key size={12} /> 네이버 광고 CPC (검색/쇼핑검색)
+                    </div>
+                    {F('Billing Account ID', 'naver_ad_account_id', { placeholder: 'ads.naver.com/ad-account/숫자' })}
+                    {F('광고센터 Naver ID', 'naver_ad_login_id', { placeholder: '예: rejoice666 (쿠키 키와 일치)' })}
+                    {F('Customer ID (API용)', 'naver_ad_customer_id', { placeholder: '예: 3790215' })}
+                    {F('Access License (빈칸=유지)', 'naver_ad_access_license', { placeholder: 'Access License' })}
+                    <div>
+                      <label className={`text-xs ${text2} mb-1 block`}>Secret Key (빈칸=유지)</label>
+                      <input type="password" className={`w-full px-3 py-2 rounded-lg border text-sm ${inp}`}
+                        value={form.naver_ad_secret_key}
+                        onChange={e => setForm(f => ({ ...f, naver_ad_secret_key: e.target.value }))}
+                        placeholder="Secret Key" />
+                    </div>
+                  </div>
+
+                  {/* 네이버 검색광고 AI API */}
+                  <div className={`p-3 rounded-lg space-y-2 ${dark ? 'bg-[#0e0d1a]' : 'bg-indigo-50'}`}>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold mb-1 text-[#6366f1]">
+                      <Key size={12} /> 네이버 광고 AI (AI추천/스마트쇼핑)
+                    </div>
+                    {F('Customer ID', 'naver_ad_ai_customer_id', { placeholder: '예: 1891217' })}
+                    {F('Access License (빈칸=유지)', 'naver_ad_ai_access_license', { placeholder: 'Access License' })}
+                    <div>
+                      <label className={`text-xs ${text2} mb-1 block`}>Secret Key (빈칸=유지)</label>
+                      <input type="password" className={`w-full px-3 py-2 rounded-lg border text-sm ${inp}`}
+                        value={form.naver_ad_ai_secret_key}
+                        onChange={e => setForm(f => ({ ...f, naver_ad_ai_secret_key: e.target.value }))}
+                        placeholder="Secret Key" />
+                    </div>
+                  </div>
+
+                  {/* 구매가율 */}
+                  <div className={`p-3 rounded-lg ${dark ? 'bg-[#1a1a0e]' : 'bg-amber-50'}`}>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold mb-2 text-[#b45309]">구매가율 설정</div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number" min="0" max="100"
+                        className={`w-24 px-3 py-2 rounded-lg border text-sm ${inp}`}
+                        value={form.purchase_rate}
+                        onChange={e => setForm(f => ({ ...f, purchase_rate: e.target.value }))}
+                        placeholder="0"
+                      />
+                      <span className={`text-sm ${text2}`}>% — 구매가 = 매출 × 이율</span>
+                      {form.purchase_rate && parseInt(form.purchase_rate) > 0 && (
+                        <span className="text-xs text-[#b45309]">예: 매출 100만원 → 구매가 {parseInt(form.purchase_rate)}만원</span>
+                      )}
+                    </div>
+                  </div>
+
                   <div className="flex gap-2 justify-end">
                     <button onClick={() => setEditId(null)} className={`px-4 py-1.5 rounded-lg text-sm ${dark ? 'bg-[#2d3144] text-gray-300' : 'bg-gray-100 text-gray-600'}`}>
                       취소
@@ -171,8 +247,17 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
                     {a.has_pw ? <Unlock size={14} className="text-[#03C75A]" />
                               : <Lock size={14} className="text-red-400" />}
                     {a.has_api_key
-                      ? <span className="text-xs text-blue-400 flex items-center gap-0.5"><Key size={11} />API</span>
-                      : <span className={`text-xs ${text2} flex items-center gap-0.5`}><Key size={11} />-</span>}
+                      ? <span className="text-xs text-blue-400 flex items-center gap-0.5"><Key size={11} />커머스</span>
+                      : null}
+                    {(a as any).has_naver_ad
+                      ? <span className="text-xs flex items-center gap-0.5 font-semibold" style={{ color: '#03C75A' }}><Key size={11} />CPC</span>
+                      : null}
+                    {(a as any).has_naver_ai
+                      ? <span className="text-xs flex items-center gap-0.5 font-semibold text-[#6366f1]"><Key size={11} />AI</span>
+                      : null}
+                    {(a.purchase_rate || 0) > 0
+                      ? <span className="text-xs text-[#b45309] font-semibold">구매가{a.purchase_rate}%</span>
+                      : null}
                     <button onClick={() => startEdit(a)} className={`text-xs px-3 py-1 rounded-lg ${dark ? 'bg-[#2d3144] text-gray-300' : 'bg-gray-100 text-gray-600'}`}>
                       수정
                     </button>

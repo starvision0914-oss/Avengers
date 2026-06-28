@@ -1,10 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-} from 'recharts';
-import {
   RefreshCw, Settings, Package,
-  TrendingUp, ShoppingBag, Lock, BarChart3, Clock,
+  ShoppingBag, Lock, BarChart3, Clock,
 } from 'lucide-react';
 import {
   getAccounts, getDashboard, getProductStats,
@@ -115,17 +112,10 @@ export default function SmartStorePage() {
 
   const s = dash?.summary;
   const byAcc: AccountRow[] = dash?.by_account || [];
-  const daily = dash?.daily || [];
   const accountLoginMap = new Map(accounts.map(a => [a.id, a.login_id.split('@')[0]]));
   const [start, end] = getRange(periodMode, date);
 
-  const net = (s?.total_settlement || 0) - (s?.total_ad_cost || 0);
-
-  const chartData = daily.map(d => ({
-    date: d.date.slice(5),
-    정산: d.settlement,
-    광고비: d.ad_cost,
-  }));
+  const net = (s?.total_excel_revenue || 0) - (s?.total_ad_cost || 0) - (s?.total_cogs || 0);
 
   const lastCrawl = (() => {
     const done = crawlLogs.filter(l => l.status === 'done');
@@ -189,12 +179,27 @@ export default function SmartStorePage() {
         {/* ── KPI 요약 바 ── */}
         <div className="bg-white border border-[#e0e0e0] rounded">
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 md:px-5 py-2.5 text-[12px]">
-            <SumItem label="정산" value={s?.total_settlement || 0} color={SS} />
+            <SumItem label="매출" value={s?.total_excel_revenue || 0} color={SS} />
             <Sep />
-            <SumItem label="광고비" value={s?.total_ad_cost || 0} color="#f97316" />
+            <span>
+              <span className="text-[#888] mr-1">광고비:</span>
+              <span className="font-bold text-[#f97316]">{fmtW(s?.total_ad_cost || 0)}원</span>
+              {(s?.total_ad_cpc || 0) > 0 && (
+                <span className="text-[10px] text-[#aaa] ml-1">(CPC {fmtW(s.total_ad_cpc)})</span>
+              )}
+              {(s?.total_ad_ai || 0) > 0 && (
+                <span className="text-[10px] text-[#6366f1] ml-1">AI {fmtW(s.total_ad_ai)}</span>
+              )}
+            </span>
             <Sep />
-            <SumItem label="매출" value={s?.total_sales || 0} />
+            <SumItem label="결제금액" value={s?.total_sales || 0} color="#888" />
             <Sep />
+            {(s?.total_cogs || 0) > 0 && (
+              <>
+                <SumItem label="구매가" value={s?.total_cogs || 0} color="#0284c7" />
+                <Sep />
+              </>
+            )}
             <span>
               <span className="text-[#888] mr-1">순수익:</span>
               <span className="font-bold" style={{ color: net >= 0 ? '#15803d' : '#dc2626' }}>{fmtW(net)}원</span>
@@ -232,11 +237,10 @@ export default function SmartStorePage() {
           </div>
         </div>
 
-        {/* ── 계정별 테이블 + 차트 ── */}
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+        {/* ── 계정별 테이블 ── */}
+        <div className="grid grid-cols-1 gap-3">
 
-          {/* 계정별 테이블 (2/3) */}
-          <div className="xl:col-span-2 bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
+          <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
             <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
               <BarChart3 size={15} style={{ color: SS }} />
               <span className="text-[12px] font-bold text-[#222]">계정별 현황</span>
@@ -247,8 +251,10 @@ export default function SmartStorePage() {
                 <thead className="bg-[#fafafa]">
                   <tr className="text-[#666]">
                     <th className="px-4 py-2.5 text-left font-semibold">계정</th>
-                    <th className="px-4 py-2.5 text-right font-semibold">정산</th>
-                    <th className="px-4 py-2.5 text-right font-semibold">광고비</th>
+                    <th className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>매출</th>
+                    <th className="px-4 py-2.5 text-right font-semibold text-[#f97316]">CPC</th>
+                    <th className="px-4 py-2.5 text-right font-semibold text-[#6366f1]">AI</th>
+                    <th className="px-4 py-2.5 text-right font-semibold text-[#0284c7]">구매가</th>
                     <th className="px-4 py-2.5 text-right font-semibold">순수익</th>
                     <th className="px-4 py-2.5 text-right font-semibold">ROAS</th>
                     <th className="px-4 py-2.5 text-right font-semibold">주문</th>
@@ -257,21 +263,29 @@ export default function SmartStorePage() {
                 <tbody className="divide-y divide-[#f5f5f5]">
                   {byAcc.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-10 text-center text-[#aaa] text-[12px]">
+                      <td colSpan={8} className="px-4 py-10 text-center text-[#aaa] text-[12px]">
                         데이터 없음 — 크롤링 후 표시됩니다
                       </td>
                     </tr>
                   ) : (
                     byAcc.map(row => {
-                      const rowNet = row.settlement - row.ad_cost;
+                      const cpc = row.ad_cpc || 0;
+                      const ai  = row.ad_ai  || 0;
+                      const cogs = row.cogs || 0;
+                      const excelRev = row.excel_revenue || 0;
+                      const rowNet = excelRev - cpc - ai - cogs;
                       return (
                         <tr key={row.account_id} className="hover:bg-[#fafff8] transition-colors">
                           <td className="px-4 py-2.5">
                             <span className="font-semibold text-[#333]">{row.account_name}</span>
                             <span className="text-[10px] text-[#aaa] ml-1.5">{accountLoginMap.get(row.account_id) || ''}</span>
                           </td>
-                          <td className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>{fmt(row.settlement)}</td>
-                          <td className="px-4 py-2.5 text-right text-[#f97316]">{row.ad_cost > 0 ? fmt(row.ad_cost) : '-'}</td>
+                          <td className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>{excelRev > 0 ? fmt(excelRev) : <span className="text-[#ccc]">-</span>}</td>
+                          <td className="px-4 py-2.5 text-right text-[#f97316]">{cpc > 0 ? fmt(cpc) : '-'}</td>
+                          <td className="px-4 py-2.5 text-right text-[#6366f1]">{ai > 0 ? fmt(ai) : '-'}</td>
+                          <td className="px-4 py-2.5 text-right text-[#0284c7]">
+                            {cogs > 0 ? fmt(cogs) : <span className="text-[#ccc]">-</span>}
+                          </td>
                           <td className={`px-4 py-2.5 text-right font-semibold ${rowNet >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(rowNet)}</td>
                           <td className={`px-4 py-2.5 text-right font-bold ${row.roas != null && row.roas >= 200 ? 'text-[#16a34a]' : row.roas != null ? 'text-[#dc2626]' : 'text-[#aaa]'}`}>
                             {row.roas != null ? row.roas + '%' : '-'}
@@ -286,8 +300,10 @@ export default function SmartStorePage() {
                   <tfoot className="bg-[#f5f5f5]">
                     <tr className="font-bold text-[#333]">
                       <td className="px-4 py-2.5">합계 ({byAcc.length}개)</td>
-                      <td className="px-4 py-2.5 text-right" style={{ color: SS }}>{fmt(s?.total_settlement || 0)}</td>
-                      <td className="px-4 py-2.5 text-right text-[#f97316]">{fmt(s?.total_ad_cost || 0)}</td>
+                      <td className="px-4 py-2.5 text-right" style={{ color: SS }}>{fmt(s?.total_excel_revenue || 0)}</td>
+                      <td className="px-4 py-2.5 text-right text-[#f97316]">{fmt(s?.total_ad_cpc || 0)}</td>
+                      <td className="px-4 py-2.5 text-right text-[#6366f1]">{fmt(s?.total_ad_ai || 0)}</td>
+                      <td className="px-4 py-2.5 text-right text-[#0284c7]">{fmt(s?.total_cogs || 0)}</td>
                       <td className={`px-4 py-2.5 text-right ${net >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(net)}</td>
                       <td className={`px-4 py-2.5 text-right ${s?.roas != null && s.roas >= 200 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>
                         {s?.roas != null ? s.roas + '%' : '-'}
@@ -300,47 +316,6 @@ export default function SmartStorePage() {
             </div>
           </div>
 
-          {/* 일별 차트 (1/3) */}
-          <div className="bg-white border border-[#e0e0e0] rounded-xl p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <TrendingUp size={15} style={{ color: SS }} />
-              <span className="text-[12px] font-bold text-[#222]">일별 정산 추이</span>
-            </div>
-            {chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={260}>
-                <AreaChart data={chartData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="ssGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={SS} stopOpacity={0.15} />
-                      <stop offset="95%" stopColor={SS} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#aaa' }} />
-                  <YAxis tickFormatter={v => fmtW(v)} tick={{ fontSize: 10, fill: '#aaa' }} width={45} />
-                  <Tooltip
-                    formatter={(v: any, name: string) => [fmt(Number(v)) + '원', name]}
-                    contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #e5e7eb' }}
-                  />
-                  <Area type="monotone" dataKey="정산" stroke={SS} fill="url(#ssGrad)" strokeWidth={2} dot={false} />
-                  <Area type="monotone" dataKey="광고비" stroke="#f97316" fill="none" strokeWidth={1.5} strokeDasharray="3 3" dot={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-[260px] text-[#ccc] gap-2">
-                <BarChart3 size={32} />
-                <span className="text-[12px]">데이터 없음</span>
-              </div>
-            )}
-            <div className="flex items-center gap-4 mt-2 justify-center">
-              <div className="flex items-center gap-1.5 text-[10px] text-[#666]">
-                <div className="w-3 h-0.5 rounded" style={{ background: SS }} /> 정산
-              </div>
-              <div className="flex items-center gap-1.5 text-[10px] text-[#666]">
-                <div className="w-3 h-0.5 border-t border-dashed border-[#f97316]" /> 광고비
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* ── 상품 현황 ── */}

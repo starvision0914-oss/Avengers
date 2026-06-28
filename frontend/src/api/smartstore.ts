@@ -11,6 +11,7 @@ export interface SmartStoreAccount {
   has_api_key: boolean;
   is_active: boolean;
   display_order: number;
+  purchase_rate: number;
 }
 
 export interface DashboardSummary {
@@ -20,6 +21,10 @@ export interface DashboardSummary {
   total_settlement: number;
   total_orders: number;
   total_ad_cost: number;
+  total_ad_cpc: number;
+  total_ad_ai: number;
+  total_cogs: number;
+  total_excel_revenue: number;
   total_clicks: number;
   total_conversion: number;
   roas: number | null;
@@ -32,6 +37,10 @@ export interface AccountRow {
   settlement: number;
   orders: number;
   ad_cost: number;
+  ad_cpc: number;
+  ad_ai: number;
+  excel_revenue: number;
+  cogs: number;
   roas: number | null;
 }
 

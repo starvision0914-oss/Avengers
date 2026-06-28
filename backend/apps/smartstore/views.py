@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from .models import SmartStoreAccount, SmartStoreSales, SmartStoreAdCost, SmartStoreProduct, SmartStoreCrawlLog
+from apps.sales.models import SalesRecord
 
 
 def _account_serial(a):
@@ -19,6 +20,13 @@ def _account_serial(a):
         'memo': a.memo,
         'has_pw': bool(a.login_pw),
         'has_api_key': bool(a.commerce_api_key and a.commerce_secret_key),
+        'has_naver_ad': bool(a.naver_ad_customer_id and a.naver_ad_access_license and a.naver_ad_secret_key),
+        'has_naver_ai': bool(a.naver_ad_ai_customer_id and a.naver_ad_ai_access_license and a.naver_ad_ai_secret_key),
+        'naver_ad_customer_id': a.naver_ad_customer_id,
+        'naver_ad_ai_customer_id': a.naver_ad_ai_customer_id,
+        'naver_ad_account_id': a.naver_ad_account_id,
+        'naver_ad_login_id': a.naver_ad_login_id,
+        'purchase_rate': a.purchase_rate,
         'is_active': a.is_active,
         'display_order': a.display_order,
     }
@@ -56,7 +64,10 @@ class AccountDetailView(APIView):
 
         for field in ('login_id', 'login_pw', 'store_name', 'store_slug',
                       'display_name', 'memo', 'commerce_api_key', 'commerce_secret_key',
-                      'is_active', 'display_order'):
+                      'naver_ad_customer_id', 'naver_ad_access_license', 'naver_ad_secret_key',
+                      'naver_ad_ai_customer_id', 'naver_ad_ai_access_license', 'naver_ad_ai_secret_key',
+                      'naver_ad_account_id', 'naver_ad_login_id',
+                      'purchase_rate', 'is_active', 'display_order'):
             if field in request.data:
                 setattr(obj, field, request.data[field])
         obj.save()
@@ -83,104 +94,105 @@ class DashboardView(APIView):
             start = datetime.date.fromisoformat(start)
             end = datetime.date.fromisoformat(end)
 
-        sales_qs = SmartStoreSales.objects.filter(date__gte=start, date__lte=end)
-        ad_qs = SmartStoreAdCost.objects.filter(date__gte=start, date__lte=end)
+        # SalesRecord를 주 매출 소스로 사용 (11번가/지마켓 대시보드와 동일)
+        accounts_qs = SmartStoreAccount.objects.filter(is_active=True)
+        login_to_acc = {a.login_id: a for a in accounts_qs}
+        acc_info = {a.id: (a.display_name or a.store_name, a.login_id) for a in accounts_qs}
 
-        if account_ids:
-            sales_qs = sales_qs.filter(account_id__in=account_ids)
-            ad_qs = ad_qs.filter(account_id__in=account_ids)
-
-        sales_agg = sales_qs.aggregate(
-            total_sales=Sum('sales_amount'),
-            total_cancel=Sum('cancel_amount'),
-            total_return=Sum('return_amount'),
-            total_settlement=Sum('settlement_amount'),
-            total_orders=Sum('order_count'),
-            total_commission=Sum('commission_amount'),
+        sr_qs = SalesRecord.objects.filter(
+            platform='smartstore',
+            order_date__gte=start,
+            order_date__lte=end,
         )
-        ad_agg = ad_qs.aggregate(
-            total_ad_cost=Sum('cost'),
-            total_clicks=Sum('click'),
-            total_impressions=Sum('impression'),
-            total_conversion=Sum('conversion_amount'),
-        )
-
-        total_sales = sales_agg['total_sales'] or 0
-        total_settlement = sales_agg['total_settlement'] or 0
-        total_ad = ad_agg['total_ad_cost'] or 0
-        roas = round(total_settlement / total_ad * 100, 1) if total_ad > 0 else None
 
         by_account = {}
-        for row in sales_qs.values('account_id').annotate(
-            sales=Sum('sales_amount'),
-            settlement=Sum('settlement_amount'),
-            orders=Sum('order_count'),
+        for r in sr_qs.values('seller__seller_id').annotate(
+            sales=Sum('total_price'),
+            commission=Sum('commission'),
+            cogs=Sum('cost'),
+            orders=Count('id'),
         ):
-            aid = row['account_id']
-            by_account[aid] = {
-                'sales': row['sales'] or 0,
-                'settlement': row['settlement'] or 0,
-                'orders': row['orders'] or 0,
-                'ad_cost': 0,
+            sid = r['seller__seller_id']
+            acc = login_to_acc.get(sid)
+            if not acc:
+                continue
+            if account_ids and str(acc.id) not in account_ids:
+                continue
+            settle = (r['sales'] or 0) - (r['commission'] or 0)
+            by_account[acc.id] = {
+                'sales': r['sales'] or 0,
+                'settlement': settle,
+                'orders': r['orders'] or 0,
+                'commission': r['commission'] or 0,
+                'cogs': r['cogs'] or 0,
+                'ad_cost': 0, 'ad_cpc': 0, 'ad_ai': 0,
             }
 
-        for row in ad_qs.values('account_id').annotate(cost=Sum('cost')):
+        ad_qs = SmartStoreAdCost.objects.filter(date__gte=start, date__lte=end)
+        if account_ids:
+            ad_qs = ad_qs.filter(account_id__in=account_ids)
+
+        for row in ad_qs.values('account_id', 'ad_type').annotate(cost=Sum('cost')):
             aid = row['account_id']
             if aid not in by_account:
-                by_account[aid] = {'sales': 0, 'settlement': 0, 'orders': 0, 'ad_cost': 0}
-            by_account[aid]['ad_cost'] = row['cost'] or 0
+                by_account[aid] = {'sales': 0, 'settlement': 0, 'orders': 0, 'commission': 0, 'cogs': 0, 'ad_cost': 0, 'ad_cpc': 0, 'ad_ai': 0}
+            c = row['cost'] or 0
+            by_account[aid]['ad_cost'] += c
+            if row['ad_type'] == 'cpc':
+                by_account[aid]['ad_cpc'] += c
+            elif row['ad_type'] == 'ai':
+                by_account[aid]['ad_ai'] += c
 
-        accounts = {a.id: a.display_name or a.store_name
-                    for a in SmartStoreAccount.objects.filter(is_active=True)}
         account_list = []
         for aid, row in by_account.items():
-            s = row['settlement']
-            c = row['ad_cost']
+            name, login_id = acc_info.get(aid, (str(aid), ''))
+            sales = row['sales']
+            ad = row['ad_cost']
             account_list.append({
                 'account_id': aid,
-                'account_name': accounts.get(aid, str(aid)),
+                'account_name': name,
                 **row,
-                'roas': round(s / c * 100, 1) if c > 0 else None,
+                'excel_revenue': sales,
+                'roas': round(sales / ad * 100, 1) if ad > 0 else None,
             })
-        account_list.sort(key=lambda x: x['settlement'], reverse=True)
+        account_list.sort(key=lambda x: x['sales'], reverse=True)
 
-        sales_by_date = {}
-        for row in sales_qs.values('date').annotate(
-            sales=Sum('sales_amount'),
-            settlement=Sum('settlement_amount'),
-            orders=Sum('order_count'),
-        ).order_by('date'):
-            sales_by_date[str(row['date'])] = {
-                'date': str(row['date']),
-                'sales': row['sales'] or 0,
-                'settlement': row['settlement'] or 0,
-                'orders': row['orders'] or 0,
-                'ad_cost': 0,
-            }
+        total_sales = sum(r['sales'] for r in by_account.values())
+        total_settlement = sum(r['settlement'] for r in by_account.values())
+        total_orders = sum(r['orders'] for r in by_account.values())
+        total_cogs = sum(r['cogs'] for r in by_account.values())
 
-        for row in ad_qs.values('date').annotate(cost=Sum('cost')).order_by('date'):
-            d = str(row['date'])
-            if d not in sales_by_date:
-                sales_by_date[d] = {'date': d, 'sales': 0, 'settlement': 0, 'orders': 0, 'ad_cost': 0}
-            sales_by_date[d]['ad_cost'] = row['cost'] or 0
-
-        daily = sorted(sales_by_date.values(), key=lambda x: x['date'])
+        ad_by_type = {}
+        for row in ad_qs.values('ad_type').annotate(
+            cost=Sum('cost'), clicks=Sum('click'), impressions=Sum('impression'), conversion=Sum('conversion_amount')
+        ):
+            ad_by_type[row['ad_type']] = row
+        total_cpc = ad_by_type.get('cpc', {}).get('cost') or 0
+        total_ai  = ad_by_type.get('ai',  {}).get('cost') or 0
+        total_ad  = total_cpc + total_ai + (ad_by_type.get('brand', {}).get('cost') or 0)
+        total_clicks = sum(v.get('clicks') or 0 for v in ad_by_type.values())
+        total_conversion = sum(v.get('conversion') or 0 for v in ad_by_type.values())
+        roas = round(total_sales / total_ad * 100, 1) if total_ad > 0 else None
 
         return Response({
             'period': {'start': str(start), 'end': str(end)},
             'summary': {
                 'total_sales': total_sales,
-                'total_cancel': sales_agg['total_cancel'] or 0,
-                'total_return': sales_agg['total_return'] or 0,
+                'total_cancel': 0,
+                'total_return': 0,
                 'total_settlement': total_settlement,
-                'total_orders': sales_agg['total_orders'] or 0,
+                'total_orders': total_orders,
                 'total_ad_cost': total_ad,
-                'total_clicks': ad_agg['total_clicks'] or 0,
-                'total_conversion': ad_agg['total_conversion'] or 0,
+                'total_ad_cpc': total_cpc,
+                'total_ad_ai': total_ai,
+                'total_cogs': total_cogs,
+                'total_excel_revenue': total_sales,
+                'total_clicks': total_clicks,
+                'total_conversion': total_conversion,
                 'roas': roas,
             },
             'by_account': account_list,
-            'daily': daily,
+            'daily': [],
         })
 
 

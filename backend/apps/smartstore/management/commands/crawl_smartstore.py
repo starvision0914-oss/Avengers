@@ -10,6 +10,7 @@ from apps.smartstore.models import (
     SmartStoreAccount, SmartStoreSales, SmartStoreAdCost,
     SmartStoreProduct, SmartStoreCrawlLog,
 )
+from apps.smartstore.services.naver_api import sync_sales_api
 from crawlers.browser import create_driver
 from crawlers.smartstore_crawler import (
     login_smartstore, switch_store,
@@ -156,10 +157,18 @@ class Command(BaseCommand):
                             }
                         )
                         sales_saved += 1
+
+                    # CDP 기반 수집 0건 → Commerce API 폴백
+                    if sales_saved == 0 and account.commerce_api_key:
+                        self.stdout.write(f'    [스마트] CDP 0건 → Commerce API 폴백')
+                        result = sync_sales_api(account, start, end)
+                        sales_saved = result.get('saved', 0)
+                        self.stdout.write(f'    [스마트] Commerce API 정산 {sales_saved}건 저장')
+
                     messages.append(f'판매:{sales_saved}건')
 
                     # ── 광고비 ──
-                    ad_costs = fetch_ad_cost(driver, start, end,
+                    ad_costs = fetch_ad_cost(driver, account, start, end,
                                              log_fn=lambda msg: self.stdout.write('    ' + msg))
                     ad_saved = 0
                     for row in ad_costs:

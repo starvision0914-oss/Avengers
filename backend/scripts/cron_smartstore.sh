@@ -9,6 +9,9 @@ echo "$(date '+%Y-%m-%d %H:%M:%S') ===== 스마트스토어 크롤링 시작 ===
 
 cd "$DJANGO" || exit 1
 python3 manage.py crawl_smartstore --days 7 --skip-products >> "$LOG" 2>&1
+
+echo "$(date '+%Y-%m-%d %H:%M:%S') [광고비] 네이버 검색광고 API 수집 시작" >> "$LOG"
+python3 manage.py crawl_smartstore_adcost >> "$LOG" 2>&1
 STATUS=$?
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') ===== 완료 (exit=$STATUS) =====" >> "$LOG"

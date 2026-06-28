@@ -78,7 +78,12 @@ def login_smartstore(driver, login_id, login_pw, log_fn=None):
     current = driver.current_url
     if 'sell.smartstore' in current or 'login-callback' in current:
         log(f'[스마트] 로그인 성공')
-        time.sleep(3)
+        # sell.smartstore.naver.com 메인으로 명시 이동 (accounts 도메인 잔류 방지)
+        if 'sell.smartstore' not in current:
+            driver.get('https://sell.smartstore.naver.com/#/home')
+            time.sleep(5)
+        else:
+            time.sleep(3)
         # 모달 팝업 닫기 (스토어 전환 클릭 방해 방지)
         try:
             driver.execute_script("""
@@ -136,60 +141,117 @@ def switch_store(driver, store_slug, log_fn=None):
 # GraphQL 헬퍼
 # ──────────────────────────────────────────
 
-GRAPHQL_URL = 'https://sell.smartstore.naver.com/e/v3/graphql'
+SETTLE_PAGE_URL = 'https://sell.smartstore.naver.com/e/v3/settlemgt/sellerdailysettle'
+GRAPHQL_URL = 'https://sell.smartstore.naver.com/api/graphql'
 
-_GQL_DAILY_SETTLE = """
-mutation findDailySettlesUsingPOST($merchantNo: String!, $data: DailySettleParamsInput) {
-  DailySettleList: findDailySettlesUsingPOST(merchantNo: $merchantNo, data: $data) {
-    elements {
-      settleAmount
-      paySettleAmount
-      normalSettleAmount
-      commissionSettleAmount
-      settleBasisStartYmd
-      settleBasisEndYmd
-      settleExpectYmd
-      settleCompleteYmd
-      settleStatusType
-      merchantNo
-      __typename
-    }
-    pagination {
-      page
-      size
-      totalElements
-      totalPages
-      __typename
-    }
-    __typename
-  }
-}
-"""
 
-def _gql_fetch(driver, operation_name, query, variables):
-    """Selenium 세션에서 GraphQL mutation 실행."""
-    body = json.dumps({
-        'operationName': operation_name,
-        'variables': variables,
-        'query': query,
-    })
+def _execute_fetch(driver, url, method='GET', body=None):
+    """브라우저 컨텍스트에서 fetch 실행 — 세션 쿠키 자동 포함."""
     script = """
-    var cb = arguments[arguments.length - 1];
-    fetch(arguments[0], {
-        method: 'POST',
+    var url = arguments[0], method = arguments[1], body = arguments[2];
+    return fetch(url, {
+        method: method,
+        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+        body: body ? JSON.stringify(body) : undefined,
         credentials: 'include',
-        headers: {'Content-Type': 'application/json'},
-        body: arguments[1]
-    })
-    .then(function(r) { return r.json(); })
-    .then(cb)
-    .catch(function(e) { cb({error: String(e)}); });
+    }).then(r => r.json()).catch(() => null);
     """
     try:
-        return driver.execute_async_script(script, GRAPHQL_URL, body)
-    except Exception as e:
-        logger.warning('GraphQL fetch 실패: %s', e)
+        result = driver.execute_script(script, url, method, body)
+        return result
+    except Exception:
         return None
+
+
+def _cdp_enable(driver):
+    try:
+        driver.execute_cdp_cmd('Network.enable', {})
+    except Exception:
+        pass
+
+
+def _cdp_pop_settle_elements(driver):
+    """CDP 버퍼에서 DailySettleList 응답을 꺼내 반환 (최신 것 우선)."""
+    logs = driver.get_log('performance')
+    for entry in reversed(logs):
+        try:
+            msg = json.loads(entry['message'])['message']
+            if msg.get('method') != 'Network.responseReceived':
+                continue
+            resp = msg['params']['response']
+            if 'graphql' not in resp.get('url', ''):
+                continue
+            req_id = msg['params']['requestId']
+            body_resp = driver.execute_cdp_cmd('Network.getResponseBody', {'requestId': req_id})
+            data = json.loads(body_resp.get('body', '{}'))
+            dl = (data.get('data') or {}).get('DailySettleList')
+            if dl and dl.get('elements'):
+                return dl['elements'], dl.get('pagination') or {}
+        except Exception:
+            pass
+    return [], {}
+
+
+def _calendar_click_day(driver, day: int):
+    """열려있는 react-datepicker에서 day(일) 클릭."""
+    return driver.execute_script("""
+        var days = Array.from(document.querySelectorAll('.react-datepicker__day'));
+        var t = days.find(d =>
+            parseInt(d.textContent.trim()) === arguments[0]
+            && !d.className.includes('outside-month')
+            && !d.className.includes('disabled')
+        );
+        if (t) { t.click(); return true; }
+        return false;
+    """, day)
+
+
+def _calendar_navigate(driver, target_year: int, target_month: int):
+    """캘린더를 target_year/month가 보일 때까지 앞뒤로 이동."""
+    for _ in range(30):
+        # 현재 표시 월을 day aria-label에서 파악
+        label = driver.execute_script("""
+            var day = document.querySelector(
+                '.react-datepicker__day:not(.react-datepicker__day--outside-month)');
+            return day ? day.getAttribute('aria-label') : null;
+        """)
+        if not label:
+            break
+        import re as _re
+        m = _re.search(r'(\w+)\s+(\d+)\w*,\s+(\d{4})', label)
+        if not m:
+            break
+        months_en = ['january','february','march','april','may','june',
+                     'july','august','september','october','november','december']
+        cur_month = months_en.index(m.group(1).lower()) + 1
+        cur_year = int(m.group(3))
+
+        if cur_year == target_year and cur_month == target_month:
+            return True
+
+        diff = (target_year * 12 + target_month) - (cur_year * 12 + cur_month)
+        if diff < 0:
+            btn = driver.execute_script(
+                "return document.querySelector('.react-datepicker__navigation--previous');")
+        else:
+            btn = driver.execute_script(
+                "return document.querySelector('.react-datepicker__navigation--next');")
+        if not btn:
+            break
+        driver.execute_script("arguments[0].click();", btn)
+        time.sleep(0.3)
+    return False
+
+
+def _select_date_with_calendar(driver, input_index: int, target_date):
+    """input_index(0=시작, 1=종료) 입력칸을 클릭해 달력을 열고 target_date 선택."""
+    inputs = driver.find_elements(By.CSS_SELECTOR, 'input._Bp621VcVyg')
+    if input_index >= len(inputs):
+        return False
+    inputs[input_index].click()
+    time.sleep(1)
+    _calendar_navigate(driver, target_date.year, target_date.month)
+    return _calendar_click_day(driver, target_date.day)
 
 
 def _extract_merchant_no_from_perf(driver):
@@ -234,7 +296,7 @@ def _extract_merchant_no_from_js(driver):
             if (rs && rs.seller && rs.seller.merchantNo) return String(rs.seller.merchantNo);
         } catch(e) {}
         // URL에서 추출 시도
-        var m = location.hash.match(/merchantNo[=\/](\d+)/);
+        var m = location.hash.match(/merchantNo[=/]([0-9]+)/);
         if (m) return m[1];
         return null;
         """)
@@ -289,51 +351,18 @@ def fetch_merchant_no(driver, account, log_fn=None):
 
 
 # ──────────────────────────────────────────
-# 판매 통계 (GraphQL)
+# 판매 통계 (달력 UI + CDP 캡처)
 # ──────────────────────────────────────────
 
-def fetch_daily_sales(driver, start_date: date, end_date: date, log_fn=None, merchant_no=''):
-    """
-    스마트스토어 GraphQL로 일별 정산 데이터 수집.
-    Returns: [{date, order_count, sales_amount, settlement_amount, commission_amount}, ...]
-    """
-    log = log_fn or logger.info
-
-    if not merchant_no:
-        log('[스마트] merchantNo 없음 — 판매통계 건너뜀')
-        return []
-
-    start_str = start_date.strftime('%Y%m%d')
-    end_str = end_date.strftime('%Y%m%d')
-
-    variables = {
-        'merchantNo': merchant_no,
-        'data': {
-            'startYmd': start_str,
-            'endYmd': end_str,
-            'maskAccountNumber': True,
-            'paging': {'page': 1, 'size': 100},
-            'merchantNos': [],
-            'orderingType': 'ASCENDING',
-        }
-    }
-
-    data = _gql_fetch(driver, 'findDailySettlesUsingPOST', _GQL_DAILY_SETTLE, variables)
-    if not data or 'error' in data:
-        log(f'[스마트] GraphQL 응답 없음: {data}')
-        return []
-
-    elements = (data.get('data', {})
-                    .get('DailySettleList', {})
-                    .get('elements', []))
-
+def _parse_settle_elements(elements: list) -> list:
+    """API 응답 elements → 내부 결과 리스트."""
     results = []
     for el in elements:
-        settle_ymd = el.get('settleExpectYmd') or el.get('settleBasisStartYmd') or ''
-        if not settle_ymd or len(settle_ymd) != 8:
+        ymd = el.get('settleExpectYmd') or el.get('settleBasisStartYmd') or ''
+        if not ymd or len(ymd) != 8:
             continue
         try:
-            settle_date = date(int(settle_ymd[:4]), int(settle_ymd[4:6]), int(settle_ymd[6:8]))
+            settle_date = date(int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8]))
         except ValueError:
             continue
         results.append({
@@ -345,7 +374,55 @@ def fetch_daily_sales(driver, start_date: date, end_date: date, log_fn=None, mer
             'settlement_amount': int(el.get('settleAmount', 0) or 0),
             'commission_amount': int(el.get('commissionSettleAmount', 0) or 0),
         })
+    return results
 
+
+def _fetch_settle_chunk(driver, chunk_start: date, chunk_end: date, log) -> list:
+    """정산내역 페이지 1회 로드 → 달력 선택 → 검색 → CDP 캡처."""
+    _cdp_enable(driver)
+    driver.get(SETTLE_PAGE_URL)
+    time.sleep(8)
+
+    _select_date_with_calendar(driver, 0, chunk_start)
+    time.sleep(0.5)
+    _select_date_with_calendar(driver, 1, chunk_end)
+    time.sleep(0.5)
+
+    driver.execute_script(
+        "Array.from(document.querySelectorAll('button'))"
+        ".find(b=>b.textContent.trim()==='검색')?.click();"
+    )
+    time.sleep(6)
+
+    elements, pagination = _cdp_pop_settle_elements(driver)
+    total = int((pagination or {}).get('totalElements', 0))
+    if total > len(elements):
+        log(f'[스마트] 경고: {chunk_start}~{chunk_end} 총 {total}건 중 {len(elements)}건만 수집됨')
+    return elements
+
+
+def fetch_daily_sales(driver, start_date: date, end_date: date, log_fn=None, merchant_no=''):
+    """
+    SmartStore 정산내역 페이지(달력 UI)를 조작해 일별 정산 수집.
+    10일 단위로 분할해 페이지네이션 없이 전체 수집.
+    Returns: [{date, order_count, sales_amount, cancel_amount, return_amount, settlement_amount, commission_amount}, ...]
+    """
+    log = log_fn or logger.info
+
+    if not merchant_no:
+        log('[스마트] merchantNo 없음 — 판매통계 건너뜀')
+        return []
+
+    all_elements: list = []
+    chunk_start = start_date
+    while chunk_start <= end_date:
+        chunk_end = min(chunk_start + timedelta(days=9), end_date)
+        log(f'[스마트] 정산 조회: {chunk_start} ~ {chunk_end}')
+        els = _fetch_settle_chunk(driver, chunk_start, chunk_end, log)
+        all_elements.extend(els)
+        chunk_start = chunk_end + timedelta(days=1)
+
+    results = _parse_settle_elements(all_elements)
     log(f'[스마트] 정산 {len(results)}건 수집 ({start_date}~{end_date})')
     return results
 
@@ -387,14 +464,153 @@ def fetch_settlement(driver, year_month: str, log_fn=None):
 
 
 # ──────────────────────────────────────────
-# 광고비 크롤링 (NSA 광고센터)
+# 광고비 크롤링 (NSA 광고센터 billing 페이지)
 # ──────────────────────────────────────────
 
-def fetch_ad_cost(driver, start_date: date, end_date: date, log_fn=None):
-    """스마트스토어 광고비 수집 (미구현 — 빈 결과 반환)."""
+SEARCHAD_BILLING_URL = 'https://ads.naver.com/ad-account/{ad_account_id}/billing/balance'
+_NAVER_ADS_COOKIE_FILE = os.path.join(os.path.dirname(__file__), 'naver_ads_cookies.json')
+
+
+def _inject_naver_ads_cookies(driver, log, login_id=None):
+    """저장된 쿠키 파일에서 ads.naver.com 쿠키 주입.
+    login_id: naver_ads_cookies.json의 키 (None이면 첫 번째 키 사용)."""
+    if not os.path.exists(_NAVER_ADS_COOKIE_FILE):
+        return False
+    try:
+        import json
+        with open(_NAVER_ADS_COOKIE_FILE) as f:
+            data = json.load(f)
+        if not data:
+            return False
+        if login_id and login_id in data:
+            cookies = data[login_id]
+        else:
+            cookies = list(data.values())[0]
+        driver.get('https://ads.naver.com/')
+        time.sleep(2)
+        for c in cookies:
+            try:
+                driver.add_cookie(c)
+            except Exception:
+                pass
+        log(f'[광고센터] 쿠키 주입 완료 (account={login_id or "default"})')
+        return True
+    except Exception as e:
+        log(f'[광고센터] 쿠키 주입 실패: {e}')
+        return False
+
+
+def _login_searchad(driver, login_id: str, login_pw: str, log):
+    """ads.naver.com 네이버 ID 로그인."""
+    login_url = (
+        'https://nid.naver.com/nidlogin.login'
+        '?url=https%3A%2F%2Fads.naver.com%2F'
+    )
+    log(f'[광고센터] 로그인 시도: {login_id}')
+    driver.get(login_url)
+    time.sleep(3)
+
+    try:
+        id_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, 'id'))
+        )
+        id_input.click()
+        time.sleep(0.3)
+        id_input.clear()
+        id_input.send_keys(login_id)
+        time.sleep(0.3)
+
+        pw_input = driver.find_element(By.ID, 'pw')
+        pw_input.click()
+        time.sleep(0.3)
+        pw_input.clear()
+        pw_input.send_keys(login_pw)
+        time.sleep(0.3)
+        pw_input.send_keys(Keys.RETURN)
+        time.sleep(7)
+    except Exception as e:
+        log(f'[광고센터] 로그인 입력 오류: {e}')
+        return False
+
+    current = driver.current_url
+    if 'nid.naver.com' in current:
+        log(f'[광고센터] 로그인 실패 (URL: {current})')
+        return False
+    log('[광고센터] 로그인 성공')
+    return True
+
+
+def _parse_billing_table(driver, log) -> list:
+    """ant-table에서 기간/소진액 파싱."""
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, '.ant-table-tbody'))
+        )
+    except Exception:
+        log('[광고센터] 테이블 로드 타임아웃')
+        return []
+
+    time.sleep(1)
+
+    rows = driver.find_elements(By.CSS_SELECTOR, '.ant-table-tbody .ant-table-row')
+    results = []
+    for row in rows:
+        cells = row.find_elements(By.CSS_SELECTOR, '.ant-table-cell')
+        if len(cells) < 3:
+            continue
+        date_text = cells[0].text.strip().rstrip('.')   # "2026.06.26." → "2026.06.26"
+        spend_text = cells[2].text.strip()              # "￦6,273"
+
+        parts = date_text.split('.')
+        if len(parts) != 3:
+            continue
+        try:
+            d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+        except (ValueError, IndexError):
+            continue
+
+        cost = int(re.sub(r'[^\d]', '', spend_text) or 0)
+        results.append({'date': d, 'cost': cost})
+
+    return results
+
+
+def fetch_ad_cost_billing(driver, account, since_date: date, until_date: date, log_fn=None) -> list:
+    """
+    searchad.naver.com billing/balance 기간별 소진내역 스크랩.
+    Returns: [{'date': date, 'cost': int}, ...]  cost = 소진액(VAT포함)
+    """
     log = log_fn or logger.info
-    log('[스마트] 광고비 수집 미구현 — 건너뜀')
-    return []
+
+    if not account.naver_ad_account_id:
+        log(f'[광고센터] {account.display_name}: naver_ad_account_id 미설정 — 건너뜀')
+        return []
+
+    date_range = f"{since_date},{until_date}"
+    url = (
+        SEARCHAD_BILLING_URL.format(ad_account_id=account.naver_ad_account_id)
+        + f'?dateRange={date_range}&tab=period'
+    )
+
+    # 계정별 쿠키 주입
+    _inject_naver_ads_cookies(driver, log, login_id=getattr(account, 'naver_ad_login_id', None))
+    log(f'[광고센터] {account.display_name} billing 페이지 접근')
+    driver.get(url)
+    time.sleep(5)
+
+    # 로그인 리다이렉트 감지 시 재시도
+    if 'nid.naver.com' in driver.current_url or 'accounts.naver.com' in driver.current_url:
+        log('[광고센터] 쿠키 만료 — 로그인 필요. naver_ads_cookies.json 갱신 필요')
+        return []
+
+    rows = _parse_billing_table(driver, log)
+    log(f'[광고센터] {account.display_name}: {len(rows)}일 수집 ({since_date}~{until_date})')
+    return rows
+
+
+def fetch_ad_cost(driver, account, start_date: date, end_date: date, log_fn=None):
+    """광고비 수집 — billing 페이지 스크랩."""
+    return fetch_ad_cost_billing(driver, account, start_date, end_date, log_fn)
 
 
 # ──────────────────────────────────────────
@@ -508,6 +724,6 @@ def crawl_smartstore_account(driver, account, start_date: date, end_date: date, 
     sales = fetch_daily_sales(driver, start_date, end_date, log)
 
     # 광고비
-    ad_costs = fetch_ad_cost(driver, start_date, end_date, log)
+    ad_costs = fetch_ad_cost(driver, account, start_date, end_date, log)
 
     return {'sales': sales, 'ad_costs': ad_costs}

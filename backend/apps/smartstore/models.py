@@ -11,6 +11,15 @@ class SmartStoreAccount(models.Model):
     commerce_api_key = models.CharField(max_length=200, blank=True, default='', help_text='네이버 커머스 API Client ID')
     commerce_secret_key = models.TextField(blank=True, default='', help_text='네이버 커머스 API Client Secret (bcrypt)')
     merchant_no = models.CharField(max_length=50, blank=True, default='', help_text='스마트스토어 merchantNo (GraphQL)')
+    naver_ad_customer_id = models.CharField(max_length=50, blank=True, default='', help_text='네이버 검색광고 CPC Customer ID')
+    naver_ad_access_license = models.CharField(max_length=200, blank=True, default='', help_text='네이버 검색광고 CPC Access License')
+    naver_ad_secret_key = models.TextField(blank=True, default='', help_text='네이버 검색광고 CPC Secret Key')
+    naver_ad_ai_customer_id = models.CharField(max_length=50, blank=True, default='', help_text='네이버 검색광고 AI Customer ID')
+    naver_ad_ai_access_license = models.CharField(max_length=200, blank=True, default='', help_text='네이버 검색광고 AI Access License')
+    naver_ad_ai_secret_key = models.TextField(blank=True, default='', help_text='네이버 검색광고 AI Secret Key')
+    naver_ad_account_id = models.CharField(max_length=50, blank=True, default='', help_text='광고센터 ad-account ID (billing 스크랩용, URL의 /ad-account/숫자 부분)')
+    naver_ad_login_id = models.CharField(max_length=100, blank=True, default='', help_text='광고센터 로그인 Naver ID (naver_ads_cookies.json 키와 일치)')
+    purchase_rate = models.IntegerField(default=0, help_text='구매가율(%) — 예: 70 입력 시 구매가=매출×70%')
     is_active = models.BooleanField(default=True)
     display_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -44,15 +53,15 @@ class SmartStoreSales(models.Model):
 
 
 class SmartStoreAdCost(models.Model):
-    """일별 광고비 (쇼핑검색/클릭형)"""
+    """일별 광고비 — ad_type: cpc(검색/클릭형) | ai(AI추천/스마트쇼핑) | brand(브랜드검색)"""
     AD_TYPE_CHOICES = [
-        ('shopping', '쇼핑검색'),
-        ('click', '클릭형'),
+        ('cpc', 'CPC(검색/클릭형)'),
+        ('ai', 'AI(스마트쇼핑/AI추천)'),
         ('brand', '브랜드검색'),
     ]
     account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='ad_costs')
     date = models.DateField()
-    ad_type = models.CharField(max_length=20, choices=AD_TYPE_CHOICES, default='shopping')
+    ad_type = models.CharField(max_length=20, choices=AD_TYPE_CHOICES, default='cpc')
     cost = models.BigIntegerField(default=0)
     impression = models.IntegerField(default=0)
     click = models.IntegerField(default=0)
