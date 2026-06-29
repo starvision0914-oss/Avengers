@@ -22,14 +22,14 @@ from apps.smartstore.services.naver_search_ad import sync_ad_cost
 logger = logging.getLogger('crawler')
 
 
-def _save_billing_rows(account, rows: list) -> int:
-    """billing 스크랩 결과를 SmartStoreAdCost(cpc)에 upsert."""
+def _save_billing_rows(account, rows: list, ad_type='cpc') -> int:
+    """billing 스크랩 결과를 SmartStoreAdCost에 upsert."""
     upserted = 0
     for row in rows:
         SmartStoreAdCost.objects.update_or_create(
             account=account,
             date=row['date'],
-            ad_type='cpc',
+            ad_type=ad_type,
             defaults={'cost': row['cost']},
         )
         upserted += 1
@@ -61,6 +61,7 @@ class Command(BaseCommand):
             qs = qs.filter(id=account_id)
 
         billing_accounts = [a for a in qs if a.naver_ad_account_id]
+        ai_billing_accounts = [a for a in qs if a.naver_ad_ai_account_id and not billing_only]
         api_accounts = [a for a in qs
                         if not a.naver_ad_account_id and a.naver_ad_customer_id and not billing_only]
 
@@ -99,6 +100,42 @@ class Command(BaseCommand):
                 finally:
                     try:
                         driver.quit()
+                    except Exception:
+                        pass
+
+        # ── AI billing 스크랩 (Selenium) ──
+        if ai_billing_accounts:
+            if not fetch_ad_cost_billing:
+                pass
+            else:
+                driver_ai = make_driver()
+                try:
+                    for account in ai_billing_accounts:
+                        self.stdout.write(f'[AI billing] {account.display_name} (ad-account={account.naver_ad_ai_account_id})')
+
+                        class _AIProxy:
+                            """fetch_ad_cost_billing에 AI 계정 정보를 주입하기 위한 프록시."""
+                            def __init__(self, acc):
+                                self._acc = acc
+                            @property
+                            def naver_ad_account_id(self): return self._acc.naver_ad_ai_account_id
+                            @property
+                            def naver_ad_login_id(self): return self._acc.naver_ad_ai_login_id
+                            @property
+                            def display_name(self): return self._acc.display_name
+
+                        rows = fetch_ad_cost_billing(
+                            driver_ai, _AIProxy(account), since_date, until_date,
+                            log_fn=lambda msg: self.stdout.write(f'  {msg}'),
+                        )
+                        if rows:
+                            n = _save_billing_rows(account, rows, ad_type='ai')
+                            self.stdout.write(f'  → 저장 {n}건')
+                        else:
+                            self.stdout.write('  → 데이터 없음')
+                finally:
+                    try:
+                        driver_ai.quit()
                     except Exception:
                         pass
 

@@ -50,21 +50,27 @@ def _go_cpc2_tab(driver):
         time.sleep(3)
         _dismiss_alert(driver)
     driver.find_element(By.XPATH, '//*[@id="ulBidMngState"]/li[2]/a/strong').click()
-    # 간편광고 탭 로딩 대기 — time.sleep(1)은 너무 짧아 서브탭이 미렌더링됨
-    try:
-        WebDriverWait(driver, 8).until(
-            EC.element_to_be_clickable((By.XPATH, "//*[@id='dvGroupAdSmartListTab']//a[contains(@href,'#smartAdviewList')]"))
-        ).click()
-        time.sleep(0.5)
-    except Exception as e:
-        logger.warning(f'간편광고 서브탭 클릭 실패: {e}')
-    try:
-        WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable((By.XPATH, "//*[@id='smartAdviewList']//span[contains(text(),'전체 보기')]"))
-        ).click()
-        time.sleep(2)
-    except Exception as e:
-        logger.warning(f'전체 보기 클릭 실패: {e}')
+    # 간편광고 서브탭 — 1차 8초, 실패 시 2차 15초 재시도
+    SUBTAB_XPATH = "//*[@id='dvGroupAdSmartListTab']//a[contains(@href,'#smartAdviewList')]"
+    ALLVIEW_XPATH = "//*[@id='smartAdviewList']//span[contains(text(),'전체 보기')]"
+    for wait_sec in (8, 15):
+        try:
+            WebDriverWait(driver, wait_sec).until(
+                EC.element_to_be_clickable((By.XPATH, SUBTAB_XPATH))
+            ).click()
+            time.sleep(0.5)
+            break
+        except Exception as e:
+            logger.warning(f'간편광고 서브탭 클릭 실패({wait_sec}s): {e}')
+    for wait_sec in (5, 10):
+        try:
+            WebDriverWait(driver, wait_sec).until(
+                EC.element_to_be_clickable((By.XPATH, ALLVIEW_XPATH))
+            ).click()
+            time.sleep(2)
+            break
+        except Exception as e:
+            logger.warning(f'전체 보기 클릭 실패({wait_sec}s): {e}')
 
 def _count_on_off(driver, wait=12):
     # 테이블 로딩 대기 — 12초로 늘려 느린 렌더링 대응
@@ -152,7 +158,8 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
     from apps.cpc import eleven_block_guard as guard
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
     if account_filter:
-        qs = qs.filter(login_id__in=account_filter)
+        acct_map = {a.login_id: a for a in qs.filter(login_id__in=account_filter)}
+        qs = [acct_map[lid] for lid in account_filter if lid in acct_map]
     else:
         qs = [a for a in qs if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
 

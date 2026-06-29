@@ -13,6 +13,7 @@ const navItems = [
   { to: '/gmarket-my', icon: Store, label: '지마켓 상품' },
   { to: '/gmarket-roas', icon: TrendingUp, label: '지마켓/옥션 ROAS' },
   { to: '/smartstore', icon: ShoppingCart, label: '스스' },
+  { to: '/naver-roas', icon: TrendingUp, label: '네이버 ROAS' },
   { to: '/blog', icon: MessageSquare, label: '블로그' },
   { to: '/st11', icon: Store, label: '11번가' },
   { to: '/st11-killlist', icon: TrendingUp, label: '11번가 광고킬' },

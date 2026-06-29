@@ -159,6 +159,8 @@ class Command(BaseCommand):
         offset = _read_offset()
         while True:
             try:
+                from django.db import close_old_connections
+                close_old_connections()
                 allowed = set(str(c) for c in TelegramRecipient.objects.filter(is_active=True).values_list('chat_id', flat=True))
                 res = _api(token, 'getUpdates', offset=offset + 1, timeout=30)
                 for upd in res.get('result', []):

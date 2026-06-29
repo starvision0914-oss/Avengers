@@ -16,21 +16,38 @@ SET_ONOFF_API = '/Remarketing/Management/SetCpcRemarketingGroupOnOffAsync'
 SET_EXPOSURE_API = '/Remarketing/Management/SetCpcRemarketingGroupExposureAsync'
 
 
+def _dismiss_alert(driver):
+    try:
+        driver.switch_to.alert.accept()
+        return True
+    except Exception:
+        return False
+
+
 def _login(driver, login_id, password):
     """ad.esmplus.com 정상 로그인 — 쿠키 우선, 실패 시 풀로그인(rdoSiteSelect 선택).
-    (기존 직접 로그인은 rdoSiteSelect value 불일치/캡차로 실패 → gmarket_crawler 재사용)"""
+    UnexpectedAlertPresentException 발생 시 alert dismiss 후 1회 재시도."""
+    from selenium.common.exceptions import UnexpectedAlertPresentException
     from crawlers.gmarket_crawler import _try_cookie_login, _full_login, _save_cookies
     from apps.cpc.models import CrawlerAccount
     acct = CrawlerAccount.objects.filter(login_id=login_id, platform='gmarket').first()
-    try:
-        if acct and _try_cookie_login(driver, acct):
-            return True
-        if _full_login(driver, login_id, password):
-            if acct:
-                _save_cookies(driver, acct)
-            return True
-    except Exception as e:
-        logger.error(f'[AI제어:{login_id}] 로그인 실패: {e}')
+    for attempt in range(2):
+        try:
+            _dismiss_alert(driver)  # 잔존 alert 선제 제거
+            if acct and _try_cookie_login(driver, acct):
+                return True
+            if _full_login(driver, login_id, password):
+                if acct:
+                    _save_cookies(driver, acct)
+                return True
+        except UnexpectedAlertPresentException:
+            _dismiss_alert(driver)
+            if attempt == 0:
+                time.sleep(1)
+                continue
+        except Exception as e:
+            logger.error(f'[AI제어:{login_id}] 로그인 실패: {e}')
+            break
     return False
 
 

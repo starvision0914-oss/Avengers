@@ -2,7 +2,13 @@
 네이버 검색광고 API 광고비 수집
 Customer ID + Access License + Secret Key 방식 (HMAC-SHA256)
 캠페인 타입별 분리: cpc(SHOPPING/WEB_SITE) | ai(SMART_SHOPPING/AI계열) | brand(BRAND_SEARCH)
+
+상품별 광고비:
+  공개 NCC API(api.naver.com)는 SHOPPING 캠페인 stats를 반환하지 않음.
+  광고센터 내부 API(ads.naver.com/apis/sa/api/stats POST + X-AD-customer-id 헤더)를 사용.
+  쿠키 파일(naver_ads_cookies.json)에서 세션 로드.
 """
+import os
 import time
 import hmac
 import hashlib
@@ -16,6 +22,8 @@ import requests
 logger = logging.getLogger('smartstore')
 
 BASE_URL = "https://api.naver.com"
+_INTERNAL_STATS_URL = "https://ads.naver.com/apis/sa/api/stats"
+_COOKIE_FILE = os.path.join(os.path.dirname(__file__), '../../../crawlers/naver_ads_cookies.json')
 
 # campaignTp → ad_type 매핑
 _TYPE_MAP = {
@@ -126,6 +134,166 @@ def _save_daily(account, daily: dict, force_type: str = None):
         )
         upserted += 1
     return upserted
+
+
+def fetch_adgroups(customer_id: str, access_license: str, secret_key: str,
+                   campaign_id: str) -> list:
+    r = _get(customer_id, access_license, secret_key, "/ncc/adgroups",
+             params={"nccCampaignId": campaign_id})
+    return r.json() or [] if r.ok else []
+
+
+def fetch_ads(customer_id: str, access_license: str, secret_key: str,
+              adgroup_id: str) -> list:
+    r = _get(customer_id, access_license, secret_key, "/ncc/ads",
+             params={"nccAdgroupId": adgroup_id})
+    return r.json() or [] if r.ok else []
+
+
+def _internal_stats_session(login_id: str):
+    """쿠키 파일에서 광고센터 내부 API 세션 생성. (sess, xsrf_token) 반환."""
+    cookie_file = os.path.normpath(os.path.join(os.path.dirname(__file__), '../../../crawlers/naver_ads_cookies.json'))
+    if not os.path.exists(cookie_file):
+        return None, ''
+    try:
+        with open(cookie_file) as f:
+            data = json.load(f)
+        cookies = data.get(login_id, [])
+        if not cookies:
+            return None, ''
+        sess = requests.Session()
+        xsrf = ''
+        for c in cookies:
+            sess.cookies.set(c['name'], c['value'], domain=c.get('domain', '.naver.com'))
+            if c['name'] == 'XSRF-TOKEN':
+                xsrf = c['value']
+        return sess, xsrf
+    except Exception as e:
+        logger.warning('_internal_stats_session 오류: %s', e)
+        return None, ''
+
+
+def _internal_stats_post(sess, xsrf: str, customer_id: str, ids: str,
+                         since: str, until: str, batch_size: int = 100) -> dict:
+    """
+    광고센터 내부 stats API POST 호출 (ids 배치 분할).
+    Returns: {nad_id: {"cost": ..., "click": ..., "impression": ..., "conv_cnt": ..., "conv_amt": ...}}
+    """
+    id_list = [i.strip() for i in ids.split(',') if i.strip()]
+    result = {}
+    for i in range(0, len(id_list), batch_size):
+        batch = ','.join(id_list[i:i + batch_size])
+        payload = {
+            'ids': batch,
+            'fields': ['clkCnt', 'impCnt', 'salesAmtMicros', 'convAmtMicros', 'ccnt'],
+            'timeIncrement': 'allDays',
+            'timeRange': {'since': since, 'until': until},
+        }
+        headers = {
+            'Content-Type': 'application/json',
+            'X-AD-customer-id': str(customer_id),
+            'X-XSRF-TOKEN': xsrf,
+            'X-Accept-Language': 'ko',
+            'Referer': 'https://ads.naver.com/',
+            'Cache-control': 'no-cache, no-store, must-revalidate',
+        }
+        try:
+            r = sess.post(_INTERNAL_STATS_URL, json=payload, headers=headers, timeout=20)
+            if r.ok:
+                for row in r.json().get('data', []):
+                    nid = row.get('id', '')
+                    cost_micros = int(row.get('salesAmtMicros', 0) or 0)
+                    result[nid] = {
+                        'cost': cost_micros // 1_000_000,
+                        'click': int(row.get('clkCnt', 0) or 0),
+                        'impression': int(row.get('impCnt', 0) or 0),
+                        'conv_cnt': int(row.get('ccnt', 0) or 0),
+                        'conv_amt': int(row.get('convAmtMicros', 0) or 0) // 1_000_000,
+                    }
+        except Exception as e:
+            logger.warning('_internal_stats_post 오류: %s', e)
+        time.sleep(0.3)
+    return result
+
+
+def fetch_product_stats(customer_id: str, access_license: str, secret_key: str,
+                        since: str, until: str, login_id: str = '') -> list:
+    """
+    상품별 광고비 합산 (광고센터 내부 API 사용, 쿠키 세션 필요)
+    - 소재 목록: 공개 NCC API (api.naver.com/ncc/ads)
+    - 통계: 내부 API (ads.naver.com/apis/sa/api/stats POST + X-AD-customer-id)
+    Returns: [{"product_no": ..., "product_name": ..., "cost": ..., ...}, ...]
+    """
+    if not login_id:
+        return []
+
+    sess, xsrf = _internal_stats_session(login_id)
+    if not sess:
+        logger.warning('fetch_product_stats: 쿠키 없음 login_id=%s', login_id)
+        return []
+
+    campaigns = fetch_campaigns(customer_id, access_license, secret_key)
+    if not campaigns:
+        return []
+
+    # 전체 소재 수집 (ad_id → product_no/name 매핑)
+    ad_to_product = {}  # nccAdId -> {product_no, product_name}
+
+    for camp in campaigns:
+        camp_id = camp.get("nccCampaignId")
+        if not camp_id:
+            continue
+        adgroups = fetch_adgroups(customer_id, access_license, secret_key, camp_id)
+        time.sleep(0.2)
+
+        for ag in adgroups:
+            ag_id = ag.get("nccAdgroupId")
+            if not ag_id:
+                continue
+            ads = fetch_ads(customer_id, access_license, secret_key, ag_id)
+            time.sleep(0.2)
+            for ad in ads:
+                rd = ad.get("referenceData", {}) or {}
+                mall_pid = rd.get("mallProductId")
+                if mall_pid:
+                    ad_to_product[ad["nccAdId"]] = {
+                        "product_no": str(mall_pid),
+                        "product_name": rd.get("productTitle", ""),
+                    }
+
+    if not ad_to_product:
+        return []
+
+    logger.info('fetch_product_stats: 소재 %d개, login_id=%s', len(ad_to_product), login_id)
+
+    # 내부 stats API 일괄 조회
+    all_ids = ','.join(ad_to_product.keys())
+    stats_by_id = _internal_stats_post(sess, xsrf, customer_id, all_ids, since, until)
+
+    # product_no 기준으로 집계
+    product_map = {}
+    for nad_id, pinfo in ad_to_product.items():
+        st = stats_by_id.get(nad_id)
+        if not st:
+            continue
+        pno = pinfo["product_no"]
+        if pno not in product_map:
+            product_map[pno] = {
+                "product_no": pno,
+                "product_name": pinfo["product_name"],
+                "cost": 0, "click": 0, "impression": 0,
+                "conversion_count": 0, "conversion_amount": 0,
+            }
+        p = product_map[pno]
+        if pinfo["product_name"] and not p["product_name"]:
+            p["product_name"] = pinfo["product_name"]
+        p["cost"] += st["cost"]
+        p["click"] += st["click"]
+        p["impression"] += st["impression"]
+        p["conversion_count"] += st["conv_cnt"]
+        p["conversion_amount"] += st["conv_amt"]
+
+    return list(product_map.values())
 
 
 def sync_ad_cost(account, since: str = None, until: str = None) -> dict:

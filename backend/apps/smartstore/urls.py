@@ -12,4 +12,5 @@ urlpatterns = [
     path('products/suspend/', views.SuspendProductsView.as_view()),
     path('product-stats/', views.ProductStatsView.as_view()),
     path('crawl-status/', views.CrawlStatusView.as_view()),
+    path('naver-product-roas/', views.NaverProductRoasView.as_view()),
 ]

@@ -478,11 +478,16 @@ class GmarketSummaryView(views.APIView):
             start = kst.localize(datetime.combine(today, datetime.min.time()))
             end = start + timedelta(days=1)
 
-        latest_ids = GmarketDepositSnapshot.objects.filter(
+        # 당일 스냅샷 ID → 없으면 최근 스냅샷(전체 기간 최신) 폴백
+        latest_ids = list(GmarketDepositSnapshot.objects.filter(
             collected_at__gte=start, collected_at__lt=end
         ).values('gmarket_id').annotate(
             latest_id=Max('id')
-        ).values_list('latest_id', flat=True)
+        ).values_list('latest_id', flat=True))
+        if not latest_ids:
+            latest_ids = list(GmarketDepositSnapshot.objects.values('gmarket_id').annotate(
+                latest_id=Max('id')
+            ).values_list('latest_id', flat=True))
 
         sellers = []
         total_cpc = 0
@@ -515,25 +520,48 @@ class GmarketSummaryView(views.APIView):
                     'contact_expiry': g.contact_expiry,
                 }
 
-        for snap in GmarketDepositSnapshot.objects.filter(id__in=latest_ids).order_by('gmarket_id'):
+        # CPC/AI 모두 GmarketProductAdCost 엑셀기반 월합계 사용 (스냅샷 값 불신뢰)
+        from apps.cpc.models import GmarketProductAdCost, CrawlerAccount as _CA
+        ex_year = start.year
+        ex_month = start.month
+        ai_excel_map = dict(
+            GmarketProductAdCost.objects.filter(ad_type='ai', year=ex_year, month=ex_month)
+            .values('login_id').annotate(total=Sum('cost')).values_list('login_id', 'total')
+        )
+        cpc_excel_map = dict(
+            GmarketProductAdCost.objects.filter(ad_type='cpc', year=ex_year, month=ex_month)
+            .values('login_id').annotate(total=Sum('cost')).values_list('login_id', 'total')
+        )
+
+        snap_map = {s.gmarket_id: s for s in GmarketDepositSnapshot.objects.filter(id__in=latest_ids)}
+        # 표시 순서: display_order 기준 전체 활성 계정
+        all_gmarket_accts = list(_CA.objects.filter(platform='gmarket', is_active=True).order_by('display_order', 'login_id'))
+        shown_ids = set()
+        for acct in all_gmarket_accts:
+            lid = acct.login_id
+            snap = snap_map.get(lid)
+            ai_spend = ai_excel_map.get(lid, 0)
+            cpc_spend = cpc_excel_map.get(lid, 0)
+            auction_cpc = snap.auction_cpc if snap else 0
             seller = {
-                'seller_id': snap.gmarket_id,
-                'seller_alias': snap.gmarket_id,
-                'balance': snap.total_balance,
-                'cpc_spend': snap.gmarket_cpc,
-                'auction_cpc': snap.auction_cpc,
-                'ai_spend': snap.ai_usage,
-                'ad_total': snap.total_usage,
-                'collected_at': snap.collected_at.isoformat() if snap.collected_at else '',
-                'cpc_status': cpc_status_map.get(snap.gmarket_id),
-                'ai_status': ai_map.get(snap.gmarket_id),
-                'grade_info': grade_map.get(snap.gmarket_id),
+                'seller_id': lid,
+                'seller_alias': lid,
+                'balance': snap.total_balance if snap else 0,
+                'cpc_spend': cpc_spend,
+                'auction_cpc': auction_cpc,
+                'ai_spend': ai_spend,
+                'ad_total': cpc_spend + ai_spend,
+                'collected_at': snap.collected_at.isoformat() if snap and snap.collected_at else '',
+                'cpc_status': cpc_status_map.get(lid),
+                'ai_status': ai_map.get(lid),
+                'grade_info': grade_map.get(lid),
             }
             sellers.append(seller)
-            total_cpc += snap.gmarket_cpc
-            total_ai += snap.ai_usage
-            total_usage += snap.total_usage
-            total_balance += snap.total_balance
+            shown_ids.add(lid)
+            total_cpc += cpc_spend
+            total_ai += ai_spend
+            total_usage += cpc_spend + ai_spend
+            total_balance += (snap.total_balance if snap else 0)
 
         # Sales data integration
         from apps.cpc.models import CrawlerAccount
@@ -1011,18 +1039,23 @@ class OverviewView(views.APIView):
         ss_sales_agg = SSSales.objects.filter(
             date__gte=start_d, date__lte=end_d
         ).aggregate(settlement=_Sum('settlement_amount'), orders=_Sum('order_count'))
-        ss_ad_agg = SSAdCost.objects.filter(
-            date__gte=start_d, date__lte=end_d
-        ).aggregate(cost=_Sum('cost'))
+        ss_ad_by_type = {
+            r['ad_type']: r['cost'] or 0
+            for r in SSAdCost.objects.filter(
+                date__gte=start_d, date__lte=end_d
+            ).values('ad_type').annotate(cost=_Sum('cost'))
+        }
+        ss_cpc = ss_ad_by_type.get('cpc', 0)
+        ss_ai  = ss_ad_by_type.get('ai', 0)
 
         ss_settlement = ss_sales_agg['settlement'] or 0
         ss_orders = ss_sales_agg['orders'] or 0
-        ss_ad = ss_ad_agg['cost'] or 0
+        ss_ad = ss_cpc + ss_ai
         ss_net = ss_settlement - ss_ad
 
         markets.append({
             'key': 'smartstore', 'label': '스마트스토어', 'color': '#03c75a',
-            'ad_cost': ss_ad, 'cpc': ss_ad, 'ai': 0,
+            'ad_cost': ss_ad, 'cpc': ss_cpc, 'ai': ss_ai,
             'balance': 0,
             'accounts': ss_accounts, 'normal': ss_accounts, 'failed': 0,
             'sales': ss_settlement, 'profit': ss_settlement, 'net_after_ad': ss_net,
@@ -2105,16 +2138,17 @@ def _eleven_product_rows(eid, d_from, d_to, rmin, rmax, cmin, kmin):
         cost = a['cost']; clk = a['clicks']
         sc, nm, st = code_map.get(pno, ('', '', ''))
         mapped = bool(sc)   # 판매자코드 다리 유무 (없으면 매출 산출 불가)
-        # 비고(상태): 매일 크롤한 '실제 등록상태'(내상품DB, st)를 최우선 → 믿을 수 있는 자료.
-        # st가 실판매상태(판매중/판매중지/품절/판매금지/재고부족)면 그대로 사용.
-        # '삭제완료'(우리 삭제기록)는 카탈로그에 실제로 없을 때만 표시(과거엔 우선시해 오표시됐음).
+        # 비고(상태):
+        # - 삭제완료 기록 있음 + ElevenMyProduct에서 사라짐 → 삭제완료(실제 삭제 확인)
+        # - 삭제완료 기록 있음 + ElevenMyProduct가 판매중 → 판매중(삭제 아직 안 됨)
+        # - 그 외 → 실제 등록상태 그대로
         real = status_by_pno.get(pno, '')   # 상품코드(product_no)로 매칭된 실제 현재 등록상태
-        if real:
+        if pno in deleted_done:
+            status = real if real else '삭제완료'
+        elif real:
             status = real
         elif a['deleted']:
             status = '삭제됨'
-        elif pno in deleted_done:
-            status = '삭제완료'
         elif st == '삭제(코드보존)':
             status = '삭제(코드보존)'
         elif not mapped:

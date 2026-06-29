@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw, Settings, Package,
-  ShoppingBag, Lock, BarChart3, Clock,
+  ShoppingBag, Lock, BarChart3, Clock, TrendingUp,
 } from 'lucide-react';
 import {
   getAccounts, getDashboard, getProductStats,
@@ -34,6 +35,7 @@ const monthEnd = (d: Date) => ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)
 const yearStart = (d: Date) => `${d.getFullYear()}-01-01`;
 
 export default function SmartStorePage() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState<'dashboard' | 'products'>('dashboard');
   const [accounts, setAccounts] = useState<SmartStoreAccount[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -136,8 +138,8 @@ export default function SmartStorePage() {
         <div className="max-w-[1800px] mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded-sm" style={{ background: SS }} />
-            <h1 className="text-[13px] font-bold text-[#222]">스마트스토어 대시보드</h1>
-            {loading && <span className="text-[11px] text-[#999] animate-pulse">로딩중...</span>}
+            <h1 className="text-[15px] font-bold text-[#222]">스마트스토어 대시보드</h1>
+            {loading && <span className="text-[14px] text-[#999] animate-pulse">로딩중...</span>}
           </div>
           {periodMode === 'range' ? (
             <DateRangePicker startDate={rangeStart} endDate={rangeEnd}
@@ -151,7 +153,7 @@ export default function SmartStorePage() {
       <div className="max-w-[1800px] mx-auto px-4 md:px-6 py-3 space-y-3">
 
         {/* ── 컨트롤 바 ── */}
-        <div className="bg-white border border-[#e0e0e0] rounded px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
+        <div className="bg-white border border-[#e0e0e0] rounded px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[15px]">
           <span className="font-bold text-[#333]">스마트스토어</span>
           <span className="text-[#888]">계정 <b className="text-[#333]">{accounts.length}개</b></span>
           {lastCrawl && (
@@ -162,13 +164,18 @@ export default function SmartStorePage() {
           )}
           <span className="text-[#888] hidden md:inline">⏱ 매일 <b style={{ color: SS }}>01:00</b> 자동수집</span>
           <span className="ml-auto flex items-center gap-2">
-            <span className="text-[11px] text-[#999]">{periodLabel}</span>
+            <span className="text-[14px] text-[#999]">{periodLabel}</span>
+            <button onClick={() => navigate('/naver-roas')}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-[17px] font-bold text-white rounded-lg shadow-md hover:brightness-110 transition-all"
+              style={{ background: 'linear-gradient(135deg, #1d6ed8, #0ea5e9)' }}>
+              <TrendingUp size={18} /> 상품별 ROAS
+            </button>
             <button onClick={() => setShowSettings(true)}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold border border-[#d0d0d0] text-[#555] rounded hover:text-[#03C75A] hover:border-[#03C75A] transition-colors">
+              className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold border border-[#d0d0d0] text-[#555] rounded hover:text-[#03C75A] hover:border-[#03C75A] transition-colors">
               <Settings size={12} /> 계정설정
             </button>
             <button onClick={loadDash} disabled={loading}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-white rounded transition-colors"
+              className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold text-white rounded transition-colors"
               style={{ background: loading ? '#aaa' : SS }}>
               <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> 새로고침
             </button>
@@ -178,17 +185,17 @@ export default function SmartStorePage() {
 
         {/* ── KPI 요약 바 ── */}
         <div className="bg-white border border-[#e0e0e0] rounded">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 md:px-5 py-2.5 text-[12px]">
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 md:px-5 py-2.5 text-[15px]">
             <SumItem label="매출" value={s?.total_excel_revenue || 0} color={SS} />
             <Sep />
             <span>
               <span className="text-[#888] mr-1">광고비:</span>
               <span className="font-bold text-[#f97316]">{fmtW(s?.total_ad_cost || 0)}원</span>
               {(s?.total_ad_cpc || 0) > 0 && (
-                <span className="text-[10px] text-[#aaa] ml-1">(CPC {fmtW(s.total_ad_cpc)})</span>
+                <span className="text-[15px] text-[#aaa] ml-1">(CPC {fmtW(s.total_ad_cpc)})</span>
               )}
               {(s?.total_ad_ai || 0) > 0 && (
-                <span className="text-[10px] text-[#6366f1] ml-1">AI {fmtW(s.total_ad_ai)}</span>
+                <span className="text-[15px] text-[#6366f1] ml-1">AI {fmtW(s.total_ad_ai)}</span>
               )}
             </span>
             <Sep />
@@ -224,12 +231,12 @@ export default function SmartStorePage() {
             {accounts.filter(a => !a.has_pw).length > 0 && (
               <>
                 <Sep />
-                <span className="text-[#dc2626] font-semibold text-[11px]">⚠ 비번미등록 {accounts.filter(a => !a.has_pw).length}개</span>
+                <span className="text-[#dc2626] font-semibold text-[14px]">⚠ 비번미등록 {accounts.filter(a => !a.has_pw).length}개</span>
               </>
             )}
             <span className="ml-auto">
               <button onClick={() => setTab('products')}
-                className="px-3 py-1 text-[11px] font-semibold text-white rounded"
+                className="px-3 py-1 text-[14px] font-semibold text-white rounded"
                 style={{ background: SS }}>
                 상품관리 →
               </button>
@@ -243,11 +250,11 @@ export default function SmartStorePage() {
           <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
             <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
               <BarChart3 size={15} style={{ color: SS }} />
-              <span className="text-[12px] font-bold text-[#222]">계정별 현황</span>
-              <span className="text-[11px] text-[#999]">{periodLabel}</span>
+              <span className="text-[15px] font-bold text-[#222]">계정별 현황</span>
+              <span className="text-[14px] text-[#999]">{periodLabel}</span>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-[12px]">
+              <table className="w-full text-[15px]">
                 <thead className="bg-[#fafafa]">
                   <tr className="text-[#666]">
                     <th className="px-4 py-2.5 text-left font-semibold">계정</th>
@@ -258,12 +265,13 @@ export default function SmartStorePage() {
                     <th className="px-4 py-2.5 text-right font-semibold">순수익</th>
                     <th className="px-4 py-2.5 text-right font-semibold">ROAS</th>
                     <th className="px-4 py-2.5 text-right font-semibold">주문</th>
+                    <th className="px-4 py-2.5 text-center font-semibold">비고</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f5f5f5]">
                   {byAcc.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-10 text-center text-[#aaa] text-[12px]">
+                      <td colSpan={9} className="px-4 py-10 text-center text-[#aaa] text-[15px]">
                         데이터 없음 — 크롤링 후 표시됩니다
                       </td>
                     </tr>
@@ -278,7 +286,7 @@ export default function SmartStorePage() {
                         <tr key={row.account_id} className="hover:bg-[#fafff8] transition-colors">
                           <td className="px-4 py-2.5">
                             <span className="font-semibold text-[#333]">{row.account_name}</span>
-                            <span className="text-[10px] text-[#aaa] ml-1.5">{accountLoginMap.get(row.account_id) || ''}</span>
+                            <span className="text-[15px] text-[#aaa] ml-1.5">{accountLoginMap.get(row.account_id) || ''}</span>
                           </td>
                           <td className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>{excelRev > 0 ? fmt(excelRev) : <span className="text-[#ccc]">-</span>}</td>
                           <td className="px-4 py-2.5 text-right text-[#f97316]">{cpc > 0 ? fmt(cpc) : '-'}</td>
@@ -291,6 +299,22 @@ export default function SmartStorePage() {
                             {row.roas != null ? row.roas + '%' : '-'}
                           </td>
                           <td className="px-4 py-2.5 text-right text-[#555]">{fmt(row.orders)}</td>
+                          <td className="px-4 py-2.5 text-center">
+                            {row.naver_ad_account_id ? (
+                              <span className="inline-flex items-center gap-1 text-[14px] text-[#16a34a] font-semibold">
+                                ✓ 광고연결
+                              </span>
+                            ) : (
+                              <a
+                                href="http://192.168.45.100:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000"
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-block px-2 py-1 text-[14px] rounded bg-[#03C75A] text-white font-semibold hover:bg-[#02a84a] transition-colors"
+                              >
+                                광고로그인
+                              </a>
+                            )}
+                          </td>
                         </tr>
                       );
                     })
@@ -309,6 +333,7 @@ export default function SmartStorePage() {
                         {s?.roas != null ? s.roas + '%' : '-'}
                       </td>
                       <td className="px-4 py-2.5 text-right">{fmt(s?.total_orders || 0)}</td>
+                      <td></td>
                     </tr>
                   </tfoot>
                 )}
@@ -323,9 +348,9 @@ export default function SmartStorePage() {
           <div className="bg-white border border-[#e0e0e0] rounded-xl p-4">
             <div className="flex items-center gap-2 mb-3">
               <Package size={15} style={{ color: SS }} />
-              <span className="text-[12px] font-bold text-[#222]">상품 현황</span>
-              <span className="text-[11px] text-[#999]">총 {fmt(prodStats.total)}개</span>
-              <button onClick={() => setTab('products')} className="ml-auto text-[11px] font-semibold underline" style={{ color: SS }}>
+              <span className="text-[15px] font-bold text-[#222]">상품 현황</span>
+              <span className="text-[14px] text-[#999]">총 {fmt(prodStats.total)}개</span>
+              <button onClick={() => setTab('products')} className="ml-auto text-[14px] font-semibold underline" style={{ color: SS }}>
                 상품관리 →
               </button>
             </div>
@@ -335,8 +360,8 @@ export default function SmartStorePage() {
                 const colors: Record<string, string> = { SALE: SS, SUSPENSION: '#dc2626', OUTOFSTOCK: '#f97316', WAIT: '#6b7280', PROHIBITION: '#7c3aed' };
                 return (
                   <div key={st} className="bg-[#f8fafb] rounded-lg p-3 text-center border border-[#eee]">
-                    <div className="text-[10px] text-[#888] mb-1">{labels[st] || st}</div>
-                    <div className="text-[18px] font-bold" style={{ color: colors[st] || '#555' }}>{fmt(cnt)}</div>
+                    <div className="text-[15px] text-[#888] mb-1">{labels[st] || st}</div>
+                    <div className="text-[22px] font-bold" style={{ color: colors[st] || '#555' }}>{fmt(cnt)}</div>
                   </div>
                 );
               })}
@@ -345,10 +370,10 @@ export default function SmartStorePage() {
             {/* 계정별 상품 수 */}
             {prodStats.by_account.length > 0 && (
               <div className="mt-3 pt-3 border-t border-[#f0f0f0]">
-                <div className="text-[11px] text-[#888] mb-2">계정별 상품 수</div>
+                <div className="text-[14px] text-[#888] mb-2">계정별 상품 수</div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {prodStats.by_account.map(a => (
-                    <div key={a.account_id} className="flex items-center justify-between px-3 py-1.5 bg-[#f5f5f5] rounded-lg text-[11px]">
+                    <div key={a.account_id} className="flex items-center justify-between px-3 py-1.5 bg-[#f5f5f5] rounded-lg text-[14px]">
                       <span className="text-[#555] font-medium truncate">{a.account_name}</span>
                       <span className="font-bold text-[#333] shrink-0 ml-2">{fmt(a.count)}</span>
                     </div>
@@ -364,13 +389,13 @@ export default function SmartStorePage() {
           <div className="bg-[#fffbeb] border border-[#fde68a] rounded-xl p-4 flex items-start gap-3">
             <Lock size={16} className="text-[#d97706] mt-0.5 shrink-0" />
             <div>
-              <div className="text-[12px] font-bold text-[#d97706] mb-1">비밀번호 미등록 계정 — 크롤링 불가</div>
+              <div className="text-[15px] font-bold text-[#d97706] mb-1">비밀번호 미등록 계정 — 크롤링 불가</div>
               <div className="flex flex-wrap gap-1.5">
                 {accounts.filter(a => !a.has_pw).map(a => (
-                  <span key={a.id} className="px-2 py-0.5 rounded bg-[#fef3c7] text-[#92400e] text-[11px] font-medium">{a.display_name}</span>
+                  <span key={a.id} className="px-2 py-0.5 rounded bg-[#fef3c7] text-[#92400e] text-[14px] font-medium">{a.display_name}</span>
                 ))}
               </div>
-              <button onClick={() => setShowSettings(true)} className="mt-2 text-[11px] text-[#d97706] font-semibold underline">
+              <button onClick={() => setShowSettings(true)} className="mt-2 text-[14px] text-[#d97706] font-semibold underline">
                 계정설정에서 비밀번호 입력 →
               </button>
             </div>
@@ -384,12 +409,12 @@ export default function SmartStorePage() {
         <div className="fixed inset-0 z-40 bg-[#f5f6fa] overflow-auto">
           <div className="bg-white border-b border-[#e0e0e0] px-6 py-3 flex items-center gap-3">
             <button onClick={() => setTab('dashboard')}
-              className="flex items-center gap-1 text-[12px] text-[#555] hover:text-[#333] font-semibold">
+              className="flex items-center gap-1 text-[15px] text-[#555] hover:text-[#333] font-semibold">
               <ChevronLeft size={16} /> 대시보드로
             </button>
             <div className="w-px h-4 bg-[#e0e0e0]" />
             <ShoppingBag size={15} style={{ color: SS }} />
-            <span className="text-[13px] font-bold text-[#222]">스마트스토어 상품관리</span>
+            <span className="text-[15px] font-bold text-[#222]">스마트스토어 상품관리</span>
           </div>
           <div className="px-4 md:px-6 py-4">
             <SmartStoreProductsTab accounts={accounts} />

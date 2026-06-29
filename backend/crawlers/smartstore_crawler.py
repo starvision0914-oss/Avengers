@@ -541,7 +541,7 @@ def _login_searchad(driver, login_id: str, login_pw: str, log):
 
 
 def _parse_billing_table(driver, log) -> list:
-    """ant-table에서 기간/소진액 파싱."""
+    """ant-table에서 기간/소진액 파싱 (페이지네이션 전체 수집)."""
     try:
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.ant-table-tbody'))
@@ -551,26 +551,38 @@ def _parse_billing_table(driver, log) -> list:
         return []
 
     time.sleep(1)
-
-    rows = driver.find_elements(By.CSS_SELECTOR, '.ant-table-tbody .ant-table-row')
     results = []
-    for row in rows:
-        cells = row.find_elements(By.CSS_SELECTOR, '.ant-table-cell')
-        if len(cells) < 3:
-            continue
-        date_text = cells[0].text.strip().rstrip('.')   # "2026.06.26." → "2026.06.26"
-        spend_text = cells[2].text.strip()              # "￦6,273"
 
-        parts = date_text.split('.')
-        if len(parts) != 3:
-            continue
-        try:
-            d = date(int(parts[0]), int(parts[1]), int(parts[2]))
-        except (ValueError, IndexError):
-            continue
+    for page_num in range(1, 50):
+        rows = driver.find_elements(By.CSS_SELECTOR, '.ant-table-tbody .ant-table-row')
+        for row in rows:
+            cells = row.find_elements(By.CSS_SELECTOR, '.ant-table-cell')
+            if len(cells) < 3:
+                continue
+            date_text = cells[0].text.strip().rstrip('.')
+            spend_text = cells[2].text.strip()
+            parts = date_text.split('.')
+            if len(parts) != 3:
+                continue
+            try:
+                d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+            except (ValueError, IndexError):
+                continue
+            cost = int(re.sub(r'[^\d]', '', spend_text) or 0)
+            results.append({'date': d, 'cost': cost})
 
-        cost = int(re.sub(r'[^\d]', '', spend_text) or 0)
-        results.append({'date': d, 'cost': cost})
+        # 다음 페이지 버튼 확인
+        next_btn = driver.execute_script("""
+            var btn = document.querySelector('.ant-pagination-next');
+            if (!btn) return null;
+            return btn.classList.contains('ant-pagination-disabled') ? 'disabled' : 'active';
+        """)
+        if next_btn != 'active':
+            break
+        driver.execute_script(
+            "document.querySelector('.ant-pagination-next').click();"
+        )
+        time.sleep(1.5)
 
     return results
 
@@ -578,6 +590,7 @@ def _parse_billing_table(driver, log) -> list:
 def fetch_ad_cost_billing(driver, account, since_date: date, until_date: date, log_fn=None) -> list:
     """
     searchad.naver.com billing/balance 기간별 소진내역 스크랩.
+    월별로 분할 수집해 ant-table 10건 페이지 제한 우회.
     Returns: [{'date': date, 'cost': int}, ...]  cost = 소진액(VAT포함)
     """
     log = log_fn or logger.info
@@ -586,26 +599,44 @@ def fetch_ad_cost_billing(driver, account, since_date: date, until_date: date, l
         log(f'[광고센터] {account.display_name}: naver_ad_account_id 미설정 — 건너뜀')
         return []
 
-    date_range = f"{since_date},{until_date}"
-    url = (
-        SEARCHAD_BILLING_URL.format(ad_account_id=account.naver_ad_account_id)
-        + f'?dateRange={date_range}&tab=period'
-    )
-
-    # 계정별 쿠키 주입
+    # 계정별 쿠키 주입 (1회)
     _inject_naver_ads_cookies(driver, log, login_id=getattr(account, 'naver_ad_login_id', None))
-    log(f'[광고센터] {account.display_name} billing 페이지 접근')
-    driver.get(url)
-    time.sleep(5)
 
-    # 로그인 리다이렉트 감지 시 재시도
-    if 'nid.naver.com' in driver.current_url or 'accounts.naver.com' in driver.current_url:
-        log('[광고센터] 쿠키 만료 — 로그인 필요. naver_ads_cookies.json 갱신 필요')
-        return []
+    # 월 목록 생성
+    months = []
+    y, m = since_date.year, since_date.month
+    while (y, m) <= (until_date.year, until_date.month):
+        import calendar
+        month_start = date(y, m, 1)
+        month_end = date(y, m, calendar.monthrange(y, m)[1])
+        chunk_start = max(month_start, since_date)
+        chunk_end = min(month_end, until_date)
+        months.append((chunk_start, chunk_end))
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
 
-    rows = _parse_billing_table(driver, log)
-    log(f'[광고센터] {account.display_name}: {len(rows)}일 수집 ({since_date}~{until_date})')
-    return rows
+    all_rows = []
+    for chunk_start, chunk_end in months:
+        date_range = f"{chunk_start},{chunk_end}"
+        url = (
+            SEARCHAD_BILLING_URL.format(ad_account_id=account.naver_ad_account_id)
+            + f'?dateRange={date_range}&tab=period'
+        )
+        log(f'[광고센터] {account.display_name} {chunk_start.strftime("%Y-%m")} 조회')
+        driver.get(url)
+        time.sleep(5)
+
+        if 'nid.naver.com' in driver.current_url or 'accounts.naver.com' in driver.current_url:
+            log('[광고센터] 쿠키 만료 — naver_ads_cookies.json 갱신 필요')
+            break
+
+        rows = _parse_billing_table(driver, log)
+        all_rows.extend(rows)
+        time.sleep(1)
+
+    log(f'[광고센터] {account.display_name}: {len(all_rows)}일 수집 ({since_date}~{until_date})')
+    return all_rows
 
 
 def fetch_ad_cost(driver, account, start_date: date, end_date: date, log_fn=None):

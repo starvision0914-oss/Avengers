@@ -40,6 +40,7 @@ import SalesMatchPage from './pages/Sales/SalesMatchPage';
 import TaxVatPage from './pages/Tax/TaxVatPage';
 import SmsWidget from './components/SmsWidget';
 import SmartStorePage from './pages/SmartStore/SmartStorePage';
+import NaverRoasPage from './pages/SmartStore/NaverRoasPage';
 import NaverBlogPage from './pages/NaverBlog/NaverBlogPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -93,6 +94,7 @@ export default function App() {
           <Route path="sms" element={<SmsManagePage />} />
           <Route path="lotto" element={<LottoPage />} />
           <Route path="smartstore" element={<SmartStorePage />} />
+          <Route path="naver-roas" element={<NaverRoasPage />} />
           <Route path="naver-blog" element={<Navigate to="/blog" replace />} />
           <Route path="blog" element={<NaverBlogPage />} />
         </Route>

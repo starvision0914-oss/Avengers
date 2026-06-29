@@ -33,6 +33,7 @@ export interface DashboardSummary {
 export interface AccountRow {
   account_id: number;
   account_name: string;
+  naver_ad_account_id?: string | null;
   sales: number;
   settlement: number;
   orders: number;

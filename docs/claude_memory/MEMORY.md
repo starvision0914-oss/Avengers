@@ -52,3 +52,4 @@
 - [지마켓 시간별 광고비 오탐스킵](project_gmarket_hourly_false_skip.md) — pgrep이 'while pgrep crawl_gmarket_ad_report' 모니터셸을 오탐→매시간 스킵(06-16/14 0건). manage.py 실행형으로 패턴수정(2026-06-17)
 - [지마켓 광고제어 누적/진행상태 가드](project_gmarket_adcontrol_busy_guard.md) — 광고ON/OFF는 단일브라우저 순차+전역락. 대시보드 스레드가 ps에 안잡혀 진행상태 오표시+가드없어 누적 → adcontrol busy 마커로 중복 즉시스킵·정확한 상태(2026-06-21)
 - [11번가 verify 쿠키미저장/OTP24h인증판정](project_11st_verify_cookie_bug.md) — "OTP완료인데 인증안됨"=verify가 쿠키 미저장(수정)+도구가 OTP24h로 판정(실제 크롤은 쿠키72h로 정상). dlrmsgh014 등
+- [11번가 0629 제재위험 상품 삭제대기](project_11st_product_pending_delete.md) — 0629 엑셀 9개(BB탄2+캐릭터IP7) 다음 상품수정 시 삭제. 정식라이선스 없음 확인.

@@ -192,18 +192,54 @@ def _parse(ad_type, rows, login_id, year, month, sdt, edt):
     return list(out.values())
 
 
-def crawl_account(driver, login_id, year, month, log_fn=None):
+def _select_seller_on_page(driver, target_seller, log_fn=None):
+    """ESM 광고센터 페이지의 셀러 드롭다운으로 계정 전환 시도. 성공하면 True."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import Select
+    for sel_id in ['SellerId', 'sellerId']:
+        els = driver.find_elements(By.ID, sel_id)
+        if not els:
+            continue
+        try:
+            sel = Select(els[0])
+            opts = [o.get_attribute('value') for o in sel.options]
+            if target_seller not in opts:
+                _log(log_fn, f'  셀러 드롭다운에 {target_seller} 없음 (목록: {opts})')
+                return False
+            sel.select_by_value(target_seller)
+            time.sleep(1)
+            _log(log_fn, f'  셀러 전환 → {target_seller} (#SellerId)')
+            return True
+        except Exception as e:
+            _log(log_fn, f'  셀러 전환 실패 (#{sel_id}): {str(e)[:80]}')
+    return False
+
+
+def crawl_account(driver, login_id, year, month, log_fn=None, sub_login_ids=None, seller_override=None):
     """한 계정의 CPC+AI 상품별 광고비 크롤 → 저장. 결과 dict 반환.
+    sub_login_ids: 공유ESM 서브계정 login_id 집합 — Excel 행의 seller_id가 여기 해당하면 해당 login_id로 저장.
+    seller_override: 마스터 세션에서 특정 셀러로 전환해 크롤 (rejoice235/236 등).
     현재월=이번달(TM) 프리셋, 과거월=직접입력(M)+SetDate."""
     from selenium.webdriver.common.by import By
     from apps.cpc.models import GmarketProductAdCost
     today = timezone.localdate()
     is_current = (year == today.year and month == today.month)
+    sub_ids = set(sub_login_ids or [])
+    save_login_id = seller_override or login_id  # 저장할 login_id (서브계정 override 시 서브 id)
     res = {}
     for ad_type, cfg in REPORTS.items():
         try:
             _clear_dl()
             driver.get(cfg['url']); time.sleep(6)
+            # seller_override: 마스터 세션에서 서브계정으로 전환
+            if seller_override:
+                if not _select_seller_on_page(driver, seller_override, log_fn):
+                    _log(log_fn, f'  [{seller_override}/{ad_type}] ⚠️ 셀러 드롭다운 미발견, 페이지 재로드 후 재시도')
+                    driver.get(cfg['url']); time.sleep(6)
+                    if not _select_seller_on_page(driver, seller_override, log_fn):
+                        _log(log_fn, f'  [{seller_override}/{ad_type}] ❌ 셀러 전환 실패 — 스킵')
+                        res[ad_type] = {'ok': False, 'error': 'seller_switch_failed'}
+                        continue
             kind, val = cfg['tab']
             if kind == 'js':
                 driver.execute_script(val)
@@ -220,15 +256,27 @@ def crawl_account(driver, login_id, year, month, log_fn=None):
                 res[ad_type] = {'ok': False, 'products': 0, 'cost': 0}
                 continue
             rows = _read_rows(f)
-            objs = _parse(ad_type, rows, login_id, year, month, sdt, edt)
-            # 멱등 저장: 해당 (login_id, ad_type, year, month) 삭제 후 재삽입
+            objs = _parse(ad_type, rows, save_login_id, year, month, sdt, edt)
+            # 공유ESM: seller_id가 서브계정 login_id면 login_id 재매핑 (seller_override 없을 때만)
+            if sub_ids and not seller_override:
+                for o in objs:
+                    if o.seller_id in sub_ids:
+                        o.login_id = o.seller_id
+            # 멱등 저장: 영향받는 모든 login_id별 (login_id, ad_type, year, month) 삭제 후 재삽입
             from django.db import transaction
+            objs_by_lid = {}
+            for o in objs:
+                objs_by_lid.setdefault(o.login_id, []).append(o)
             with transaction.atomic():
-                GmarketProductAdCost.objects.filter(
-                    login_id=login_id, ad_type=ad_type, year=year, month=month).delete()
-                GmarketProductAdCost.objects.bulk_create(objs, batch_size=500)
+                affected_lids = {save_login_id} | (sub_ids if sub_ids and not seller_override else set())
+                for lid in affected_lids:
+                    GmarketProductAdCost.objects.filter(login_id=lid, ad_type=ad_type, year=year, month=month).delete()
+                for lid, lid_objs in objs_by_lid.items():
+                    GmarketProductAdCost.objects.bulk_create(lid_objs, batch_size=500)
             tot = sum(o.cost for o in objs)
-            _log(log_fn, f'  [{login_id}/{ad_type}] {sdt}~{edt} 상품 {len(objs)}개 / 광고비 {tot:,}원 저장')
+            by_lid = {lid: sum(o.cost for o in los) for lid, los in objs_by_lid.items()}
+            detail = ', '.join(f'{lid}:{c:,}' for lid, c in sorted(by_lid.items()))
+            _log(log_fn, f'  [{login_id}/{ad_type}] {sdt}~{edt} 상품 {len(objs)}개 / {detail} 저장')
             res[ad_type] = {'ok': True, 'products': len(objs), 'cost': tot, 'period': f'{sdt}~{edt}'}
         except Exception as e:
             _log(log_fn, f'  [{login_id}/{ad_type}] 오류 {str(e)[:120]}')
@@ -271,15 +319,20 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
         _log(log_fn, f'⏭️ 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}
 
+    all_accts = list(CrawlerAccount.objects.filter(platform='gmarket', is_active=True).order_by('display_order', 'login_id'))
+    # 공유ESM 서브계정 login_id 맵: master_login_id → [sub_login_id, ...]
+    sub_map = {}
+    for a in all_accts:
+        if a.gmarket_origin_id and a.gmarket_origin_id != a.login_id:
+            sub_map.setdefault(a.gmarket_origin_id, []).append(a.login_id)
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
     if login_ids:
         qs = qs.filter(login_id__in=login_ids)
     accts = list(qs.order_by('display_order', 'login_id'))
-    # 공유ESM 서브계정 제외(대표 1개만 크롤) — gmarket_origin_id가 다른 대표를 가리키면 서브.
-    # 대표 로그인 1회로 ESM 전체 리포트가 잡히므로 서브는 중복/로그인불가. (명시적 login_ids 지정 시엔 존중)
+    # 공유ESM 서브계정 제외(대표 크롤 시 seller_id 기반으로 서브 데이터 자동 분리 저장)
     if not login_ids:
         accts = [a for a in accts if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
-        _log(log_fn, f'[대표계정 {len(accts)}개] 공유ESM 서브 제외 후 크롤')
+        _log(log_fn, f'[대표계정 {len(accts)}개] 공유ESM 서브({list(sub_map.keys())}) 포함 크롤')
     summary = {}
     driver = None
     try:
@@ -301,11 +354,14 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                     summary[a.login_id] = {'login': False}
                     continue
                 acct_res = {}
+                subs = sub_map.get(a.login_id)
+                if subs:
+                    _log(log_fn, f'  [{a.login_id}] 서브계정 포함 수집: {subs}')
                 for (y, m) in periods:
                     if guard.is_blocked(platform='gmarket')[0]:
                         _log(log_fn, '⛔ 차단 감지 — 중단'); break
                     _log(log_fn, f'  ── {a.login_id} {y}-{m:02d} ──')
-                    acct_res[f'{y}-{m:02d}'] = crawl_account(driver, a.login_id, y, m, log_fn)
+                    acct_res[f'{y}-{m:02d}'] = crawl_account(driver, a.login_id, y, m, log_fn, sub_login_ids=subs)
                     time.sleep(2)   # 사람처럼 페이싱
                 # 통합: 같은 세션(로그인 재사용)에서 이 계정 ROAS≥200 상품 CPC 키워드 수집.
                 # 광고비 저장 후 실행하므로 방금 수집한 당월 GmarketProductAdCost로 ROAS≥200 판정.
@@ -336,12 +392,70 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                             driver=driver, ss_cpc=ss_cpc, ss_ai=ss_ai)
                     except Exception as e:
                         _log(log_fn, f'  [{a.login_id}] 일자별 gsheet 오류(광고비는 저장됨): {str(e)[:120]}')
+                # 마스터 세션에서 서브계정 셀러 전환 크롤 (rejoice235/236 등 마스터 Excel 미포함 서브)
+                subs_need_switch = sub_map.get(a.login_id, [])
+                from apps.cpc.models import GmarketProductAdCost as _G
+                for sub_lid in subs_need_switch:
+                    if login_ids and sub_lid not in login_ids:
+                        continue
+                    if any(_G.objects.filter(login_id=sub_lid, year=y, month=m).exists() for y, m in periods):
+                        _log(log_fn, f'  [{sub_lid}] 마스터 Excel 포함 — 셀러전환 불필요')
+                        continue
+                    _log(log_fn, f'  [{sub_lid}] 마스터 세션 셀러 전환 크롤 시도')
+                    sub_res = {}
+                    for (y, m) in periods:
+                        if guard.is_blocked(platform='gmarket')[0]:
+                            break
+                        sub_res[f'{y}-{m:02d}'] = crawl_account(
+                            driver, a.login_id, y, m, log_fn, seller_override=sub_lid)
+                        time.sleep(2)
+                    summary[sub_lid] = sub_res
                 summary[a.login_id] = acct_res
             finally:
                 if driver:
                     try: driver.quit()
                     except Exception: pass
                     driver = None
+        # 마스터 세션 셀러전환도 실패한 서브계정 → 독립 로그인 최종 폴백
+        from apps.cpc.models import GmarketProductAdCost as _G
+        for master_lid, sub_lids in sub_map.items():
+            for sub_lid in sub_lids:
+                if login_ids and sub_lid not in login_ids:
+                    continue
+                if any(_G.objects.filter(login_id=sub_lid, year=y, month=m).exists() for y, m in periods):
+                    continue  # 이미 수집됨
+                sub_acct = next((a for a in all_accts if a.login_id == sub_lid), None)
+                if not sub_acct:
+                    continue
+                if guard.is_blocked(platform='gmarket')[0]:
+                    _log(log_fn, '⛔ 차단 감지 — 중단'); break
+                _log(log_fn, f'[{sub_lid}] 독립 로그인 최종 폴백 시도')
+                try:
+                    driver = create_driver(download_dir=DL, kill_existing=True)
+                    try:
+                        driver.execute_cdp_cmd('Page.setDownloadBehavior', {'behavior': 'allow', 'downloadPath': DL})
+                    except Exception:
+                        pass
+                    if not (_try_cookie_login(driver, sub_acct) or
+                            (_full_login(driver, sub_acct.login_id, sub_acct.password_enc) and (_save_cookies(driver, sub_acct) or True))):
+                        _log(log_fn, f'[{sub_lid}] 독립 로그인 실패 — 건너뜀')
+                        summary[sub_lid] = {'login': False}
+                        continue
+                    sub_res = {}
+                    for (y, m) in periods:
+                        if guard.is_blocked(platform='gmarket')[0]:
+                            break
+                        sub_res[f'{y}-{m:02d}'] = crawl_account(driver, sub_lid, y, m, log_fn)
+                        time.sleep(2)
+                    summary[sub_lid] = sub_res
+                except Exception as e:
+                    _log(log_fn, f'[{sub_lid}] 독립 크롤 오류: {str(e)[:120]}')
+                    summary[sub_lid] = {'error': str(e)[:120]}
+                finally:
+                    if driver:
+                        try: driver.quit()
+                        except Exception: pass
+                        driver = None
     finally:
         guard.release_global_lock(platform='gmarket')
         try: stop_display()

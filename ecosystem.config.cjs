@@ -44,5 +44,19 @@ module.exports = {
         PYTHONPATH: '/home/rejoice888/.local/lib/python3.12/site-packages',
       },
     },
+    {
+      name: 'avengers-xvfb-vnc',
+      script: '/usr/bin/Xvfb',
+      args: ':99 -screen 0 1920x1080x24',
+      autorestart: true,
+      restart_delay: 2000,
+    },
+    {
+      name: 'avengers-x11vnc',
+      script: '/usr/bin/x11vnc',
+      args: '-display :99 -rfbport 5905 -forever -shared -noxdamage -nopw',
+      autorestart: true,
+      restart_delay: 3000,
+    },
   ],
 };

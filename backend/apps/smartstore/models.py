@@ -17,8 +17,10 @@ class SmartStoreAccount(models.Model):
     naver_ad_ai_customer_id = models.CharField(max_length=50, blank=True, default='', help_text='네이버 검색광고 AI Customer ID')
     naver_ad_ai_access_license = models.CharField(max_length=200, blank=True, default='', help_text='네이버 검색광고 AI Access License')
     naver_ad_ai_secret_key = models.TextField(blank=True, default='', help_text='네이버 검색광고 AI Secret Key')
-    naver_ad_account_id = models.CharField(max_length=50, blank=True, default='', help_text='광고센터 ad-account ID (billing 스크랩용, URL의 /ad-account/숫자 부분)')
-    naver_ad_login_id = models.CharField(max_length=100, blank=True, default='', help_text='광고센터 로그인 Naver ID (naver_ads_cookies.json 키와 일치)')
+    naver_ad_account_id = models.CharField(max_length=50, blank=True, default='', help_text='광고센터 CPC ad-account ID (billing 스크랩용)')
+    naver_ad_login_id = models.CharField(max_length=100, blank=True, default='', help_text='광고센터 CPC 로그인 Naver ID (naver_ads_cookies.json 키)')
+    naver_ad_ai_account_id = models.CharField(max_length=50, blank=True, default='', help_text='광고센터 AI ad-account ID (billing 스크랩용)')
+    naver_ad_ai_login_id = models.CharField(max_length=100, blank=True, default='', help_text='광고센터 AI 로그인 Naver ID (naver_ads_cookies.json 키)')
     purchase_rate = models.IntegerField(default=0, help_text='구매가율(%) — 예: 70 입력 시 구매가=매출×70%')
     is_active = models.BooleanField(default=True)
     display_order = models.IntegerField(default=0)
@@ -107,6 +109,61 @@ class SmartStoreProduct(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.product_no})"
+
+
+class NaverAdProductReport(models.Model):
+    """상품별 광고비 보고서 — 기간 합계 단위 저장"""
+    AD_TYPE_CHOICES = [
+        ('cpc', 'CPC(쇼핑검색)'),
+        ('ai', 'AI(스마트쇼핑)'),
+    ]
+    account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='product_reports')
+    since_date = models.DateField()
+    until_date = models.DateField()
+    ad_type = models.CharField(max_length=10, choices=AD_TYPE_CHOICES, default='cpc')
+    product_no = models.CharField(max_length=100, help_text='mallProductId')
+    product_name = models.CharField(max_length=500, blank=True, default='')
+    cost = models.BigIntegerField(default=0)
+    click = models.IntegerField(default=0)
+    impression = models.IntegerField(default=0)
+    conversion_count = models.IntegerField(default=0)
+    conversion_amount = models.BigIntegerField(default=0)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'naver_ad_product_report'
+        unique_together = [('account', 'since_date', 'until_date', 'ad_type', 'product_no')]
+        indexes = [
+            models.Index(fields=['account', 'since_date', 'until_date']),
+            models.Index(fields=['product_no']),
+        ]
+
+    def __str__(self):
+        return f"{self.product_name or self.product_no} ({self.since_date}~{self.until_date})"
+
+
+class SmartStoreCleanViolation(models.Model):
+    """네이버 쇼핑파트너센터 클린위반 현황"""
+    account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='clean_violations')
+    violation_date = models.DateField(help_text='적발일')
+    violation_type = models.CharField(max_length=200, help_text='위반사유')
+    product_name = models.CharField(max_length=500, help_text='상품제목')
+    product_id = models.CharField(max_length=100, help_text='상품번호(pid)')
+    nv_mid = models.CharField(max_length=100, blank=True, default='', help_text='네이버 가격비교 상품ID')
+    note = models.TextField(blank=True, default='', help_text='비고(중복상품 대표상품 정보 등)')
+    crawled_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'smartstore_clean_violation'
+        unique_together = [('account', 'violation_date', 'product_id')]
+        ordering = ['-violation_date']
+        indexes = [
+            models.Index(fields=['account', 'violation_date']),
+            models.Index(fields=['violation_type']),
+        ]
+
+    def __str__(self):
+        return f"[{self.account.store_name}] {self.violation_date} {self.violation_type} {self.product_name[:30]}"
 
 
 class SmartStoreCrawlLog(models.Model):

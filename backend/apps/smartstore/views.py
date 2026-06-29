@@ -1,13 +1,23 @@
+import calendar
+import csv
 import datetime
 import io
+from datetime import date
 
 from django.db.models import Sum, Count, Q, Max
 from django.http import HttpResponse
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
 
-from .models import SmartStoreAccount, SmartStoreSales, SmartStoreAdCost, SmartStoreProduct, SmartStoreCrawlLog
+from .models import (SmartStoreAccount, SmartStoreSales, SmartStoreAdCost,
+                     SmartStoreProduct, SmartStoreCrawlLog, NaverAdProductReport)
 from apps.sales.models import SalesRecord
+
+_NAVER_STATUS_LABEL = {
+    'SALE': '판매중', 'SUSPENSION': '판매중지',
+    'OUTOFSTOCK': '품절', 'WAIT': '승인대기', 'PROHIBITION': '판매금지',
+}
 
 
 def _account_serial(a):
@@ -143,6 +153,8 @@ class DashboardView(APIView):
             elif row['ad_type'] == 'ai':
                 by_account[aid]['ad_ai'] += c
 
+        acc_naver_ad = {a.id: a.naver_ad_account_id for a in accounts_qs}
+
         account_list = []
         for aid, row in by_account.items():
             name, login_id = acc_info.get(aid, (str(aid), ''))
@@ -151,6 +163,7 @@ class DashboardView(APIView):
             account_list.append({
                 'account_id': aid,
                 'account_name': name,
+                'naver_ad_account_id': acc_naver_ad.get(aid),
                 **row,
                 'excel_revenue': sales,
                 'roas': round(sales / ad * 100, 1) if ad > 0 else None,
@@ -490,6 +503,103 @@ class ProductExcelView(APIView):
         )
         resp['Content-Disposition'] = f"attachment; filename*=UTF-8''{filename}"
         return resp
+
+
+# ──── 네이버 상품별 ROAS ────
+
+class NaverProductRoasView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        today = date.today()
+        ym_from = request.query_params.get('ym_from') or f'{today.year}-{today.month:02d}'
+        ym_to = request.query_params.get('ym_to') or ym_from
+        account_id = request.query_params.get('account_id') or ''
+        ad_type_filter = request.query_params.get('ad_type') or ''
+
+        y0, m0 = map(int, ym_from.split('-'))
+        y1, m1 = map(int, ym_to.split('-'))
+        d0 = date(y0, m0, 1)
+        d1 = date(y1, m1, calendar.monthrange(y1, m1)[1])
+
+        qs = NaverAdProductReport.objects.filter(since_date__gte=d0, since_date__lte=d1)
+        if account_id:
+            qs = qs.filter(account_id=account_id)
+        if ad_type_filter in ('cpc', 'ai'):
+            qs = qs.filter(ad_type=ad_type_filter)
+
+        agg = list(qs.values('account_id', 'product_no', 'product_name').annotate(
+            total_cost=Sum('cost'),
+            total_click=Sum('click'),
+            total_impression=Sum('impression'),
+            total_conv_cnt=Sum('conversion_count'),
+            total_conv_amt=Sum('conversion_amount'),
+        ))
+
+        pnos = {r['product_no'] for r in agg}
+        status_raw = {p.product_no: p.status_type
+                      for p in SmartStoreProduct.objects.filter(product_no__in=pnos)}
+        acc_map = {a.id: (a.display_name or a.store_name)
+                   for a in SmartStoreAccount.objects.all()}
+
+        cost_min = int(request.query_params.get('cost_min') or 0)
+        roas_max_s = request.query_params.get('roas_max')
+        roas_min_s = request.query_params.get('roas_min')
+        clicks_min = int(request.query_params.get('clicks_min') or 0)
+
+        rows = []
+        for r in agg:
+            cost = r['total_cost'] or 0
+            conv_amt = r['total_conv_amt'] or 0
+            roas = round(conv_amt * 100.0 / cost, 1) if cost else 0
+            if cost_min and cost < cost_min:
+                continue
+            if roas_max_s is not None and roas > float(roas_max_s):
+                continue
+            if roas_min_s is not None and roas < float(roas_min_s):
+                continue
+            if clicks_min and (r['total_click'] or 0) < clicks_min:
+                continue
+            st_raw = status_raw.get(r['product_no'], '')
+            rows.append({
+                'account_id': r['account_id'],
+                'account_name': acc_map.get(r['account_id'], ''),
+                'product_no': r['product_no'],
+                'product_name': r['product_name'],
+                'cost': cost,
+                'click': r['total_click'] or 0,
+                'impression': r['total_impression'] or 0,
+                'conv_cnt': r['total_conv_cnt'] or 0,
+                'conv_amt': conv_amt,
+                'roas': roas,
+                'status': _NAVER_STATUS_LABEL.get(st_raw, st_raw or '-'),
+            })
+
+        if request.query_params.get('export'):
+            fname = f'naver_product_roas_{ym_from}_{ym_to}.csv'
+            resp = HttpResponse(content_type='text/csv; charset=utf-8')
+            resp['Content-Disposition'] = f'attachment; filename="{fname}"'
+            resp.write('﻿')
+            w = csv.writer(resp)
+            w.writerow(['계정', '상품번호', '상품명', '노출수', '클릭수', '광고비', '구매수', '구매금액', 'ROAS(%)', '비고(상품상태)'])
+            for r in sorted(rows, key=lambda x: -x['cost']):
+                w.writerow([r['account_name'], r['product_no'], r['product_name'],
+                            r['impression'], r['click'], r['cost'],
+                            r['conv_cnt'], r['conv_amt'], r['roas'], r['status']])
+            return resp
+
+        total_cost = sum(r['cost'] for r in rows)
+        total_conv = sum(r['conv_amt'] for r in rows)
+        totals = {
+            'cost': total_cost,
+            'click': sum(r['click'] for r in rows),
+            'impression': sum(r['impression'] for r in rows),
+            'conv_cnt': sum(r['conv_cnt'] for r in rows),
+            'conv_amt': total_conv,
+            'roas': round(total_conv * 100.0 / total_cost, 1) if total_cost else 0,
+            'products': len(rows),
+        }
+        return Response({'rows': rows, 'totals': totals})
 
 
 # ──── 크롤 상태 ────
