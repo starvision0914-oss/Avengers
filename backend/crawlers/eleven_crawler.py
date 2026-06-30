@@ -131,7 +131,7 @@ def _otp_from_db(since_ms):
         import datetime as _dt
         from django.utils import timezone as _tz
         from apps.cpc.models import ReceivedSmsMessage
-        since = _tz.make_aware(_dt.datetime.fromtimestamp(since_ms / 1000.0)) if since_ms \
+        since = _dt.datetime.fromtimestamp(since_ms / 1000.0, tz=_dt.timezone.utc) if since_ms \
             else _tz.now() - _dt.timedelta(minutes=5)
         for sms in ReceivedSmsMessage.objects.filter(
                 received_at__gte=since, message__icontains='인증번호').order_by('-id')[:15]:

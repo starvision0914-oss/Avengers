@@ -178,13 +178,13 @@ export default function AdSettingsPage() {
 
   // 캠페인 이름 불러오기: 먼저 DB(즉시), 없으면 대표계정 1개로 광고센터 실시간 조회(백그라운드+폴링).
   // ※ 캠페인 이름은 계정 공통이므로 대표 1개만 로그인(동시 로그인=IP차단 위험).
-  const loadCampaigns = async () => {
+  const loadCampaigns = async (forceRefresh = false) => {
     if (stratAccounts.length === 0) { toast.error('계정을 먼저 선택하세요.'); return; }
     setCampLoading(true);
     try {
       const rep = stratAccounts[0];
       const db = await getSt11StrategyCampaigns(rep);
-      if ((db.campaigns || []).length > 0) {
+      if (!forceRefresh && (db.campaigns || []).length > 0) {
         setCampOptions(db.campaigns); toast.success(`캠페인 ${db.campaigns.length}개 (저장됨)`); setCampLoading(false); return;
       }
       // 실시간 조회(로그인 필요, ~1분)
@@ -484,10 +484,17 @@ export default function AdSettingsPage() {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="font-semibold text-sm">② 캠페인 선택 ({stratCamps.length}개 선택)</h4>
-                  <button onClick={loadCampaigns} disabled={campLoading}
-                    className="flex items-center gap-1 text-xs px-2 py-1 bg-blue-600 text-white rounded disabled:opacity-50">
-                    <RefreshCw size={12} className={campLoading ? 'animate-spin' : ''} /> 캠페인 불러오기
-                  </button>
+                  <div className="flex gap-1">
+                    <button onClick={() => loadCampaigns(false)} disabled={campLoading}
+                      className="flex items-center gap-1 text-xs px-2 py-1 bg-blue-600 text-white rounded disabled:opacity-50">
+                      <RefreshCw size={12} className={campLoading ? 'animate-spin' : ''} /> 캠페인 불러오기
+                    </button>
+                    <button onClick={() => loadCampaigns(true)} disabled={campLoading}
+                      title="DB 캐시 무시하고 광고센터에서 실시간 재조회 (~1분)"
+                      className="flex items-center gap-1 text-xs px-2 py-1 bg-orange-500 text-white rounded disabled:opacity-50">
+                      <RefreshCw size={12} /> 강제 갱신
+                    </button>
+                  </div>
                 </div>
                 {campOptions.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto border rounded p-2">

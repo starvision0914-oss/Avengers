@@ -49,7 +49,13 @@
 - [지마켓 판매불가 탐지](project_gmarket_unavailable_detection.md) — 판매불가는 goods API서 제외돼 판매중으로 박제 → 누락=판매불가 규칙(_gmarket_realsales+mark_gmarket_unavailable). 적자리스트 77.6%가 실은 판매불가였음
 - [지마켓 광고효율 딥리서치](project_gmarket_ad_efficiency.md) — 승자10%가 전환92%, 적자82%가 전환1%. 진짜 손익분기 ROAS~450%(원가22%마진). 진단엔진 gmarket_ad_diagnose 매일09:30 텔레그램. AI저활용
 - [11번가 주말 광고OFF](project_11st_weekend_ad_off.md) — 주말(토/일) 광고 의도적 OFF→상품ROAS리포트 주말 데이터 없음은 정상(크론정상). OFF리스트는 최근 전환시차일 제외하고 집계
-- [지마켓 시간별 광고비 오탐스킵](project_gmarket_hourly_false_skip.md) — pgrep이 'while pgrep crawl_gmarket_ad_report' 모니터셸을 오탐→매시간 스킵(06-16/14 0건). manage.py 실행형으로 패턴수정(2026-06-17)
+- [지마켓 시간별 광고비 오탐스킵](project_gmarket_hourly_false_skip.md)
+- [스마트스토어 중복상품 제재](project_smartstore_duplicate_product_warning.md) — 복수 스토어 간 동일 상품 중복 등록 시 네이버 제재. 아이리스.(id=7)/아이리스홈(id=8) 상품 공유 금지
+- [스마트스토어 API 설정 현황](project_smartstore_api_setup.md) — 계정별 Commerce API 키 설정(2026-06-29). 유진스타일(id=14) 403미해결, 정성스런스토어(id=18) 이용정지 — pgrep이 'while pgrep crawl_gmarket_ad_report' 모니터셸을 오탐→매시간 스킵(06-16/14 0건). manage.py 실행형으로 패턴수정(2026-06-17)
 - [지마켓 광고제어 누적/진행상태 가드](project_gmarket_adcontrol_busy_guard.md) — 광고ON/OFF는 단일브라우저 순차+전역락. 대시보드 스레드가 ps에 안잡혀 진행상태 오표시+가드없어 누적 → adcontrol busy 마커로 중복 즉시스킵·정확한 상태(2026-06-21)
 - [11번가 verify 쿠키미저장/OTP24h인증판정](project_11st_verify_cookie_bug.md) — "OTP완료인데 인증안됨"=verify가 쿠키 미저장(수정)+도구가 OTP24h로 판정(실제 크롤은 쿠키72h로 정상). dlrmsgh014 등
 - [11번가 0629 제재위험 상품 삭제대기](project_11st_product_pending_delete.md) — 0629 엑셀 9개(BB탄2+캐릭터IP7) 다음 상품수정 시 삭제. 정식라이선스 없음 확인.
+- [네이버 상품별 광고비 ROAS 시스템](project_naver_ad_product_roas.md) — 내부API(ads.naver.com POST+쿠키) 역공학. 3시간마다 쿠키갱신크론+매일08:30수집. /naver-roas 페이지. 아이리스26,221개·스타쇼핑14,295개(2026년 소급완료)
+- [스마트스토어 Commerce API 미등록 현황](project_smartstore_commerce_api_status.md) — 7개 계정 API 미등록(유진컴퍼니·스타보관소·스타라이프·스타쇼핑몰·유진스타일·주노그노·유진문구). 상품수집 불가
+- [스마트스토어 클린위반 시스템](project_smartstore_clean_violation_system.md) — 전 16계정 크롤러+UI(/smartstore 클린위반 배지·모달). PUT channel-products, statusType='SALE' 필수, 원산지국내='00', 농산물 unitPriceYn:false 필수. 위반4건 재심사완료(2026-06-30)
+- [스타비젼 상품명 AI최적화](project_starvision_product_name_opt.md) — SALE 997개 상품명+속성 AI 최적화 대기. Anthropic API 키 필요(console.anthropic.com), haiku-4-5 ~$1.44. 수집스크립트·API방법 준비완료

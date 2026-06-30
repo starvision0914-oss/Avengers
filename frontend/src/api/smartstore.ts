@@ -165,6 +165,49 @@ export async function getProductStats(account_id?: number | string): Promise<Pro
   return data;
 }
 
+// ── 클린위반 ──
+
+export interface CleanViolationSummary {
+  account_id: number;
+  account_name: string;
+  total: number;
+  types: Record<string, number>;
+}
+
+export interface CleanViolationItem {
+  id: number;
+  violation_date: string;
+  violation_type: string;
+  product_name: string;
+  product_id: string;
+  nv_mid: string;
+  note: string;
+}
+
+export interface CleanViolationTypeSummary {
+  violation_type: string;
+  count: number;
+  problem: string;
+  solution: string;
+}
+
+export interface CleanViolationDetail {
+  account_id: number;
+  total: number;
+  violations: CleanViolationItem[];
+  type_summary: CleanViolationTypeSummary[];
+}
+
+export async function getCleanViolations(): Promise<CleanViolationSummary[]> {
+  const { data } = await api.get<CleanViolationSummary[]>('/smartstore/clean-violations/');
+  return data;
+}
+
+export async function getCleanViolationDetail(accountId: number): Promise<CleanViolationDetail> {
+  const { data } = await api.get<CleanViolationDetail>(`/smartstore/clean-violations/${accountId}/`);
+  return data;
+}
+
 export async function downloadProductExcel(params: {
   account_ids?: number[];
   statuses?: string[];

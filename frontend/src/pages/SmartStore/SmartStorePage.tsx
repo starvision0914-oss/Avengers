@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  RefreshCw, Settings, Package,
-  ShoppingBag, Lock, BarChart3, Clock, TrendingUp,
+  RefreshCw, Settings, Package, ChevronLeft,
+  ShoppingBag, Lock, BarChart3, Clock, TrendingUp, AlertTriangle, X, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import {
-  getAccounts, getDashboard, getProductStats,
+  getAccounts, getDashboard, getProductStats, getCleanViolations, getCleanViolationDetail,
   type SmartStoreAccount, type DashboardResponse, type AccountRow, type ProductStats,
+  type CleanViolationSummary, type CleanViolationDetail,
 } from '../../api/smartstore';
 import AccountSettingsModal from './AccountSettingsModal';
 import SmartStoreProductsTab from './SmartStoreProductsTab';
@@ -38,12 +39,14 @@ export default function SmartStorePage() {
   const navigate = useNavigate();
   const [tab, setTab] = useState<'dashboard' | 'products'>('dashboard');
   const [accounts, setAccounts] = useState<SmartStoreAccount[]>([]);
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [selectedIds] = useState<number[]>([]);
   const [dash, setDash] = useState<DashboardResponse | null>(null);
   const [prodStats, setProdStats] = useState<ProductStats | null>(null);
   const [crawlLogs, setCrawlLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [cleanViolations, setCleanViolations] = useState<CleanViolationSummary[]>([]);
+  const [cleanModal, setCleanModal] = useState<{ accountId: number; accountName: string } | null>(null);
   const [periodMode, setPeriodMode] = useState<PeriodMode>('monthly');
   const [date, setDate] = useState(todayYmd());
   const [rangeStart, setRangeStart] = useState('');
@@ -86,6 +89,11 @@ export default function SmartStorePage() {
     setCrawlLogs(r.data || []);
   }, []);
 
+  const loadCleanViolations = useCallback(async () => {
+    const data = await getCleanViolations().catch(() => []);
+    setCleanViolations(data);
+  }, []);
+
   const loadDash = useCallback(async () => {
     setLoading(true);
     const [start, end] = getRange(periodMode, date);
@@ -101,7 +109,7 @@ export default function SmartStorePage() {
     }
   }, [periodMode, date, selectedIds, getRange]);
 
-  useEffect(() => { loadAccounts(); loadCrawlLogs(); }, []);
+  useEffect(() => { loadAccounts(); loadCrawlLogs(); loadCleanViolations(); }, []);
 
   useEffect(() => {
     if (tab === 'dashboard') {
@@ -118,6 +126,13 @@ export default function SmartStorePage() {
   const [start, end] = getRange(periodMode, date);
 
   const net = (s?.total_excel_revenue || 0) - (s?.total_ad_cost || 0) - (s?.total_cogs || 0);
+
+  // 클린위반 맵 (account_id → summary)
+  const cleanMap = new Map(cleanViolations.map(v => [v.account_id, v]));
+  // 전체 클린위반 건수
+  const totalClean = cleanViolations.reduce((acc, v) => acc + v.total, 0);
+  // 계정별 상품수 맵
+  const prodCountMap = new Map((prodStats?.by_account || []).map(a => [a.account_id, a.count]));
 
   const lastCrawl = (() => {
     const done = crawlLogs.filter(l => l.status === 'done');
@@ -162,6 +177,12 @@ export default function SmartStorePage() {
               수집 <b className="text-[#1e6fd9]">{lastCrawl}</b>
             </span>
           )}
+          {totalClean > 0 && (
+            <span className="flex items-center gap-1 text-[#dc2626] font-semibold">
+              <AlertTriangle size={12} />
+              클린위반 <b>{totalClean}건</b>
+            </span>
+          )}
           <span className="text-[#888] hidden md:inline">⏱ 매일 <b style={{ color: SS }}>01:00</b> 자동수집</span>
           <span className="ml-auto flex items-center gap-2">
             <span className="text-[14px] text-[#999]">{periodLabel}</span>
@@ -188,25 +209,25 @@ export default function SmartStorePage() {
           <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 md:px-5 py-2.5 text-[15px]">
             <SumItem label="매출" value={s?.total_excel_revenue || 0} color={SS} />
             <Sep />
-            <span>
-              <span className="text-[#888] mr-1">광고비:</span>
-              <span className="font-bold text-[#f97316]">{fmtW(s?.total_ad_cost || 0)}원</span>
-              {(s?.total_ad_cpc || 0) > 0 && (
-                <span className="text-[15px] text-[#aaa] ml-1">(CPC {fmtW(s.total_ad_cpc)})</span>
-              )}
-              {(s?.total_ad_ai || 0) > 0 && (
-                <span className="text-[15px] text-[#6366f1] ml-1">AI {fmtW(s.total_ad_ai)}</span>
-              )}
-            </span>
-            <Sep />
-            <SumItem label="결제금액" value={s?.total_sales || 0} color="#888" />
-            <Sep />
             {(s?.total_cogs || 0) > 0 && (
               <>
                 <SumItem label="구매가" value={s?.total_cogs || 0} color="#0284c7" />
                 <Sep />
               </>
             )}
+            <span>
+              <span className="text-[#888] mr-1">광고비:</span>
+              <span className="font-bold text-[#f97316]">{fmtW(s?.total_ad_cost || 0)}원</span>
+              {(s?.total_ad_cpc || 0) > 0 && (
+                <span className="text-[15px] text-[#aaa] ml-1">(CPC {fmtW(s?.total_ad_cpc ?? 0)})</span>
+              )}
+              {(s?.total_ad_ai || 0) > 0 && (
+                <span className="text-[15px] text-[#6366f1] ml-1">AI {fmtW(s?.total_ad_ai ?? 0)}</span>
+              )}
+            </span>
+            <Sep />
+            <SumItem label="결제금액" value={s?.total_sales || 0} color="#888" />
+            <Sep />
             <span>
               <span className="text-[#888] mr-1">순수익:</span>
               <span className="font-bold" style={{ color: net >= 0 ? '#15803d' : '#dc2626' }}>{fmtW(net)}원</span>
@@ -245,102 +266,130 @@ export default function SmartStorePage() {
         </div>
 
         {/* ── 계정별 테이블 ── */}
-        <div className="grid grid-cols-1 gap-3">
-
-          <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
-            <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
-              <BarChart3 size={15} style={{ color: SS }} />
-              <span className="text-[15px] font-bold text-[#222]">계정별 현황</span>
-              <span className="text-[14px] text-[#999]">{periodLabel}</span>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-[15px]">
-                <thead className="bg-[#fafafa]">
-                  <tr className="text-[#666]">
-                    <th className="px-4 py-2.5 text-left font-semibold">계정</th>
-                    <th className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>매출</th>
-                    <th className="px-4 py-2.5 text-right font-semibold text-[#f97316]">CPC</th>
-                    <th className="px-4 py-2.5 text-right font-semibold text-[#6366f1]">AI</th>
-                    <th className="px-4 py-2.5 text-right font-semibold text-[#0284c7]">구매가</th>
-                    <th className="px-4 py-2.5 text-right font-semibold">순수익</th>
-                    <th className="px-4 py-2.5 text-right font-semibold">ROAS</th>
-                    <th className="px-4 py-2.5 text-right font-semibold">주문</th>
-                    <th className="px-4 py-2.5 text-center font-semibold">비고</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#f5f5f5]">
-                  {byAcc.length === 0 ? (
-                    <tr>
-                      <td colSpan={9} className="px-4 py-10 text-center text-[#aaa] text-[15px]">
-                        데이터 없음 — 크롤링 후 표시됩니다
-                      </td>
-                    </tr>
-                  ) : (
-                    byAcc.map(row => {
-                      const cpc = row.ad_cpc || 0;
-                      const ai  = row.ad_ai  || 0;
-                      const cogs = row.cogs || 0;
-                      const excelRev = row.excel_revenue || 0;
-                      const rowNet = excelRev - cpc - ai - cogs;
-                      return (
-                        <tr key={row.account_id} className="hover:bg-[#fafff8] transition-colors">
-                          <td className="px-4 py-2.5">
-                            <span className="font-semibold text-[#333]">{row.account_name}</span>
-                            <span className="text-[15px] text-[#aaa] ml-1.5">{accountLoginMap.get(row.account_id) || ''}</span>
-                          </td>
-                          <td className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>{excelRev > 0 ? fmt(excelRev) : <span className="text-[#ccc]">-</span>}</td>
-                          <td className="px-4 py-2.5 text-right text-[#f97316]">{cpc > 0 ? fmt(cpc) : '-'}</td>
-                          <td className="px-4 py-2.5 text-right text-[#6366f1]">{ai > 0 ? fmt(ai) : '-'}</td>
-                          <td className="px-4 py-2.5 text-right text-[#0284c7]">
-                            {cogs > 0 ? fmt(cogs) : <span className="text-[#ccc]">-</span>}
-                          </td>
-                          <td className={`px-4 py-2.5 text-right font-semibold ${rowNet >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(rowNet)}</td>
-                          <td className={`px-4 py-2.5 text-right font-bold ${row.roas != null && row.roas >= 200 ? 'text-[#16a34a]' : row.roas != null ? 'text-[#dc2626]' : 'text-[#aaa]'}`}>
-                            {row.roas != null ? row.roas + '%' : '-'}
-                          </td>
-                          <td className="px-4 py-2.5 text-right text-[#555]">{fmt(row.orders)}</td>
-                          <td className="px-4 py-2.5 text-center">
-                            {row.naver_ad_account_id ? (
-                              <span className="inline-flex items-center gap-1 text-[14px] text-[#16a34a] font-semibold">
-                                ✓ 광고연결
-                              </span>
-                            ) : (
-                              <a
-                                href="http://192.168.45.100:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000"
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-block px-2 py-1 text-[14px] rounded bg-[#03C75A] text-white font-semibold hover:bg-[#02a84a] transition-colors"
-                              >
-                                광고로그인
-                              </a>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-                {byAcc.length > 0 && (
-                  <tfoot className="bg-[#f5f5f5]">
-                    <tr className="font-bold text-[#333]">
-                      <td className="px-4 py-2.5">합계 ({byAcc.length}개)</td>
-                      <td className="px-4 py-2.5 text-right" style={{ color: SS }}>{fmt(s?.total_excel_revenue || 0)}</td>
-                      <td className="px-4 py-2.5 text-right text-[#f97316]">{fmt(s?.total_ad_cpc || 0)}</td>
-                      <td className="px-4 py-2.5 text-right text-[#6366f1]">{fmt(s?.total_ad_ai || 0)}</td>
-                      <td className="px-4 py-2.5 text-right text-[#0284c7]">{fmt(s?.total_cogs || 0)}</td>
-                      <td className={`px-4 py-2.5 text-right ${net >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(net)}</td>
-                      <td className={`px-4 py-2.5 text-right ${s?.roas != null && s.roas >= 200 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>
-                        {s?.roas != null ? s.roas + '%' : '-'}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">{fmt(s?.total_orders || 0)}</td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
-            </div>
+        <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
+            <BarChart3 size={15} style={{ color: SS }} />
+            <span className="text-[15px] font-bold text-[#222]">계정별 현황</span>
+            <span className="text-[14px] text-[#999]">{periodLabel}</span>
+            {totalClean > 0 && (
+              <span className="ml-2 px-2 py-0.5 bg-[#fef2f2] border border-[#fecaca] rounded text-[13px] font-semibold text-[#dc2626]">
+                ⚠ 클린위반 {totalClean}건
+              </span>
+            )}
           </div>
-
+          <div className="overflow-x-auto">
+            <table className="w-full text-[15px]">
+              <thead className="bg-[#fafafa]">
+                <tr className="text-[#666]">
+                  <th className="px-3 py-2.5 text-center font-semibold text-[#aaa] w-10">#</th>
+                  <th className="px-4 py-2.5 text-left font-semibold">계정</th>
+                  <th className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>매출</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-[#0284c7]">구매가</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-[#f97316]">CPC</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-[#6366f1]">AI</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">순수익</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">ROAS</th>
+                  <th className="px-4 py-2.5 text-right font-semibold">주문</th>
+                  <th className="px-4 py-2.5 text-right font-semibold text-[#555]">등록상품</th>
+                  <th className="px-4 py-2.5 text-center font-semibold text-[#dc2626]">클린위반</th>
+                  <th className="px-4 py-2.5 text-center font-semibold">비고</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f5f5f5]">
+                {byAcc.length === 0 ? (
+                  <tr>
+                    <td colSpan={12} className="px-4 py-10 text-center text-[#aaa] text-[15px]">
+                      데이터 없음 — 크롤링 후 표시됩니다
+                    </td>
+                  </tr>
+                ) : (
+                  byAcc.map((row, idx) => {
+                    const cpc = row.ad_cpc || 0;
+                    const ai  = row.ad_ai  || 0;
+                    const cogs = row.cogs || 0;
+                    const excelRev = row.excel_revenue || 0;
+                    const rowNet = excelRev - cpc - ai - cogs;
+                    const clean = cleanMap.get(row.account_id);
+                    return (
+                      <tr key={row.account_id} className="hover:bg-[#fafff8] transition-colors">
+                        <td className="px-3 py-2.5 text-center text-[#bbb] text-[14px] font-medium">{idx + 1}</td>
+                        <td className="px-4 py-2.5">
+                          <span className="font-semibold text-[#333]">{row.account_name}</span>
+                          <span className="text-[15px] text-[#aaa] ml-1.5">{accountLoginMap.get(row.account_id) || ''}</span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>{excelRev > 0 ? fmt(excelRev) : <span className="text-[#ccc]">-</span>}</td>
+                        <td className="px-4 py-2.5 text-right text-[#0284c7]">
+                          {cogs > 0 ? fmt(cogs) : <span className="text-[#ccc]">-</span>}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-[#f97316]">{cpc > 0 ? fmt(cpc) : '-'}</td>
+                        <td className="px-4 py-2.5 text-right text-[#6366f1]">{ai > 0 ? fmt(ai) : '-'}</td>
+                        <td className={`px-4 py-2.5 text-right font-semibold ${rowNet >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(rowNet)}</td>
+                        <td className={`px-4 py-2.5 text-right font-bold ${row.roas != null && row.roas >= 200 ? 'text-[#16a34a]' : row.roas != null ? 'text-[#dc2626]' : 'text-[#aaa]'}`}>
+                          {row.roas != null ? row.roas + '%' : '-'}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-[#555]">{fmt(row.orders)}</td>
+                        <td className="px-4 py-2.5 text-right text-[#333] font-semibold">
+                          {prodCountMap.get(row.account_id) != null ? fmt(prodCountMap.get(row.account_id)!) : <span className="text-[#ccc]">-</span>}
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          {clean && clean.total > 0 ? (
+                            <button
+                              onClick={() => setCleanModal({ accountId: row.account_id, accountName: row.account_name })}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#fef2f2] border border-[#fecaca] rounded text-[13px] font-bold text-[#dc2626] hover:bg-[#fee2e2] transition-colors"
+                            >
+                              <AlertTriangle size={11} /> {clean.total}건
+                            </button>
+                          ) : (
+                            <span className="text-[#ccc] text-[14px]">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-center">
+                          {row.naver_ad_account_id ? (
+                            <span className="inline-flex items-center gap-1 text-[14px] text-[#16a34a] font-semibold">
+                              ✓ 광고연결
+                            </span>
+                          ) : (
+                            <a
+                              href="http://192.168.45.100:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000"
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-block px-2 py-1 text-[14px] rounded bg-[#03C75A] text-white font-semibold hover:bg-[#02a84a] transition-colors"
+                            >
+                              광고로그인
+                            </a>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+              {byAcc.length > 0 && (
+                <tfoot className="bg-[#f5f5f5]">
+                  <tr className="font-bold text-[#333]">
+                    <td className="px-3 py-2.5"></td>
+                    <td className="px-4 py-2.5">합계 ({byAcc.length}개)</td>
+                    <td className="px-4 py-2.5 text-right" style={{ color: SS }}>{fmt(s?.total_excel_revenue || 0)}</td>
+                    <td className="px-4 py-2.5 text-right text-[#0284c7]">{fmt(s?.total_cogs || 0)}</td>
+                    <td className="px-4 py-2.5 text-right text-[#f97316]">{fmt(s?.total_ad_cpc || 0)}</td>
+                    <td className="px-4 py-2.5 text-right text-[#6366f1]">{fmt(s?.total_ad_ai || 0)}</td>
+                    <td className={`px-4 py-2.5 text-right ${net >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(net)}</td>
+                    <td className={`px-4 py-2.5 text-right ${s?.roas != null && s.roas >= 200 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>
+                      {s?.roas != null ? s.roas + '%' : '-'}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">{fmt(s?.total_orders || 0)}</td>
+                    <td className="px-4 py-2.5 text-right">{fmt(prodStats?.total || 0)}</td>
+                    {totalClean > 0 ? (
+                      <td className="px-4 py-2.5 text-center text-[#dc2626] font-bold">{totalClean}건</td>
+                    ) : (
+                      <td></td>
+                    )}
+                    <td></td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
         </div>
 
         {/* ── 상품 현황 ── */}
@@ -366,8 +415,6 @@ export default function SmartStorePage() {
                 );
               })}
             </div>
-
-            {/* 계정별 상품 수 */}
             {prodStats.by_account.length > 0 && (
               <div className="mt-3 pt-3 border-t border-[#f0f0f0]">
                 <div className="text-[14px] text-[#888] mb-2">계정별 상품 수</div>
@@ -429,6 +476,182 @@ export default function SmartStorePage() {
           onSaved={loadAccounts}
         />
       )}
+
+      {/* ── 클린위반 모달 ── */}
+      {cleanModal && (
+        <CleanViolationModal
+          accountId={cleanModal.accountId}
+          accountName={cleanModal.accountName}
+          onClose={() => setCleanModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── 클린위반 모달 컴포넌트 ──
+
+function CleanViolationModal({ accountId, accountName, onClose }: {
+  accountId: number; accountName: string; onClose: () => void;
+}) {
+  const [detail, setDetail] = useState<CleanViolationDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [openTypes, setOpenTypes] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    setLoading(true);
+    getCleanViolationDetail(accountId)
+      .then(d => {
+        setDetail(d);
+        // 기본으로 모든 유형 펼치기
+        setOpenTypes(new Set(d.type_summary.map(t => t.violation_type)));
+      })
+      .catch(() => setDetail(null))
+      .finally(() => setLoading(false));
+  }, [accountId]);
+
+  const toggleType = (vt: string) => {
+    setOpenTypes(prev => {
+      const next = new Set(prev);
+      if (next.has(vt)) next.delete(vt);
+      else next.add(vt);
+      return next;
+    });
+  };
+
+  // 위반 유형별로 건 묶기
+  const byType: Record<string, typeof detail extends null ? never : CleanViolationDetail['violations']> = {};
+  if (detail) {
+    for (const v of detail.violations) {
+      if (!byType[v.violation_type]) byType[v.violation_type] = [];
+      byType[v.violation_type].push(v);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col">
+        {/* 헤더 */}
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-[#f0f0f0]">
+          <AlertTriangle size={18} className="text-[#dc2626] shrink-0" />
+          <div>
+            <div className="text-[16px] font-bold text-[#222]">{accountName} — 클린위반 현황</div>
+            <div className="text-[13px] text-[#888]">최근 24주 적발 내역 · 문제점 및 대책</div>
+          </div>
+          <button onClick={onClose} className="ml-auto p-1.5 rounded hover:bg-[#f5f5f5] transition-colors">
+            <X size={18} className="text-[#888]" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 px-6 py-4 space-y-4">
+          {loading && (
+            <div className="text-center py-10 text-[#aaa]">불러오는 중...</div>
+          )}
+
+          {!loading && !detail && (
+            <div className="text-center py-10 text-[#aaa]">데이터를 불러올 수 없습니다</div>
+          )}
+
+          {!loading && detail && (
+            <>
+              {/* 요약 배지 */}
+              <div className="flex flex-wrap gap-2">
+                <span className="px-3 py-1 bg-[#fef2f2] border border-[#fecaca] rounded-lg text-[14px] font-bold text-[#dc2626]">
+                  총 {detail.total}건
+                </span>
+                {detail.type_summary.map(ts => (
+                  <span key={ts.violation_type} className="px-3 py-1 bg-[#fff7ed] border border-[#fed7aa] rounded-lg text-[13px] font-semibold text-[#c2410c]">
+                    {ts.violation_type.split(' > ').pop()} {ts.count}건
+                  </span>
+                ))}
+              </div>
+
+              {/* 위반 유형별 섹션 */}
+              {detail.type_summary.map(ts => {
+                const items = byType[ts.violation_type] || [];
+                const isOpen = openTypes.has(ts.violation_type);
+                return (
+                  <div key={ts.violation_type} className="border border-[#e5e7eb] rounded-xl overflow-hidden">
+                    {/* 유형 헤더 */}
+                    <button
+                      onClick={() => toggleType(ts.violation_type)}
+                      className="w-full flex items-center gap-3 px-4 py-3 bg-[#fafafa] hover:bg-[#f5f5f5] transition-colors"
+                    >
+                      {isOpen ? <ChevronDown size={15} className="text-[#888]" /> : <ChevronRight size={15} className="text-[#888]" />}
+                      <span className="font-bold text-[#222] text-[15px]">{ts.violation_type}</span>
+                      <span className="ml-auto px-2 py-0.5 bg-[#dc2626] text-white text-[12px] font-bold rounded-full">{ts.count}건</span>
+                    </button>
+
+                    {isOpen && (
+                      <div className="divide-y divide-[#f5f5f5]">
+                        {/* 문제점 & 대책 */}
+                        <div className="px-4 py-3 bg-[#fffbeb] flex gap-6 text-[14px]">
+                          <div className="flex-1">
+                            <div className="font-bold text-[#d97706] mb-1 flex items-center gap-1">
+                              <AlertTriangle size={12} /> 문제점
+                            </div>
+                            <div className="text-[#78350f] leading-relaxed">{ts.problem}</div>
+                          </div>
+                          <div className="flex-1">
+                            <div className="font-bold text-[#15803d] mb-1 flex items-center gap-1">
+                              ✓ 대책
+                            </div>
+                            <div className="text-[#14532d] leading-relaxed">{ts.solution}</div>
+                          </div>
+                        </div>
+
+                        {/* 위반 상품 목록 */}
+                        <div>
+                          <table className="w-full text-[13px]">
+                            <thead className="bg-[#f9fafb]">
+                              <tr className="text-[#666]">
+                                <th className="px-3 py-2 text-center w-8">#</th>
+                                <th className="px-3 py-2 text-left">적발일</th>
+                                <th className="px-3 py-2 text-left">상품명</th>
+                                <th className="px-3 py-2 text-left">상품번호</th>
+                                <th className="px-3 py-2 text-left">nv_mid</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-[#f5f5f5]">
+                              {items.map((v, i) => (
+                                <tr key={v.id} className="hover:bg-[#fafafa]">
+                                  <td className="px-3 py-2 text-center text-[#ccc]">{i + 1}</td>
+                                  <td className="px-3 py-2 text-[#888] whitespace-nowrap">{v.violation_date}</td>
+                                  <td className="px-3 py-2 text-[#333] max-w-[220px] truncate" title={v.product_name}>{v.product_name}</td>
+                                  <td className="px-3 py-2 font-mono text-[#555]">
+                                    <a
+                                      href={`https://smartstore.naver.com/main/products/${v.product_id}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-[#2563eb] hover:underline"
+                                    >
+                                      {v.product_id}
+                                    </a>
+                                  </td>
+                                  <td className="px-3 py-2 font-mono text-[#999]">{v.nv_mid || '-'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {/* 푸터 */}
+        <div className="px-6 py-3 border-t border-[#f0f0f0] flex justify-between items-center">
+          <span className="text-[13px] text-[#aaa]">네이버 쇼핑파트너센터 클린위반 현황 기준</span>
+          <button onClick={onClose}
+            className="px-4 py-1.5 bg-[#333] text-white text-[14px] font-semibold rounded hover:bg-[#555] transition-colors">
+            닫기
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

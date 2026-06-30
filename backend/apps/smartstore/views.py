@@ -11,7 +11,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 
 from .models import (SmartStoreAccount, SmartStoreSales, SmartStoreAdCost,
-                     SmartStoreProduct, SmartStoreCrawlLog, NaverAdProductReport)
+                     SmartStoreProduct, SmartStoreCrawlLog, NaverAdProductReport,
+                     SmartStoreCleanViolation)
 from apps.sales.models import SalesRecord
 
 _NAVER_STATUS_LABEL = {
@@ -152,6 +153,13 @@ class DashboardView(APIView):
                 by_account[aid]['ad_cpc'] += c
             elif row['ad_type'] == 'ai':
                 by_account[aid]['ad_ai'] += c
+
+        # 매출/광고비 없는 계정도 전부 포함
+        for acc in accounts_qs:
+            if account_ids and str(acc.id) not in account_ids:
+                continue
+            if acc.id not in by_account:
+                by_account[acc.id] = {'sales': 0, 'settlement': 0, 'orders': 0, 'commission': 0, 'cogs': 0, 'ad_cost': 0, 'ad_cpc': 0, 'ad_ai': 0}
 
         acc_naver_ad = {a.id: a.naver_ad_account_id for a in accounts_qs}
 
@@ -618,3 +626,83 @@ class CrawlStatusView(APIView):
                 'ended_at': log.ended_at.isoformat() if log.ended_at else None,
             })
         return Response(data)
+
+
+# ──── 클린위반 ────
+
+_CLEAN_ADVICE = {
+    '판매행위 위반 > 중복상품': {
+        'problem': '오너클랜 동일 상품(nv_mid 동일)을 복수 스토어에 중복 등록. 상품명만 달리해도 nv_mid가 같으면 중복 위반 처리됨.',
+        'solution': '스토어별 상품 분리: 한 스토어에만 등록하거나, 대표상품 삭제 후 한 스토어 유지. 오너클랜 신규 등록 시 스토어간 중복 사전 체크 필수.',
+    },
+    '상품정보 기재 위반 > KC인증 위반': {
+        'problem': '어린이·생활용품 KC인증 번호 미기재 또는 면제대상 미표기. 인증 없이 판매 시 적발.',
+        'solution': '해당 상품 상세페이지에 KC인증 번호 기재 또는 KC 면제 대상 표기. 어린이용 완구·생활용품은 KC 확인 후 등록.',
+    },
+}
+
+_CLEAN_DEFAULT_ADVICE = {
+    'problem': '네이버 쇼핑 클린 기준 위반으로 판매 활동 제한 위험.',
+    'solution': '네이버 쇼핑 클린 정책 확인 후 위반 상품 수정·삭제 처리.',
+}
+
+
+class CleanViolationListView(APIView):
+    """계정별 클린위반 요약 목록"""
+    def get(self, request):
+        by_acc = (SmartStoreCleanViolation.objects
+                  .values('account_id', 'violation_type')
+                  .annotate(cnt=Count('id')))
+
+        acc_map = {a.id: (a.display_name or a.store_name)
+                   for a in SmartStoreAccount.objects.filter(is_active=True)}
+
+        result = {}
+        for row in by_acc:
+            aid = row['account_id']
+            if aid not in result:
+                result[aid] = {'account_id': aid, 'account_name': acc_map.get(aid, str(aid)),
+                               'total': 0, 'types': {}}
+            result[aid]['types'][row['violation_type']] = row['cnt']
+            result[aid]['total'] += row['cnt']
+
+        return Response(list(result.values()))
+
+
+class CleanViolationDetailView(APIView):
+    """계정 클린위반 상세 목록"""
+    def get(self, request, account_id):
+        qs = (SmartStoreCleanViolation.objects
+              .filter(account_id=account_id)
+              .order_by('-violation_date', 'violation_type'))
+
+        rows = []
+        for v in qs:
+            rows.append({
+                'id': v.id,
+                'violation_date': str(v.violation_date),
+                'violation_type': v.violation_type,
+                'product_name': v.product_name,
+                'product_id': v.product_id,
+                'nv_mid': v.nv_mid,
+                'note': v.note,
+            })
+
+        # 위반 유형별 통계 + 대책
+        type_summary = {}
+        for r in rows:
+            vt = r['violation_type']
+            if vt not in type_summary:
+                advice = _CLEAN_ADVICE.get(vt, _CLEAN_DEFAULT_ADVICE)
+                type_summary[vt] = {'count': 0, **advice}
+            type_summary[vt]['count'] += 1
+
+        return Response({
+            'account_id': account_id,
+            'total': len(rows),
+            'violations': rows,
+            'type_summary': [
+                {'violation_type': k, **v}
+                for k, v in type_summary.items()
+            ],
+        })

@@ -13,4 +13,6 @@ urlpatterns = [
     path('product-stats/', views.ProductStatsView.as_view()),
     path('crawl-status/', views.CrawlStatusView.as_view()),
     path('naver-product-roas/', views.NaverProductRoasView.as_view()),
+    path('clean-violations/', views.CleanViolationListView.as_view()),
+    path('clean-violations/<int:account_id>/', views.CleanViolationDetailView.as_view()),
 ]
