@@ -131,10 +131,15 @@ def set_ai_onoff(driver, group_no, action, start_date='', end_date=''):
 
 def control_account(driver, login_id, action, source='manual', log_fn=None):
     """한 계정의 모든 AI 그룹 ON/OFF 제어"""
+    from apps.cpc import eleven_block_guard as guard
     def log(m):
         logger.info(f'[AI제어:{login_id}] {m}')
         if log_fn:
             log_fn(f'[AI제어:{login_id}] {m}')
+
+    if guard.is_control_stop('gmarket'):
+        log('강제중지 — 스킵')
+        return []
 
     groups = _get_group_info(driver)
     if not groups:
@@ -143,6 +148,9 @@ def control_account(driver, login_id, action, source='manual', log_fn=None):
 
     results = []
     for g in groups:
+        if guard.is_control_stop('gmarket'):
+            log('강제중지 — 그룹 처리 중단')
+            break
         group_no = g['group_no']
         before = g['button_status']
 
@@ -209,6 +217,8 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
                 # 로그인 2회 재시도(일시 실패 대비)
                 logged = False
                 for _try in range(2):
+                    if guard.is_control_stop('gmarket'):
+                        break
                     try:
                         driver.delete_all_cookies()
                         if _login(driver, acct.login_id, acct.password_enc):
@@ -219,6 +229,9 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
                     except Exception: pass
                     time.sleep(2)
                 if not logged:
+                    if guard.is_control_stop('gmarket'):
+                        if log_fn: log_fn('🛑 강제중지 — 로그인 중 중단')
+                        break
                     if log_fn:
                         log_fn(f'[AI제어:{acct.login_id}] 로그인 실패(2회)')
                     continue

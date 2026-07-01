@@ -91,8 +91,13 @@ def _count_on_off(driver, wait=12):
     return on, off
 
 def control_one(driver, login_id, action, source='manual', log_fn=None):
+    from apps.cpc import eleven_block_guard as guard
     def log(m):
         if log_fn: log_fn(f'[간편:{login_id}] {m}')
+
+    if guard.is_control_stop('gmarket'):
+        log('강제중지 — 스킵')
+        return {'success': False, 'skipped': True, 'stopped': True, 'before_on': 0, 'before_off': 0}
 
     _go_cpc2_tab(driver)
     before_on, before_off = _count_on_off(driver)
@@ -134,6 +139,8 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
 
     # Alert 처리
     for _ in range(5):
+        if guard.is_control_stop('gmarket'):
+            break
         try:
             WebDriverWait(driver, 15).until(EC.alert_is_present())
             driver.switch_to.alert.accept()
@@ -194,6 +201,8 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
                 # 로그인 2회 재시도(일시적 로그인폼 미로딩=SellerId 못찾음 대비)
                 logged = False
                 for _try in range(2):
+                    if guard.is_control_stop('gmarket'):
+                        break
                     try:
                         driver.delete_all_cookies()
                         if _login(driver, acct.login_id, acct.password_enc):
@@ -202,6 +211,9 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
                         pass
                     _dismiss_alert(driver); time.sleep(2)
                 if not logged:
+                    if guard.is_control_stop('gmarket'):
+                        if log_fn: log_fn('🛑 강제중지 — 로그인 중 중단')
+                        break
                     if log_fn: log_fn(f'[간편:{acct.login_id}] 로그인 실패(2회) — 건너뜀')
                     CrawlerLog.objects.create(platform='gmarket', level='error',
                         message='간편 로그인 실패(2회)', account_id=acct.login_id)
@@ -212,6 +224,11 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
                 except UnexpectedAlertPresentException:
                     _dismiss_alert(driver)
                     result = control_one(driver, acct.login_id, action, source, log_fn)
+
+                # 강제중지로 스킵된 경우 — 기록 없이 루프 탈출
+                if result and result.get('stopped'):
+                    break
+
                 after_val = '-'
                 if result:
                     # 스킵(이미 ON/OFF)도 진행사항에 보이도록 기록 — 변경없으면 after=before

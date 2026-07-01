@@ -1316,7 +1316,7 @@ class GmarketControlStopView(views.APIView):
         from apps.cpc import eleven_block_guard as guard
         guard.request_control_stop('gmarket')
         return Response({'status': 'stopping',
-                         'message': '강제중지 요청 — 현재 계정 처리(최대 40초) 후 중단됩니다.'})
+                         'message': '강제중지 요청 — 현재 계정 완료 후 다음 계정 시작 전 중단됩니다. (계정당 최대 수분 소요)'})
 
 
 class GmarketControlStatusView(views.APIView):
@@ -3357,7 +3357,7 @@ class GmarketDashboardView(views.APIView):
         market = request.query_params.get('market') or 'gmarket'
         if market not in ('gmarket', 'auction', 'combined'):
             market = 'gmarket'
-        accts = list(CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
+        accts = list(CrawlerAccount.objects.filter(platform='gmarket', is_active=True, hide_from_dashboard=False)
                      .order_by('display_order', 'login_id'))
         # 옥션 뷰: 옥션에 없는 공유ESM 중복 서브아이디만 제외(나머지 계정은 유지).
         # 이 계정들은 옥션 상품이 복제돼 있을 뿐 옥션 거래·매출이 없음. 지마켓 계정 레코드는 보존(삭제 아님).
@@ -3795,7 +3795,7 @@ class ElevenBlockClearView(views.APIView):
 
 
 class TaxVatSummaryView(views.APIView):
-    """부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률. platform=11st|gmarket"""
+    """부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률. platform=11st|gmarket|smartstore"""
     def get(self, request):
         from django.db.models import Q
         from apps.cpc.models import TaxVatMonthly, CrawlerAccount
@@ -3823,6 +3823,9 @@ class TaxVatSummaryView(views.APIView):
         accounts = sorted(groups.values(), key=lambda x: -x['total'])
         if platform == '11st':
             target = CrawlerAccount.objects.filter(platform='11st', is_active=True).exclude(api_key='').count()
+        elif platform == 'smartstore':
+            from apps.smartstore.models import SmartStoreAccount
+            target = SmartStoreAccount.objects.filter(is_active=True).exclude(login_pw='').count()
         else:
             # 지마켓: 마스터계정 수 (서브 제외)
             target = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).filter(

@@ -6,6 +6,7 @@ const MONTHS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
 const PLATFORMS = [
   { key: '11st', label: '11번가' },
   { key: 'gmarket', label: '지마켓' },
+  { key: 'smartstore', label: '스마트스토어' },
 ] as const;
 
 type PlatformKey = (typeof PLATFORMS)[number]['key'];
@@ -82,7 +83,7 @@ export default function TaxVatPage() {
               <div className="h-full bg-[#00a651]" style={{ width: `${pct}%` }} />
             </div>
             <div className="flex gap-6 mt-3 text-[12px]">
-              <span>총 {platform === '11st' ? '과세매출' : '총매출'} <b className="text-[#0369a1]">{formatKRW(data.grand_total)}</b></span>
+              <span>총 {platform === 'gmarket' ? '총매출' : '과세매출'} <b className="text-[#0369a1]">{formatKRW(data.grand_total)}</b></span>
               <span>매출세액(÷11) <b className="text-[#dc2626]">{formatKRW(data.vat_payable)}</b></span>
               <span>수집 계정 <b>{data.accounts.length}</b></span>
             </div>
@@ -126,6 +127,8 @@ export default function TaxVatPage() {
                   <td colSpan={months.length + 3} className="px-3 py-8 text-center text-[#999]">
                     {loading ? '수집 중...' : platform === 'gmarket'
                       ? '수집된 데이터가 없습니다. crawl_gmarket_vat 를 먼저 실행해 주세요.'
+                      : platform === 'smartstore'
+                      ? '수집된 데이터가 없습니다. crawl_smartstore_vat 를 먼저 실행해 주세요.'
                       : '수집된 데이터가 없습니다 (크롤 진행 중일 수 있습니다)'}
                   </td>
                 </tr>
@@ -148,7 +151,9 @@ export default function TaxVatPage() {
         <p className="text-[12px] text-[#999] mt-2">
           {platform === '11st'
             ? '※ 11번가 셀러오피스 부가세신고내역(공식 과세매출) 기준. 30초마다 자동 갱신.'
-            : '※ 지마켓 ESM Plus 부가세자료(총매출) 기준. crawl_gmarket_vat 명령으로 수집. 30초마다 자동 갱신.'}
+            : platform === 'gmarket'
+            ? '※ 지마켓 ESM Plus 부가세자료(총매출) 기준. crawl_gmarket_vat 명령으로 수집. 30초마다 자동 갱신.'
+            : '※ 스마트스토어센터 정산관리 > 부가세신고내역(과세매출) 기준. crawl_smartstore_vat 명령으로 수집. 30초마다 자동 갱신.'}
         </p>
       </div>
     </div>

@@ -100,7 +100,7 @@ class DashboardView(APIView):
         if not start or not end:
             today = datetime.date.today()
             end = today - datetime.timedelta(days=1)
-            start = today.replace(day=1)
+            start = end.replace(day=1)  # end 기준 월 1일 (월초=오늘이면 전월 마지막날 기준)
         else:
             start = datetime.date.fromisoformat(start)
             end = datetime.date.fromisoformat(end)

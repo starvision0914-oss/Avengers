@@ -70,6 +70,7 @@ class CrawlerAccount(models.Model):
     api_key = models.CharField(max_length=200, blank=True, default='', help_text='11번가 셀러 OpenAPI 키')
     connect_fail_count = models.IntegerField(default=0, help_text='연속 접속(로그인) 실패 횟수 - 3회 도달 시 실패 표시')
     last_otp_at = models.DateTimeField(null=True, blank=True, help_text='마지막 OTP 인증 완료 시각 (11번가 OTP는 24시간 유지)')
+    hide_from_dashboard = models.BooleanField(default=False, help_text='지마켓/옥션 대시보드 계정목록에서 숨김(ROAS 등 리포트에는 계속 표시) — 타사 테스트 계정용')
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'crawler_accounts'

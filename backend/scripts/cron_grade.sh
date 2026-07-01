@@ -1,5 +1,5 @@
 #!/bin/bash
-LOCKFILE="/tmp/avengers_crawl_chrome.lock"
+LOCKFILE="/tmp/avengers_grade.lock"
 if [ -f "$LOCKFILE" ]; then
     PID=$(cut -d'|' -f1 "$LOCKFILE" 2>/dev/null)
     if kill -0 "$PID" 2>/dev/null; then exit 0; fi

@@ -237,6 +237,7 @@ class Command(BaseCommand):
         parser.add_argument('--offset', type=int, default=0)
         parser.add_argument('--name-only', action='store_true', help='상품명만 수정')
         parser.add_argument('--attr-only', action='store_true', help='속성만 수정')
+        parser.add_argument('--cno-file', type=str, help='재시도 cno 목록 JSON 파일')
 
     def handle(self, *args, **options):
         account_id = options['account_id']
@@ -250,12 +251,18 @@ class Command(BaseCommand):
             account_id=account_id, status_type='SALE'
         ).order_by('id').values('channel_product_no', 'name', 'category_id'))
 
-        offset = options['offset']
-        limit = options['limit']
-        if offset:
-            products = products[offset:]
-        if limit:
-            products = products[:limit]
+        if options.get('cno_file'):
+            with open(options['cno_file']) as f:
+                cno_set = set(json.load(f))
+            products = [p for p in products if p['channel_product_no'] in cno_set]
+            self.stdout.write(f'재시도 대상: {len(products)}개')
+        else:
+            offset = options['offset']
+            limit = options['limit']
+            if offset:
+                products = products[offset:]
+            if limit:
+                products = products[:limit]
 
         self.stdout.write(f'대상: {len(products)}개')
 
@@ -365,6 +372,13 @@ class Command(BaseCommand):
 
             # seoInfo.sellerTags에 금지단어가 있으면 PUT 400 에러 → 제거
             op.get('detailAttribute', {}).pop('seoInfo', None)
+            # unitCapacity.unitPriceYn 필수 필드 누락/null 시 400 에러 → false로 설정
+            da = op.setdefault('detailAttribute', {})
+            unit_cap = da.get('unitCapacity')
+            if unit_cap is None:
+                da['unitCapacity'] = {'unitPriceYn': False}
+            elif 'unitPriceYn' not in unit_cap:
+                unit_cap['unitPriceYn'] = False
 
             # PUT
             pr = None

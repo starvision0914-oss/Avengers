@@ -23,9 +23,12 @@ def _log(fn, msg):
             pass
 
 
-def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule', log_fn=None):
+def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule', log_fn=None,
+                 include_cpc1=False):
     """action=on/off. ai_accounts/cpc2_accounts = 각 제어 대상 login_id 리스트.
-    두 집합의 합집합을 계정당 1회 로그인으로 순회하며, 멤버십에 맞는 제어만 수행."""
+    두 집합의 합집합을 계정당 1회 로그인으로 순회하며, 멤버십에 맞는 제어만 수행.
+    include_cpc1=True면 간편(CPC2) 제어 직후 같은 세션에서 일반광고(CPC1/일반그룹)도 함께 제어
+    (Cpc2Schedule.include_cpc1과 동기화 — 아침 ON에서 일반그룹도 켰다면 저녁 OFF도 여기서 꺼야 함)."""
     from django.utils import timezone
     from apps.cpc.models import (CrawlerAccount, GmarketAiAdHistory, Cpc2History,
                                  GmarketCpcAdStatus, CrawlerLog)
@@ -65,6 +68,9 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
                 break
             lid = acct.login_id
             try:
+                if guard.is_control_stop('gmarket'):
+                    _log(log_fn, '🛑 강제중지 — 로그인 전 중단')
+                    break
                 driver.delete_all_cookies()
                 if not _login(driver, lid, acct.password_enc):
                     _log(log_fn, f'[{lid}] 로그인 실패 — 건너뜀')
@@ -100,6 +106,27 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
                         _log(log_fn, f'[{lid}] 간편 {action} 완료')
                     except Exception as e:
                         _log(log_fn, f'[{lid}] 간편 제어 오류: {e}')
+
+                    # 3) 일반광고(CPC1/일반그룹) 이어서 — 같은 세션, include_cpc1일 때만
+                    if include_cpc1:
+                        try:
+                            from crawlers.gmarket_cpc1_control_crawler import control_one as _cpc1_one
+                            r1 = _cpc1_one(driver, lid, action, source, log_fn)
+                            a1 = r1.get('after_on') if r1 else None
+                            if a1 is None:
+                                a1 = r1.get('before_on', 0) if r1 else 0
+                            Cpc2History.objects.create(
+                                gmarket_id=lid, action=action,
+                                cpc2_before=r1.get('before_on', 0) if r1 else 0,
+                                cpc2_after=a1, source=f'{source}/일반')
+                            CrawlerLog.objects.create(
+                                platform='gmarket', level='success',
+                                message=f'일반광고 {action}: {r1.get("before_on") if r1 else "-"}→{a1}',
+                                account_id=lid)
+                        except Exception as e1:
+                            _log(log_fn, f'[일반:{lid}] 실패: {e1}')
+                            CrawlerLog.objects.create(platform='gmarket', level='error',
+                                message=f'일반광고 실패: {e1}', account_id=lid)
 
                 done += 1
                 CrawlerLog.objects.create(

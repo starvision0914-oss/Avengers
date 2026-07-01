@@ -23,4 +23,6 @@ metadata:
 
 이 제재사유(저작권/지재권/KC미인증/불법품목/성인19금 오등록)를 회피하는 **11번가 상품명 생성 AI 프롬프트**: `/home/rejoice888/PUBLIC/11st_product_name_prompt_v3.txt` + `/ownerclan` 페이지 "🏷 11번가 상품명변경" 버튼(OwnerclanElevenPromptModal, 복사 전용). 글자수 한글25/영숫50byte·홍보문구20자, 오탐방지(멸균우유·당뇨양말·올스텐가위 텐가 등 맥락판단).
 
-관련: [[project_11st_loss_delete]] [[reference_domeggook]]
+**2026-07-01 명확화**: rejoice777의 "영구정지"는 **AD OFFICE(광고센터) 접속불가만 의미** — 일반 셀러오피스 로그인/OTP 인증은 별개 절차라 정상적으로 뜰 수 있음. OTP 인증창이 뜬다고 해서 영구정지 상태가 풀렸다거나 모순되는 게 아님. 사용자가 명시적으로 확인함.
+
+관련: [[project_11st_loss_delete]] [[reference_domeggook]] [[project_11st_jinag7460_name_opt]]

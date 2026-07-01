@@ -19,6 +19,9 @@ class Command(BaseCommand):
         ai = AiSchedule.objects.filter(platform='gmarket').first()
         ai_accts = list(ai.selected_accounts or []) if ai else []
         cpc2_accts = list(cpc2.selected_accounts or []) if cpc2 else []
-        self.stdout.write(f'통합제어 {action} — AI {len(ai_accts)}계정 / 간편 {len(cpc2_accts)}계정')
+        include_cpc1 = bool(cpc2 and cpc2.include_cpc1)
+        self.stdout.write(f'통합제어 {action} — AI {len(ai_accts)}계정 / 간편 {len(cpc2_accts)}계정 '
+                          f'(일반그룹 포함={include_cpc1})')
         run_combined(action, ai_accounts=ai_accts, cpc2_accounts=cpc2_accts,
-                     source='schedule', log_fn=lambda m: self.stdout.write(m))
+                     source='schedule', log_fn=lambda m: self.stdout.write(m),
+                     include_cpc1=include_cpc1)

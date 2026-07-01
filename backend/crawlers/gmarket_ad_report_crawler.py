@@ -409,6 +409,17 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                         sub_res[f'{y}-{m:02d}'] = crawl_account(
                             driver, a.login_id, y, m, log_fn, seller_override=sub_lid)
                         time.sleep(2)
+                        # 셀러전환 후 저장된 sub_lid 상품이 마스터와 90%+ 겹치면 중복 → 삭제
+                        master_pnos = set(_G.objects.filter(login_id=a.login_id, year=y, month=m)
+                                          .values_list('product_no', flat=True))
+                        sub_pnos = set(_G.objects.filter(login_id=sub_lid, year=y, month=m)
+                                       .values_list('product_no', flat=True))
+                        if sub_pnos and master_pnos:
+                            overlap = len(sub_pnos & master_pnos) / len(sub_pnos)
+                            if overlap >= 0.9:
+                                deleted = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
+                                _log(log_fn, f'  [{sub_lid}] 마스터와 {overlap:.0%} 겹침 → 중복 {deleted}건 삭제')
+                                sub_res[f'{y}-{m:02d}'] = {'dup_deleted': deleted}
                     summary[sub_lid] = sub_res
                 summary[a.login_id] = acct_res
             finally:
@@ -447,6 +458,19 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                             break
                         sub_res[f'{y}-{m:02d}'] = crawl_account(driver, sub_lid, y, m, log_fn)
                         time.sleep(2)
+                        # 폴백 독립로그인도 마스터와 90%+ 겹치면 중복 삭제
+                        sub_acct2 = next((aa for aa in all_accts if aa.login_id == sub_lid), None)
+                        if sub_acct2 and sub_acct2.gmarket_origin_id and sub_acct2.gmarket_origin_id != sub_lid:
+                            master_lid2 = sub_acct2.gmarket_origin_id
+                            master_pnos2 = set(_G.objects.filter(login_id=master_lid2, year=y, month=m)
+                                               .values_list('product_no', flat=True))
+                            sub_pnos2 = set(_G.objects.filter(login_id=sub_lid, year=y, month=m)
+                                            .values_list('product_no', flat=True))
+                            if sub_pnos2 and master_pnos2:
+                                overlap2 = len(sub_pnos2 & master_pnos2) / len(sub_pnos2)
+                                if overlap2 >= 0.9:
+                                    deleted2 = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
+                                    _log(log_fn, f'  [{sub_lid}] 폴백: 마스터와 {overlap2:.0%} 겹침 → 중복 {deleted2}건 삭제')
                     summary[sub_lid] = sub_res
                 except Exception as e:
                     _log(log_fn, f'[{sub_lid}] 독립 크롤 오류: {str(e)[:120]}')

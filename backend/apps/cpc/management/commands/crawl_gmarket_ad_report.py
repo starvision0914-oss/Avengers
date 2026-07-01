@@ -57,9 +57,16 @@ class Command(BaseCommand):
             self.stdout.write(f'지마켓 상품별 광고비 크롤 {year}년 {[m for _, m in periods]}월 / 대상={o["eid"] or "전체"}')
             res = run(login_ids=login_ids, periods=periods, log_fn=lambda m: self.stdout.write(m), with_keywords=wk)
         else:
-            month = o['month'] or today.month
+            if o['month']:
+                month = o['month']
+            elif today.day == 1:
+                from datetime import timedelta
+                prev = today - timedelta(days=1)
+                year, month = prev.year, prev.month
+            else:
+                month = today.month
             self.stdout.write(f'지마켓 상품별 광고비 크롤 {year}-{month:02d} / 대상={o["eid"] or "전체"}'
-                              + (' +일자별구글시트' if wg else ''))
+                              + (' +일자별구글시트' if wg else '') + (' [1일→전월]' if today.day == 1 and not o['month'] else ''))
             res = run(login_ids=login_ids, year=year, month=month, log_fn=lambda m: self.stdout.write(m),
                       with_keywords=wk, with_gsheet=wg)
         self.stdout.write(str(res))

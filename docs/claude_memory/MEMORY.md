@@ -56,6 +56,9 @@
 - [11번가 verify 쿠키미저장/OTP24h인증판정](project_11st_verify_cookie_bug.md) — "OTP완료인데 인증안됨"=verify가 쿠키 미저장(수정)+도구가 OTP24h로 판정(실제 크롤은 쿠키72h로 정상). dlrmsgh014 등
 - [11번가 0629 제재위험 상품 삭제대기](project_11st_product_pending_delete.md) — 0629 엑셀 9개(BB탄2+캐릭터IP7) 다음 상품수정 시 삭제. 정식라이선스 없음 확인.
 - [네이버 상품별 광고비 ROAS 시스템](project_naver_ad_product_roas.md) — 내부API(ads.naver.com POST+쿠키) 역공학. 3시간마다 쿠키갱신크론+매일08:30수집. /naver-roas 페이지. 아이리스26,221개·스타쇼핑14,295개(2026년 소급완료)
-- [스마트스토어 Commerce API 미등록 현황](project_smartstore_commerce_api_status.md) — 7개 계정 API 미등록(유진컴퍼니·스타보관소·스타라이프·스타쇼핑몰·유진스타일·주노그노·유진문구). 상품수집 불가
+- [스마트스토어 Commerce API 등록현황](project_smartstore_commerce_api_status.md) — 2026-07-01 재확인: 전체 17개 계정 API 등록완료(이전 7개미등록 기록은 stale). 8번 아이리스홈 활성화됨
 - [스마트스토어 클린위반 시스템](project_smartstore_clean_violation_system.md) — 전 16계정 크롤러+UI(/smartstore 클린위반 배지·모달). PUT channel-products, statusType='SALE' 필수, 원산지국내='00', 농산물 unitPriceYn:false 필수. 위반4건 재심사완료(2026-06-30)
-- [스타비젼 상품명 AI최적화](project_starvision_product_name_opt.md) — SALE 997개 상품명+속성 AI 최적화 대기. Anthropic API 키 필요(console.anthropic.com), haiku-4-5 ~$1.44. 수집스크립트·API방법 준비완료
+- [스타비젼 상품명 AI최적화](project_starvision_product_name_opt.md) — SALE 997개 상품명+속성 AI 최적화 완료(990개 성공, 2026-06-30)
+- [스마트스토어 상품명 최적화 대기](project_ss_product_name_pending.md) — 미완료 6개 계정(유진컴퍼니·아이리스홈·스타윈블리·스타컴퍼니·주노그노·유진대기업) 상품등록 완료 후 진행 예정
+- [11번가 jinag7460 상품명최적화](project_11st_jinag7460_name_opt.md) — 등급1위계정 15,395건 분석완료, 트리밍적용 배치 진행중, 카테고리키워드 3,341건 2단계 대기
+- [대량 상품명최적화 무API방법](feedback_bulk_name_opt_no_api_method.md) — API키 없이 세션내 처리: 위험스캔 우선→애매한건 상세페이지 이미지확인→기계적처리는 스크립트→카테고리키워드는 연관성필터 필수
