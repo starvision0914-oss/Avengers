@@ -208,6 +208,48 @@ export async function getCleanViolationDetail(accountId: number): Promise<CleanV
   return data;
 }
 
+// ── 예상 클린위반 (휴리스틱 스캔) ──
+
+export interface PredictedViolationSummary {
+  key: string;
+  label: string;
+  confidence: 'high' | 'medium' | 'low';
+  problem: string;
+  solution: string;
+  total: number;
+  by_account: Record<string, number>;
+}
+
+export interface PredictedViolationItem {
+  account_id: number;
+  account_name: string;
+  name: string;
+  sale_price: number;
+  product_no: string;
+  channel_product_no: string;
+  category_id: string;
+}
+
+export interface PredictedViolationDetail {
+  category: string;
+  label: string;
+  confidence: 'high' | 'medium' | 'low';
+  problem: string;
+  solution: string;
+  total: number;
+  items: PredictedViolationItem[];
+}
+
+export async function getPredictedViolations(): Promise<PredictedViolationSummary[]> {
+  const { data } = await api.get<PredictedViolationSummary[]>('/smartstore/predicted-violations/');
+  return data;
+}
+
+export async function getPredictedViolationDetail(category: string): Promise<PredictedViolationDetail> {
+  const { data } = await api.get<PredictedViolationDetail>(`/smartstore/predicted-violations/${category}/`);
+  return data;
+}
+
 export async function downloadProductExcel(params: {
   account_ids?: number[];
   statuses?: string[];

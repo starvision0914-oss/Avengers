@@ -15,4 +15,6 @@ urlpatterns = [
     path('naver-product-roas/', views.NaverProductRoasView.as_view()),
     path('clean-violations/', views.CleanViolationListView.as_view()),
     path('clean-violations/<int:account_id>/', views.CleanViolationDetailView.as_view()),
+    path('predicted-violations/', views.PredictedViolationListView.as_view()),
+    path('predicted-violations/<str:category>/', views.PredictedViolationDetailView.as_view()),
 ]

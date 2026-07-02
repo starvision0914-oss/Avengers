@@ -706,3 +706,125 @@ class CleanViolationDetailView(APIView):
                 for k, v in type_summary.items()
             ],
         })
+
+
+# ──── 예상 클린위반 (실제 위반이력 패턴 기반 상품명 휴리스틱 스캔) ────
+# 실제 위반이력 102건 분석 결과 반영 (2026-07-02): 중복상품 85%, 나머지는 원산지/KC인증/생활화학 등
+
+_PRED_CATEGORIES = {
+    'duplicate': {
+        'label': '중복상품(계정내)',
+        'confidence': 'high',
+        'problem': '동일 상품명이 같은 계정 내에서 상품번호만 다르게 중복 등록됨. 실제 위반이력의 85%(87/102건)가 이 유형.',
+        'solution': '중복 등록분 중 판매실적 낮은 쪽을 삭제하고 하나로 통합.',
+    },
+    'danger': {
+        'label': '위험물품/판매제한 의심',
+        'confidence': 'high',
+        'problem': '삼단봉·쌍절곤·정글도·서바이벌칼 등 호신·전투용품은 온라인 판매제한 대상일 수 있음. 실제 위반이력에도 서바이벌칼 판매금지 사례 있음.',
+        'solution': '해당 상품이 실제 위험물품 규제 대상인지 확인 후 판매중지/카테고리 재분류.',
+    },
+    'origin': {
+        'label': '원산지 표기 과장 의심',
+        'confidence': 'medium',
+        'problem': '농산물/축산물 상품명에 "산지직송", "프리미엄", "고당도" 등 과장 수식어 포함. 원산지 실제값은 DB에 없어 상품명만으로 추정.',
+        'solution': '상품명에서 과장 수식어 제거 + 원산지 표기가 실제와 일치하는지 확인.',
+    },
+    'kc': {
+        'label': 'KC인증 대상 추정',
+        'confidence': 'low',
+        'problem': '유아/아동/완구 키워드 포함 상품 — 어린이제품은 KC 인증번호 기재 필요. 카테고리 데이터가 없어 키워드 매칭만으로는 오탐이 많음.',
+        'solution': 'KC 인증 완료/면제 여부를 실제 확인 후 상세페이지에 인증번호 기재.',
+    },
+    'chem': {
+        'label': '생활화학제품 미인증 추정',
+        'confidence': 'low',
+        'problem': '세제/경화제/접착제 등 생활화학제품 키워드 포함 — 안전확인대상생활화학제품은 신고번호 필요. 키워드 매칭만으로는 오탐이 많음.',
+        'solution': '안전확인신고 여부 확인 후 상세페이지에 신고번호 기재.',
+    },
+}
+
+_TACTICAL_KW = ['서바이벌', '생존칼', '호신용', '전술나이프', '전술칼', '폴딩나이프', '접이식칼', '사냥칼', '전투용', '총모양',
+                '삼단봉', '쌍절곤', '진압봉', '호신봉', '너클', '정글도', '정글낫', '정글칼']
+_KITCHEN_KW = ['주방', '식도', '요리', '부엌', '정육', '식칼', '디너', '레스토랑', '업소', '셰프', '쉐프', '스테이크',
+               '생선', '과일칼', '채칼', '회칼', '빵칼', '피자칼']
+_DANGER_FALSE_KW = ['경첩', '악력', '클램프']
+_KC_KW = ['유아', '아동', '어린이', '레고', '블록', '완구', '장난감', '키즈']
+_CHEM_KW = ['세제', '방향제', '살균', '경화제', '접착제', '탈취제', '제거제', '스프레이', '섬유유연제', '곰팡이제거', '왁스', '코팅제']
+_ORIGIN_KW = ['산지직송', '국내산', '프리미엄', '달콤한', '새콤달콤', '고당도', '로얄', '특가', '당일수확', '제철']
+_FRUIT_KW = ['사과', '감귤', '배', '포도', '딸기', '감자', '고구마', '쌀', '한우', '흑돼지', '귤', '토마토']
+
+
+def _or_q(field, keywords):
+    q = Q()
+    for k in keywords:
+        q |= Q(**{f'{field}__icontains': k})
+    return q
+
+
+def _pred_queryset(category):
+    base = SmartStoreProduct.objects.filter(status_type='SALE')
+
+    if category == 'duplicate':
+        dup_names = (base.values('account_id', 'name')
+                     .annotate(c=Count('id')).filter(c__gt=1)
+                     .values_list('account_id', 'name'))
+        q = Q()
+        for account_id, name in dup_names:
+            q |= (Q(account_id=account_id) & Q(name=name))
+        return base.filter(q) if dup_names else base.none()
+
+    if category == 'danger':
+        return (base.filter(_or_q('name', _TACTICAL_KW))
+                .exclude(_or_q('name', _KITCHEN_KW))
+                .exclude(_or_q('name', _DANGER_FALSE_KW)))
+
+    if category == 'origin':
+        return base.filter(_or_q('name', _ORIGIN_KW)).filter(_or_q('name', _FRUIT_KW))
+
+    if category == 'kc':
+        return base.filter(_or_q('name', _KC_KW))
+
+    if category == 'chem':
+        return base.filter(_or_q('name', _CHEM_KW))
+
+    return base.none()
+
+
+class PredictedViolationListView(APIView):
+    """실제 위반이력 패턴 기반 예상 클린위반 — 카테고리별 건수 요약 (전계정)"""
+    def get(self, request):
+        result = []
+        for key, meta in _PRED_CATEGORIES.items():
+            total = _pred_queryset(key).count()
+            by_acc = list(_pred_queryset(key).values('account_id').annotate(c=Count('id')))
+            result.append({
+                'key': key, **meta, 'total': total,
+                'by_account': {r['account_id']: r['c'] for r in by_acc},
+            })
+        return Response(result)
+
+
+class PredictedViolationDetailView(APIView):
+    """예상 클린위반 카테고리별 상세 상품 목록"""
+    def get(self, request, category):
+        if category not in _PRED_CATEGORIES:
+            return Response({'detail': 'unknown category'}, status=404)
+
+        qs = _pred_queryset(category).select_related('account').order_by('account_id', 'name')
+        items = [{
+            'account_id': p.account_id,
+            'account_name': p.account.display_name or p.account.store_name,
+            'name': p.name,
+            'sale_price': p.sale_price,
+            'product_no': p.product_no,
+            'channel_product_no': p.channel_product_no,
+            'category_id': p.category_id,
+        } for p in qs]
+
+        return Response({
+            'category': category,
+            **_PRED_CATEGORIES[category],
+            'total': len(items),
+            'items': items,
+        })

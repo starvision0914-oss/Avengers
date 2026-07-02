@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'apps.speedgo',
     'apps.smartstore',
     'apps.naver_blog',
+    'apps.coupang',
 ]
 
 MIDDLEWARE = [

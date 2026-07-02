@@ -109,7 +109,19 @@ def _get_session(acct: CrawlerAccount):
     import requests
     driver = create_driver()
     driver.set_page_load_timeout(40)
-    _ec._try_cookie_login(driver, acct)
+    cookie_ok = _ec._try_cookie_login(driver, acct)
+    if not cookie_ok:
+        # 쿠키 만료(또는 미인증) → 풀로그인(OTP 포함)으로 폴백. 이걸 안 하면
+        # 로그인 안 된 게스트 쿠키로 hulk API를 호출해 전부 401이 남(2026-07-02 발견).
+        full_ok = _ec._do_login(driver, acct.login_id, acct.password_enc)
+        if not full_ok:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+            stop_display()
+            raise RuntimeError(f'{acct.login_id}: 쿠키 로그인 실패 + 풀로그인도 실패')
+        _ec._save_cookies(driver, acct)
     driver.get('https://soffice.11st.co.kr/view/main')
     time.sleep(3)
     cookies = {c['name']: c['value'] for c in driver.get_cookies()}

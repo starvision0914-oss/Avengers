@@ -3,13 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw, Settings, Package, ChevronLeft,
   ShoppingBag, Lock, BarChart3, Clock, TrendingUp, AlertTriangle, X, ChevronDown, ChevronRight,
+  Sparkles,
 } from 'lucide-react';
 import {
   getAccounts, getDashboard, getProductStats, getCleanViolations, getCleanViolationDetail,
+  getPredictedViolations, getPredictedViolationDetail,
   type SmartStoreAccount, type DashboardResponse, type AccountRow, type ProductStats,
   type CleanViolationSummary, type CleanViolationDetail,
+  type PredictedViolationSummary, type PredictedViolationDetail,
 } from '../../api/smartstore';
 import AccountSettingsModal from './AccountSettingsModal';
+import SmartStorePromptModal from './SmartStorePromptModal';
 import SmartStoreProductsTab from './SmartStoreProductsTab';
 import api from '../../api/client';
 import DateNavigator from '../../components/cpc/DateNavigator';
@@ -47,6 +51,8 @@ export default function SmartStorePage() {
   const [showSettings, setShowSettings] = useState(false);
   const [cleanViolations, setCleanViolations] = useState<CleanViolationSummary[]>([]);
   const [cleanModal, setCleanModal] = useState<{ accountId: number; accountName: string } | null>(null);
+  const [showPredicted, setShowPredicted] = useState(false);
+  const [showPrompt, setShowPrompt] = useState(false);
   const [periodMode, setPeriodMode] = useState<PeriodMode>('monthly');
   const [date, setDate] = useState(todayYmd());
   const [rangeStart, setRangeStart] = useState('');
@@ -190,6 +196,16 @@ export default function SmartStorePage() {
               className="flex items-center gap-1.5 px-4 py-1.5 text-[17px] font-bold text-white rounded-lg shadow-md hover:brightness-110 transition-all"
               style={{ background: 'linear-gradient(135deg, #1d6ed8, #0ea5e9)' }}>
               <TrendingUp size={18} /> 상품별 ROAS
+            </button>
+            <button onClick={() => setShowPredicted(true)}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-[17px] font-bold text-white rounded-lg shadow-md hover:brightness-110 transition-all"
+              style={{ background: 'linear-gradient(135deg, #ea580c, #dc2626)' }}>
+              <AlertTriangle size={18} /> 예상 클린위반
+            </button>
+            <button onClick={() => setShowPrompt(true)}
+              className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold border border-[#d0d0d0] text-[#555] rounded hover:text-[#03C75A] hover:border-[#03C75A] transition-colors"
+              title="상품명·검색태그·상품속성 최적화 AI 프롬프트 보기·복사">
+              <Sparkles size={12} /> AI 프롬프트
             </button>
             <button onClick={() => setShowSettings(true)}
               className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold border border-[#d0d0d0] text-[#555] rounded hover:text-[#03C75A] hover:border-[#03C75A] transition-colors">
@@ -485,6 +501,14 @@ export default function SmartStorePage() {
           onClose={() => setCleanModal(null)}
         />
       )}
+
+      {/* ── 예상 클린위반 모달 ── */}
+      {showPredicted && (
+        <PredictedViolationModal onClose={() => setShowPredicted(false)} />
+      )}
+
+      {/* ── AI 프롬프트 모달 ── */}
+      <SmartStorePromptModal open={showPrompt} onClose={() => setShowPrompt(false)} />
     </div>
   );
 }
@@ -646,6 +670,152 @@ function CleanViolationModal({ accountId, accountName, onClose }: {
         {/* 푸터 */}
         <div className="px-6 py-3 border-t border-[#f0f0f0] flex justify-between items-center">
           <span className="text-[13px] text-[#aaa]">네이버 쇼핑파트너센터 클린위반 현황 기준</span>
+          <button onClick={onClose}
+            className="px-4 py-1.5 bg-[#333] text-white text-[14px] font-semibold rounded hover:bg-[#555] transition-colors">
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 예상 클린위반 모달 컴포넌트 ──
+
+const _CONFIDENCE_STYLE: Record<string, { bg: string; border: string; text: string; label: string }> = {
+  high: { bg: '#fef2f2', border: '#fecaca', text: '#dc2626', label: '신뢰도 높음' },
+  medium: { bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', label: '신뢰도 중간' },
+  low: { bg: '#f3f4f6', border: '#e5e7eb', text: '#6b7280', label: '신뢰도 낮음(참고용)' },
+};
+
+function PredictedViolationModal({ onClose }: { onClose: () => void }) {
+  const [summary, setSummary] = useState<PredictedViolationSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [details, setDetails] = useState<Record<string, PredictedViolationDetail>>({});
+  const [detailLoading, setDetailLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    getPredictedViolations().then(setSummary).catch(() => setSummary([])).finally(() => setLoading(false));
+  }, []);
+
+  const toggle = (key: string) => {
+    if (openKey === key) { setOpenKey(null); return; }
+    setOpenKey(key);
+    if (!details[key]) {
+      setDetailLoading(key);
+      getPredictedViolationDetail(key)
+        .then(d => setDetails(prev => ({ ...prev, [key]: d })))
+        .catch(() => {})
+        .finally(() => setDetailLoading(null));
+    }
+  };
+
+  const totalAll = summary.reduce((acc, s) => acc + s.total, 0);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+        {/* 헤더 */}
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-[#f0f0f0]">
+          <AlertTriangle size={18} className="text-[#dc2626] shrink-0" />
+          <div>
+            <div className="text-[16px] font-bold text-[#222]">전계정 예상 클린위반 품목</div>
+            <div className="text-[13px] text-[#888]">실제 위반이력 패턴(상품명 휴리스틱) 기반 자동 스캔 · 확정 위반 아님, 수동 확인 필요</div>
+          </div>
+          <button onClick={onClose} className="ml-auto p-1.5 rounded hover:bg-[#f5f5f5] transition-colors">
+            <X size={18} className="text-[#888]" />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 px-6 py-4 space-y-3">
+          {loading && <div className="text-center py-10 text-[#aaa]">스캔 중... (전체 상품 검사, 최대 수 초 소요)</div>}
+
+          {!loading && summary.length > 0 && (
+            <div className="text-[14px] text-[#888] mb-1">전체 예상 후보 <b className="text-[#dc2626]">{fmt(totalAll)}건</b></div>
+          )}
+
+          {!loading && summary.map(s => {
+            const style = _CONFIDENCE_STYLE[s.confidence] || _CONFIDENCE_STYLE.low;
+            const isOpen = openKey === s.key;
+            const detail = details[s.key];
+            return (
+              <div key={s.key} className="border border-[#e5e7eb] rounded-xl overflow-hidden">
+                <button
+                  onClick={() => toggle(s.key)}
+                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-[#fafafa] transition-colors"
+                  style={{ background: style.bg }}
+                >
+                  {isOpen ? <ChevronDown size={15} className="text-[#888]" /> : <ChevronRight size={15} className="text-[#888]" />}
+                  <span className="font-bold text-[#222] text-[15px]">{s.label}</span>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold border" style={{ borderColor: style.border, color: style.text }}>
+                    {style.label}
+                  </span>
+                  <span className="ml-auto px-2 py-0.5 text-white text-[12px] font-bold rounded-full" style={{ background: style.text }}>
+                    {fmt(s.total)}건
+                  </span>
+                </button>
+
+                {isOpen && (
+                  <div className="divide-y divide-[#f5f5f5]">
+                    <div className="px-4 py-3 bg-[#fffbeb] flex gap-6 text-[14px]">
+                      <div className="flex-1">
+                        <div className="font-bold text-[#d97706] mb-1 flex items-center gap-1"><AlertTriangle size={12} /> 문제점</div>
+                        <div className="text-[#78350f] leading-relaxed">{s.problem}</div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="font-bold text-[#15803d] mb-1 flex items-center gap-1">✓ 대책</div>
+                        <div className="text-[#14532d] leading-relaxed">{s.solution}</div>
+                      </div>
+                    </div>
+
+                    {detailLoading === s.key && (
+                      <div className="text-center py-8 text-[#aaa] text-[14px]">목록 불러오는 중...</div>
+                    )}
+
+                    {detail && (
+                      <div className="max-h-[360px] overflow-y-auto">
+                        <table className="w-full text-[13px]">
+                          <thead className="bg-[#f9fafb] sticky top-0">
+                            <tr className="text-[#666]">
+                              <th className="px-3 py-2 text-center w-8">#</th>
+                              <th className="px-3 py-2 text-left">계정</th>
+                              <th className="px-3 py-2 text-left">상품명</th>
+                              <th className="px-3 py-2 text-right">판매가</th>
+                              <th className="px-3 py-2 text-left">상품번호</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#f5f5f5]">
+                            {detail.items.map((it, i) => (
+                              <tr key={`${it.channel_product_no}-${i}`} className="hover:bg-[#fafafa]">
+                                <td className="px-3 py-2 text-center text-[#ccc]">{i + 1}</td>
+                                <td className="px-3 py-2 text-[#555] whitespace-nowrap">{it.account_name}</td>
+                                <td className="px-3 py-2 text-[#333] max-w-[320px] truncate" title={it.name}>{it.name}</td>
+                                <td className="px-3 py-2 text-right text-[#888]">{fmt(it.sale_price)}</td>
+                                <td className="px-3 py-2 font-mono text-[#555]">
+                                  <a
+                                    href={`https://smartstore.naver.com/main/products/${it.channel_product_no}`}
+                                    target="_blank" rel="noreferrer"
+                                    className="text-[#2563eb] hover:underline"
+                                  >
+                                    {it.channel_product_no}
+                                  </a>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="px-6 py-3 border-t border-[#f0f0f0] flex justify-between items-center">
+          <span className="text-[13px] text-[#aaa]">DB 상품명 키워드 기반 추정치 — 원산지/KC인증/화학제품 신고 실제값은 미보유</span>
           <button onClick={onClose}
             className="px-4 py-1.5 bg-[#333] text-white text-[14px] font-semibold rounded hover:bg-[#555] transition-colors">
             닫기
