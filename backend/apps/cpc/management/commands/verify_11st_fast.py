@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+import datetime
 from pathlib import Path
 
 import requests as req_lib
@@ -26,10 +27,12 @@ from crawlers.eleven_crawler import _do_login, _save_cookies
 CHECK_URL = 'https://soffice.11st.co.kr/view/main'
 OTP_KEYWORDS = ('otpLoginForm', 'otp', 'auth_type_01')
 COOKIE_CHECK_TIMEOUT = 6
+OTP_SAFE_HOURS = 20   # 실제 OTP세션은 ~24h로 소진되므로, 그 전에 05시 조용한 시간대에 미리 갱신
 
 
 def _cookie_valid(account) -> bool:
-    """requests로 쿠키 유효성 빠른 체크. True=유효, False=만료."""
+    """requests로 /view/main 도달 여부 체크 — 기본 세션 쿠키만 확인, OTP 보고서접근 권한은 미확인.
+    (실제 리포트 다운로드엔 별도 OTP 세션이 필요해 이것만으로는 '완전 유효' 보장 안 됨 — _otp_fresh와 함께 판정)"""
     if not account.cookie_data:
         return False
     try:
@@ -43,6 +46,15 @@ def _cookie_valid(account) -> bool:
         return resp.status_code == 200
     except Exception:
         return False
+
+
+def _otp_fresh(account) -> bool:
+    """last_otp_at이 OTP_SAFE_HOURS 이내인지 — /view/main은 통과해도 리포트용 OTP세션이
+    실제로는 ~24h로 만료돼 낮 시간 실크롤(11/15시 등)에서 재인증이 튀는 문제 방지."""
+    if not account.last_otp_at:
+        return False
+    age = timezone.now() - account.last_otp_at
+    return age < datetime.timedelta(hours=OTP_SAFE_HOURS)
 
 
 class Command(BaseCommand):
@@ -77,7 +89,7 @@ class Command(BaseCommand):
         else:
             self.stdout.write('\n[Step 1] 쿠키 유효성 체크 중...')
             for i, acct in enumerate(accounts, 1):
-                valid = _cookie_valid(acct)
+                valid = _cookie_valid(acct) and _otp_fresh(acct)
                 status = '✅ 유효' if valid else '❌ 만료'
                 self.stdout.write(f'  [{i}/{total}] {acct.login_id:<22} {status}')
                 self.stdout.flush()

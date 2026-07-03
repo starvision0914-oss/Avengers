@@ -40,27 +40,33 @@ class Command(BaseCommand):
         success = fail = 0
         try:
             for acct in accounts:
-                driver = None
-                try:
-                    driver = create_driver()
-                    driver.set_page_load_timeout(40)
-                    result = crawl_coupang_vat(
-                        driver, acct, options['start'], options['end'],
-                        log_fn=lambda m: self.stdout.write(m))
-                    if result.get('판매자윙') or result.get('로켓그로스'):
-                        success += 1
-                    else:
-                        fail += 1
-                except Exception as e:
-                    fail += 1
-                    self.stdout.write(self.style.ERROR(f'[쿠팡:{acct.login_id}] 오류: {e}'))
-                finally:
-                    if driver:
-                        try:
-                            driver.quit()
-                        except Exception:
-                            pass
-                    stop_display()
+                got_data = False
+                for attempt in range(1, 3):  # 브라우저를 완전히 새로 띄워 최대 2회 시도
+                    driver = None
+                    try:
+                        driver = create_driver()
+                        driver.set_page_load_timeout(40)
+                        result = crawl_coupang_vat(
+                            driver, acct, options['start'], options['end'],
+                            log_fn=lambda m: self.stdout.write(m))
+                        if result.get('판매자윙') or result.get('로켓그로스'):
+                            got_data = True
+                    except Exception as e:
+                        self.stdout.write(self.style.ERROR(f'[쿠팡:{acct.login_id}] 오류: {e}'))
+                    finally:
+                        if driver:
+                            try:
+                                driver.quit()
+                            except Exception:
+                                pass
+                        stop_display()
+                    if got_data:
+                        break
+                    if attempt < 2:
+                        self.stdout.write(f'[쿠팡:{acct.login_id}] 새 브라우저로 재시도 ({attempt}/2)')
+                        time.sleep(5)
+                success += 1 if got_data else 0
+                fail += 0 if got_data else 1
                 time.sleep(3)
         finally:
             guard.release_global_lock('coupang')

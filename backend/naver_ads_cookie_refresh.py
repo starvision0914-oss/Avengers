@@ -52,9 +52,10 @@ def refresh_all():
                 continue
 
             try:
-                # 쿠키 주입
+                # 쿠키 주입 (이전 계정 세션 잔존 방지 위해 반드시 선행 clear)
                 driver.get('https://ads.naver.com/')
                 time.sleep(2)
+                driver.delete_all_cookies()
                 for c in cookies:
                     try:
                         driver.add_cookie(c)

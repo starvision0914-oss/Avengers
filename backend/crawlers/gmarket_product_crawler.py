@@ -256,6 +256,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
             try:
                 if driver is None:
                     driver = create_driver(kill_existing=False)
+                    driver.set_script_timeout(90)   # execute_async_script(상품검색 API) 대형계정 대비 (기본 30s로는 대형 카탈로그에서 타임아웃)
                 driver.delete_all_cookies()
                 # 쿠키 재사용 우선 → 실패 시 풀로그인 후 쿠키 저장(IP안전+속도)
                 if _try_cookie_login(driver, a):

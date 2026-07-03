@@ -139,6 +139,7 @@ driver = None
 result = 'UNKNOWN'
 try:
     driver = create_driver(kill_existing=True)
+    driver.set_window_position(0, 0)
     driver.set_window_size(600, 800)
     driver.get(LOGIN_URL)
     time.sleep(3)

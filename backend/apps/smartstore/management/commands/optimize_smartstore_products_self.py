@@ -39,6 +39,9 @@ _BRAND_STOP = {
     '농심', '오뚜기', '팔도', '삼양', '풀무원', 'CJ', '대상', '오리온', '롯데', '해태', '동원',
     '청정원', '샘표', '빙그레', '삼성', 'LG', '애플', '샤오미', '다이슨', '필립스', '테팔', '쿠쿠',
     '한샘', '일룸', '나이키', '아디다스', '뉴발란스', '휠라', '유니클로', '유한킴벌리', '크리넥스', '스카트',
+    # 개인위생/생활용품 브랜드 — 실측(2026-07-03): 무브랜드 면도날에 "질레트" 오염 발견
+    '질레트', '도브', '헤드앤숄더', '페리오', '2080', '엘라스틴', '려', '미쟝센', '해피바스',
+    '애경', '아모레퍼시픽', '한국콜마', '콜게이트', '오랄비', '가그린', '리스테린',
 }
 
 
@@ -48,18 +51,22 @@ def _tokenize(name):
 
 
 def _build_category_keywords(products):
-    """계정 내 리프카테고리별 대표키워드 자기참조 추출 (최소 3건, 20% 이상 등장 토큰만)"""
+    """계정 내 리프카테고리별 대표키워드 자기참조 추출 (최소 5건, 40% 이상 등장 토큰만)
+
+    실측(2026-07-03): n=8인 카테고리에서 20% 기준(2건)만 넘으면 채택되다보니, 셀러가
+    잘못 분류해둔 카테고리(전기포트 7개+골프그립교정기 1개)의 골프 상품에 "전기포트"가
+    붙는 사고 발생 — 소규모/오분류 카테고리의 소음을 줄이려 기준을 상향."""
     by_cat = {}
     for p in products:
         by_cat.setdefault(p['category_id'], []).append(p['name'])
     cat_kw = {}
     for cat, names in by_cat.items():
-        if len(names) < 3:
+        if len(names) < 5:
             continue
         cnt = Counter()
         for n in names:
             cnt.update(set(_tokenize(n)))
-        threshold = max(2, int(len(names) * 0.2))
+        threshold = max(3, int(len(names) * 0.4))
         top = [w for w, c in cnt.most_common(10) if c >= threshold]
         if top:
             cat_kw[cat] = top

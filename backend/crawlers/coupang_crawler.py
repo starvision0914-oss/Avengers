@@ -29,11 +29,24 @@ def _parse_int(text):
     return int(cleaned) if cleaned else 0
 
 
+_XTOOLS_BIN = '/home/rejoice888/.local/xtools/usr/bin'
+_XTOOLS_LIB = '/home/rejoice888/.local/xtools/usr/lib/x86_64-linux-gnu'
+
+
+def _xtools_env():
+    """sudo 없이 .deb만 풀어서 설치한 xclip/xdotool용 PATH/LD_LIBRARY_PATH."""
+    env = {**os.environ}
+    env['PATH'] = f"{_XTOOLS_BIN}:{env.get('PATH', '')}"
+    env['LD_LIBRARY_PATH'] = f"{_XTOOLS_LIB}:{env.get('LD_LIBRARY_PATH', '')}"
+    return env
+
+
 def _xtype(text):
     """xclip + xdotool로 클립보드 붙여넣기 (input.send_keys()는 봇탐지에 걸림)."""
-    env = {**os.environ}
-    subprocess.run(['xclip', '-selection', 'clipboard'], input=text.encode(), check=True, env=env)
-    subprocess.run(['xdotool', 'key', 'ctrl+v'], env=env, check=True)
+    env = _xtools_env()
+    subprocess.run([f'{_XTOOLS_BIN}/xclip', '-selection', 'clipboard'],
+                   input=text.encode(), check=True, env=env)
+    subprocess.run([f'{_XTOOLS_BIN}/xdotool', 'key', 'ctrl+v'], env=env, check=True)
 
 
 def _try_cookie_login(driver, account):
@@ -115,7 +128,7 @@ def login_coupang_wing(driver, login_id, login_pw, log_fn=print):
             pw_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="password"]')
             if pw_inputs:
                 pw_inputs[0].click(); time.sleep(0.3); _xtype(login_pw); time.sleep(0.3)
-            subprocess.run(['xdotool', 'key', 'Return'], env={**os.environ})
+            subprocess.run([f'{_XTOOLS_BIN}/xdotool', 'key', 'Return'], env=_xtools_env())
             time.sleep(8)
         except Exception as e:
             log_fn(f'[쿠팡:{login_id}] 로그인 입력 실패: {e}')
@@ -127,10 +140,25 @@ def login_coupang_wing(driver, login_id, login_pw, log_fn=print):
         pass
 
     try:
-        WebDriverWait(driver, 15).until(
+        WebDriverWait(driver, 25).until(
             lambda d: 'wing.coupang.com' in d.current_url and 'xauth' not in d.current_url)
     except TimeoutException:
         log_fn(f'[쿠팡:{login_id}] 로그인 리다이렉트 타임아웃: {driver.current_url}')
+        try:
+            import time as _t
+            path = f'/tmp/coupang_login_fail_{login_id}_{int(_t.time())}.png'
+            driver.save_screenshot(path)
+            log_fn(f'[쿠팡:{login_id}] 실패 스크린샷: {path}')
+            # 에러 메시지 텍스트도 최대한 긁어본다
+            for sel in ('.alert-error', '.kc-feedback-text', '#input-error', '.pf-c-alert__title'):
+                try:
+                    el = driver.find_element(By.CSS_SELECTOR, sel)
+                    if el.text.strip():
+                        log_fn(f'[쿠팡:{login_id}] 화면 메시지({sel}): {el.text.strip()}')
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return False
 
     log_fn(f'[쿠팡:{login_id}] 로그인 성공')

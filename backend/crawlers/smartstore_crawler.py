@@ -488,6 +488,7 @@ def _inject_naver_ads_cookies(driver, log, login_id=None):
             cookies = list(data.values())[0]
         driver.get('https://ads.naver.com/')
         time.sleep(2)
+        driver.delete_all_cookies()
         for c in cookies:
             try:
                 driver.add_cookie(c)
@@ -540,15 +541,18 @@ def _login_searchad(driver, login_id: str, login_pw: str, log):
     return True
 
 
-def _parse_billing_table(driver, log) -> list:
-    """ant-table에서 기간/소진액 파싱 (페이지네이션 전체 수집)."""
+def _parse_billing_table(driver, log):
+    """ant-table에서 기간/소진액 파싱 (페이지네이션 전체 수집).
+
+    반환: 정상 시 list(빈 리스트 = 실제 데이터 없음), 타임아웃 시 None(재시도 대상).
+    """
     try:
         WebDriverWait(driver, 15).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, '.ant-table-tbody'))
         )
     except Exception:
         log('[광고센터] 테이블 로드 타임아웃')
-        return []
+        return None
 
     time.sleep(1)
     results = []
@@ -624,15 +628,28 @@ def fetch_ad_cost_billing(driver, account, since_date: date, until_date: date, l
             + f'?dateRange={date_range}&tab=period'
         )
         log(f'[광고센터] {account.display_name} {chunk_start.strftime("%Y-%m")} 조회')
-        driver.get(url)
-        time.sleep(5)
 
-        if 'nid.naver.com' in driver.current_url or 'accounts.naver.com' in driver.current_url:
-            log('[광고센터] 쿠키 만료 — naver_ads_cookies.json 갱신 필요')
+        rows = None
+        cookie_expired = False
+        for attempt in range(1, 3):
+            driver.get(url)
+            time.sleep(5)
+
+            if 'nid.naver.com' in driver.current_url or 'accounts.naver.com' in driver.current_url:
+                log('[광고센터] 쿠키 만료 — naver_ads_cookies.json 갱신 필요')
+                cookie_expired = True
+                break
+
+            rows = _parse_billing_table(driver, log)
+            if rows is not None:
+                break
+            log(f'[광고센터] {account.display_name} {chunk_start.strftime("%Y-%m")} 재시도 ({attempt}/2)')
+            time.sleep(3)
+
+        if cookie_expired:
             break
 
-        rows = _parse_billing_table(driver, log)
-        all_rows.extend(rows)
+        all_rows.extend(rows or [])
         time.sleep(1)
 
     log(f'[광고센터] {account.display_name}: {len(all_rows)}일 수집 ({since_date}~{until_date})')
