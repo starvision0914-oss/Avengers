@@ -33,6 +33,7 @@ import GmarketMyProductsPage from './pages/GmarketMy/GmarketMyProductsPage';
 import GmarketDashboard from './pages/Gmarket/GmarketDashboard';
 import GmarketAdGroupPage from './pages/Gmarket/GmarketAdGroupPage';
 import GmarketRoasPage from './pages/Gmarket/GmarketRoasPage';
+import CoupangDashboard from './pages/Coupang/CoupangDashboard';
 import LottoPage from './pages/Lotto/LottoPage';
 import OverviewDashboard from './pages/Overview/OverviewDashboard';
 import RoadmapPage from './pages/Roadmap/RoadmapPage';
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="eleven-my" element={<ElevenMyProductsPage />} />
           <Route path="gmarket-my" element={<GmarketMyProductsPage />} />
           <Route path="gmarket" element={<GmarketDashboard />} />
+          <Route path="coupang" element={<CoupangDashboard />} />
           <Route path="gmarket-adgroup" element={<GmarketAdGroupPage />} />
           <Route path="gmarket-roas" element={<GmarketRoasPage />} />
           <Route path="cpc" element={<CPCDashboard />} />

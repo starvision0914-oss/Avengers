@@ -40,6 +40,7 @@ urlpatterns = [
     path('api/speedgo/', include('apps.speedgo.urls')),
     path('api/smartstore/', include('apps.smartstore.urls')),
     path('api/naver-blog/', include('apps.naver_blog.urls')),
+    path('api/coupang/', include('apps.coupang.urls')),
     # smsApp 호환 (root /api/settings/)
     path('api/settings/', SmsSettingsListView.as_view()),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

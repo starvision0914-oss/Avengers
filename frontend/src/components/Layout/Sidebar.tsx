@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, BarChart3, Users, ShoppingCart, CheckSquare, MessageCircle, Mail, Settings, LogOut, Bot, PieChart, MessageSquare, Sliders, Smartphone, Leaf, UserCog, Store, Package, BadgeCheck, Tags, Layers, Map, Receipt, TrendingUp, Wrench } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Users, ShoppingCart, CheckSquare, MessageCircle, Mail, Settings, LogOut, Bot, PieChart, MessageSquare, Sliders, Smartphone, Leaf, UserCog, Store, Package, BadgeCheck, Tags, Layers, Map, Receipt, TrendingUp, Wrench, Truck } from 'lucide-react';
 import { logout } from '../../api/auth';
 
 const navItems = [
@@ -12,6 +12,7 @@ const navItems = [
   { to: '/myproduct', icon: BadgeCheck, label: '나의 상품' },
   { to: '/gmarket-my', icon: Store, label: '지마켓 상품' },
   { to: '/gmarket-roas', icon: TrendingUp, label: '지마켓/옥션 ROAS' },
+  { to: '/coupang', icon: Truck, label: '쿠팡' },
   { to: '/smartstore', icon: ShoppingCart, label: '스스' },
   { to: '/naver-roas', icon: TrendingUp, label: '네이버 ROAS' },
   { to: '/blog', icon: MessageSquare, label: '블로그' },
