@@ -3795,12 +3795,16 @@ class ElevenBlockClearView(views.APIView):
 
 
 class TaxVatSummaryView(views.APIView):
-    """부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률. platform=11st|gmarket|smartstore"""
+    """부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률. platform=11st|gmarket|smartstore|coupang"""
     def get(self, request):
         from django.db.models import Q
         from apps.cpc.models import TaxVatMonthly, CrawlerAccount
         year = int(request.query_params.get('year') or 2026)
         platform = request.query_params.get('platform', '11st')
+
+        if platform == 'coupang':
+            return Response(self._coupang_summary(year))
+
         qs = TaxVatMonthly.objects.filter(platform=platform, year=year)
         groups = {}
         monthly_totals = {}
@@ -3846,6 +3850,45 @@ class TaxVatSummaryView(views.APIView):
             'grand_total': grand,
             'vat_payable': round(grand / 11),
         })
+
+    def _coupang_summary(self, year):
+        """쿠팡은 별도 모델(CoupangVatSales, 판매자윙+로켓그로스)이라 TaxVatMonthly와 구조가 달라 분리 집계."""
+        from apps.coupang.models import CoupangVatSales, CoupangAccount
+
+        qs = CoupangVatSales.objects.filter(year=year).select_related('account')
+        groups = {}
+        monthly_totals = {}
+        for r in qs.values('account_id', 'account__login_id', 'account__seller_name', 'month').annotate(
+                sales=Sum('total_sales')):
+            login_id = r['account__login_id']
+            key = r['account__seller_name'] or login_id
+            g = groups.setdefault(key, {'group': key, 'months': {}, 'total': 0, '_members': {}})
+            g['months'][str(r['month'])] = g['months'].get(str(r['month']), 0) + r['sales']
+            g['total'] += r['sales']
+            g['_members'][login_id] = g['_members'].get(login_id, 0) + (r['sales'] or 0)
+            monthly_totals[str(r['month'])] = monthly_totals.get(str(r['month']), 0) + r['sales']
+        for g in groups.values():
+            members = g.pop('_members')
+            g['rep_login_id'] = max(members.items(), key=lambda x: x[1])[0] if members else ''
+            g['member_count'] = len(members)
+        accounts = sorted(groups.values(), key=lambda x: -x['total'])
+
+        target = CoupangAccount.objects.filter(is_active=True).count()
+        collected = qs.values('account_id').distinct().count()
+        last = qs.order_by('-collected_at').first()
+        grand = sum(monthly_totals.values())
+        return {
+            'year': year,
+            'platform': 'coupang',
+            'progress': {
+                'collected': collected, 'target': target,
+                'last_collected_at': last.collected_at.isoformat() if last else None,
+            },
+            'accounts': accounts,
+            'monthly_totals': monthly_totals,
+            'grand_total': grand,
+            'vat_payable': round(grand / 11),
+        }
 
 
 _VERIFY_LOCK = '/tmp/eleven_verify_otp_running.lock'

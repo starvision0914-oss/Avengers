@@ -110,11 +110,21 @@ class Command(BaseCommand):
         from apps.cpc.models import CrawlerAccount, GmarketAiAdHistory
         from apps.cpc import eleven_block_guard as guard
 
+        # 오늘 이미 성공적으로 실행됐으면 재시도 크론이 또 돌 필요 없음(중복작업 방지)
+        today = timezone.localdate()
+        if GmarketAiAdHistory.objects.filter(
+            history_type='AI ON (schedule)', event_time__date=today, detail__contains='성공'
+        ).exists():
+            self._log('⏭️ AI ON 스킵 — 오늘 이미 성공 실행됨(재시도 불필요)')
+            return
         # 중복/누적 방지: 이미 광고제어(수동버튼·다른 크론) 실행중이면 줄세우지 않고 즉시 스킵
         if not guard.try_acquire_adcontrol('지마켓AI광고ON', platform='gmarket'):
             self._log('⏭️ AI ON 스킵 — 이미 광고제어 실행 중(중복 방지)')
             return
         # 동시접속 방지: 다른 지마켓 크롤(간편 등)이 돌고 있으면 끝날 때까지 대기(스킵 아님)
+        # 19:33 실행이 19시/20시 광고비수집 크론과 겹칠 수 있음(2026-07-05, 30분 대기초과로 스킵된 적 있음)
+        # → 무한정 오래 기다리는 대신 30분만 기다리고, 그래도 안 풀리면 포기하고 스킵.
+        # 이 경우를 대비해 20:15에 재시도 크론을 별도로 둠(cron_ai_on_retry.sh).
         ok, reason = guard.preflight('지마켓AI광고ON', platform='gmarket', wait=True, wait_timeout=1800)
         if not ok:
             guard.clear_adcontrol_busy('gmarket')

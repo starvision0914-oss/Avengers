@@ -107,8 +107,22 @@ class DashboardView(APIView):
 
         # SalesRecord를 주 매출 소스로 사용 (11번가/지마켓 대시보드와 동일)
         accounts_qs = SmartStoreAccount.objects.filter(is_active=True)
-        login_to_acc = {a.login_id: a for a in accounts_qs}
         acc_info = {a.id: (a.display_name or a.store_name, a.login_id) for a in accounts_qs}
+
+        # 로그인 하나를 여러 스토어(채널)가 공유하는 경우(예: 아이리스./아이리스홈스토어가
+        # 둘 다 starvis7783@gmail.com) 대비 — (로그인, 스토어명) 조합으로 우선 매칭하고,
+        # 그 로그인에 계정이 1개뿐이면 로그인만으로도 매칭(과거처럼 동작).
+        # ※ 예전엔 login_id만으로 dict를 만들어 같은 로그인끼리 서로 덮어써서
+        #    한쪽 계정 매출이 다른 계정 아래로 잘못 합산되는 버그가 있었음(2026-07-06 수정).
+        login_store_to_acc = {}
+        login_counts = {}
+        for a in accounts_qs:
+            login_counts[a.login_id] = login_counts.get(a.login_id, 0) + 1
+        login_single_acc = {}
+        for a in accounts_qs:
+            login_store_to_acc[(a.login_id, (a.store_name or '').strip())] = a
+            if login_counts[a.login_id] == 1:
+                login_single_acc[a.login_id] = a
 
         sr_qs = SalesRecord.objects.filter(
             platform='smartstore',
@@ -117,27 +131,39 @@ class DashboardView(APIView):
         )
 
         by_account = {}
-        for r in sr_qs.values('seller__seller_id').annotate(
+        for r in sr_qs.values('seller__seller_id', 'shop_name').annotate(
             sales=Sum('total_price'),
             commission=Sum('commission'),
             cogs=Sum('cost'),
             orders=Count('id'),
         ):
             sid = r['seller__seller_id']
-            acc = login_to_acc.get(sid)
+            shop = (r['shop_name'] or '').strip()
+            acc = login_store_to_acc.get((sid, shop)) or login_single_acc.get(sid)
             if not acc:
                 continue
             if account_ids and str(acc.id) not in account_ids:
                 continue
-            settle = (r['sales'] or 0) - (r['commission'] or 0)
-            by_account[acc.id] = {
-                'sales': r['sales'] or 0,
-                'settlement': settle,
-                'orders': r['orders'] or 0,
-                'commission': r['commission'] or 0,
-                'cogs': r['cogs'] or 0,
-                'ad_cost': 0, 'ad_cpc': 0, 'ad_ai': 0,
-            }
+            sales = r['sales'] or 0
+            commission = r['commission'] or 0
+            cogs = r['cogs'] or 0
+            orders = r['orders'] or 0
+            if acc.id in by_account:
+                prev = by_account[acc.id]
+                prev['sales'] += sales
+                prev['settlement'] += sales - commission
+                prev['orders'] += orders
+                prev['commission'] += commission
+                prev['cogs'] += cogs
+            else:
+                by_account[acc.id] = {
+                    'sales': sales,
+                    'settlement': sales - commission,
+                    'orders': orders,
+                    'commission': commission,
+                    'cogs': cogs,
+                    'ad_cost': 0, 'ad_cpc': 0, 'ad_ai': 0,
+                }
 
         ad_qs = SmartStoreAdCost.objects.filter(date__gte=start, date__lte=end)
         if account_ids:

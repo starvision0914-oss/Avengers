@@ -13,19 +13,32 @@ BID_URL = 'https://ad.esmplus.com/cpc/bidmng/bidmanagement'
 
 def _login(driver, login_id, password):
     """ad.esmplus.com 정상 로그인 — 쿠키 우선, 실패 시 풀로그인(rdoSiteSelect 선택).
-    (기존 SignIn 직접 로그인은 rdoSiteSelect 라디오 누락으로 '로그인 실패' → gmarket_crawler 재사용)"""
+    (기존 SignIn 직접 로그인은 rdoSiteSelect 라디오 누락으로 '로그인 실패' → gmarket_crawler 재사용)
+
+    '다른광고주가 선택되었습니다' alert은 직전 세션이 서버측에 아직 남아있을 때 로그인 도중
+    뜰 수 있음(2026-07-06 실측) — 예전엔 예외로 바로 실패 처리했으나, alert만 닫고
+    잠깐 대기 후 재시도하면 대부분 정상 로그인됨."""
     from crawlers.gmarket_crawler import _try_cookie_login, _full_login, _save_cookies
     from apps.cpc.models import CrawlerAccount
     acct = CrawlerAccount.objects.filter(login_id=login_id, platform='gmarket').first()
-    try:
-        if acct and _try_cookie_login(driver, acct):
-            return True
-        if _full_login(driver, login_id, password):
-            if acct:
-                _save_cookies(driver, acct)
-            return True
-    except Exception as e:
-        logger.error(f'로그인 실패 [{login_id}]: {e}')
+    for attempt in range(2):
+        try:
+            if acct and _try_cookie_login(driver, acct):
+                return True
+            if _full_login(driver, login_id, password):
+                if acct:
+                    _save_cookies(driver, acct)
+                return True
+        except UnexpectedAlertPresentException as e:
+            if _dismiss_alert(driver) and attempt == 0:
+                logger.info(f'[{login_id}] 로그인 중 alert({e}) 감지 — 닫고 재시도')
+                time.sleep(3)
+                continue
+            logger.error(f'로그인 실패 [{login_id}]: {e}')
+            return False
+        except Exception as e:
+            logger.error(f'로그인 실패 [{login_id}]: {e}')
+            return False
     return False
 
 def _dismiss_alert(driver):

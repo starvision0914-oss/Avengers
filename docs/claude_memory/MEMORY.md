@@ -65,3 +65,5 @@
 - [스마트스토어 예상클린위반+AI프롬프트](project_smartstore_predicted_violation_and_prompt.md) — 클린위반102건 실측기반 휴리스틱 스캔(중복상품85%)+대시보드버튼, 상품명/키워드/속성 AI프롬프트+복사버튼 구축(2026-07-02)
 - [항상 존댓말 사용](feedback_formal_speech.md) — 사용자가 반말 대신 항상 존댓말 사용 요청(2026-07-03), 사용자가 반말해도 응답은 존댓말 유지
 - [쿠팡 연동 구축](project_coupang_integration.md) — 오픈API(주문/상품, HMAC서명 '?'제외 필수+IP화이트리스트 계정별등록)+부가세크롤러+상품명최적화 프롬프트2종. 7계정 완료(2026-07-03)
+- [스마트스토어 광고비 수집 범위](project_smartstore_adcost_scope.md) — 실제 광고계정은 3개(rejoice999/666/888)뿐, 나머지 15스토어는 광고 미집행. 스타쇼핑몰AI(rejoice888) 비즈머니 소진→7/1부터 광고중지(정상,버그아님, 2026-07-06)
+- [쿠팡 유진문구 상품명최적화](project_coupang_jujinmungu_name_opt.md) — 14,912건 API없이 스크립트로 J열 생성완료. 21건(무기5+캐릭터라이선스미확인16) 검토필요, 원본유지

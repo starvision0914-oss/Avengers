@@ -1,5 +1,5 @@
 """시간별 광고비 '전계정 크롤 종료' 텔레그램 알림.
-매시간 광고비 크롤(지마켓 09~19시 / 11번가 17~20시)이 전 계정을 다 돌고 끝난 시점에
+매시간 광고비 크롤(지마켓 09~19시 / 11번가 11,15,17,18,20,22시)이 전 계정을 다 돌고 끝난 시점에
 완료 시각·계정수·소요시간·오늘 누적 광고비를 텔레그램으로 통지한다.
 사용: manage.py notify_crawl_done --platform gmarket --started 09:00:01
 """
@@ -34,7 +34,7 @@ class Command(BaseCommand):
             e = s + datetime.timedelta(days=1)
             qs = H.objects.filter(transaction_datetime__gte=s, transaction_datetime__lt=e,
                                   transaction_type='CPC')
-            label = '11번가 시간별 광고비(17~20시)'
+            label = '11번가 시간별 광고비(11,15,17,18,20,22시)'
 
         total = abs(qs.aggregate(s=Sum('amount'))['s'] or 0)
         nacc = qs.values('seller_id').distinct().count()
