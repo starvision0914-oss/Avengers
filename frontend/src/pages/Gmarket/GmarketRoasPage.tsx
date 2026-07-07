@@ -20,7 +20,7 @@ interface Totals {
 const ZERO_TOTALS: Totals = { cpc_cost: 0, ai_cost: 0, cpc_conv: 0, ai_conv: 0, cost: 0, conv_amount: 0, cpc_roas: 0, ai_roas: 0, roas: 0, real_sales: 0, real_roas: 0 };
 interface ProdRow {
   login_id: string; seller_id: string; seller_name: string;
-  product_no: string; seller_code: string; group_name: string; site: string;
+  product_no: string; product_name?: string; seller_code: string; group_name: string; site: string;
   impressions: number; clicks: number; avg_click_cost: number; cost: number;
   orders: number; conv_amount: number; conv_rate: number; roas: number;
   real_sales: number; real_roas: number; real_orders: number; status: string;
@@ -254,7 +254,7 @@ export default function GmarketRoasPage() {
         (x.k.conv_rate ?? 0) + '%', (x.k.roas ?? 0) + '%']);
       if (!body.length) { alert('키워드 없음 (수집된 ROAS≥기준 키워드가 없습니다)'); return; }
     } else {
-      head = ['계정', '상품번호', '판매자코드', '누적판매(25~)', '평균단가', '광고비', '키워드', '클릭', '구매수(광고센터)', '구매금액(광고센터)', 'ROAS(광고센터)', '실구매건수(참고)', '실매출(참고)', '실ROAS(참고)', '비고'];
+      head = ['계정', '상품번호', '상품명', '판매자코드', '누적판매(25~)', '평균단가', '광고비', '키워드', '클릭', '구매수(광고센터)', '구매금액(광고센터)', 'ROAS(광고센터)', '실구매건수(참고)', '실매출(참고)', '실ROAS(참고)', '비고'];
       // 키워드별로 한 줄씩 펼침 — 한 상품에 키워드 N개면 N행, 상품정보(번호·코드·메트릭)는 각 행 반복.
       // 같은 상품 내 동일 키워드는 1개만(중복 제거). 키워드 없는 상품은 키워드 빈칸 1행.
       body = rows.flatMap((r: any) => {
@@ -263,8 +263,8 @@ export default function GmarketRoasPage() {
         const tail = [r.clicks, r.ad_orders, r.conv_amount, r.roas + '%', r.real_orders, r.real_sales, (r.real_roas || 0) + '%', r.status];
         const seen = new Set<string>();
         const kws = (r.keywords || []).filter((k: any) => k.keyword && !seen.has(k.keyword) && seen.add(k.keyword));
-        if (!kws.length) return [[r.login_id, r.product_no, r.seller_code, cum, avg, r.cost, '', ...tail]];
-        return kws.map((k: any) => [r.login_id, r.product_no, r.seller_code, cum, avg, r.cost, k.keyword, ...tail]);
+        if (!kws.length) return [[r.login_id, r.product_no, r.product_name || '', r.seller_code, cum, avg, r.cost, '', ...tail]];
+        return kws.map((k: any) => [r.login_id, r.product_no, r.product_name || '', r.seller_code, cum, avg, r.cost, k.keyword, ...tail]);
       });
     }
     const csv = '﻿' + [head, ...body].map(a => a.map((c: any) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -288,6 +288,23 @@ export default function GmarketRoasPage() {
     if (!window.confirm('🔎 지마켓 삭제 검증(dry-run)\n\n셀러오피스 접속·상품번호 입력·조회·셀렉터를 1상품으로 확인합니다.\n실제 삭제는 하지 않습니다(안전).\n\n진행할까요?')) return;
     api.post('/cpc/gmarket/loss-products/delete/', { ym_from: ymFrom, ym_to: ymTo, eid: lossEid || '' })
       .then(r => alert(r.data?.message || '검증(dry-run) 시작 — 결과는 텔레그램/로그로 확인하세요.'))
+      .catch(e => alert(e?.response?.data?.error || '시작 실패 — 다른 지마켓 크롤이 실행 중일 수 있습니다.'));
+  };
+  // 판매중지만(삭제 안 함) — 삭제보다 되돌리기 쉬운 조치라 별도 안전장치 없이 바로 실행 가능
+  const stopOnlyGmktLoss = () => {
+    const n = lossData?.count || 0;
+    if (!n) { alert('대상 적자상품이 없습니다.'); return; }
+    const limStr = window.prompt(`판매중지할 개수를 입력하세요.\n\n· 소량 테스트: 숫자 입력 (예: 5)\n· 전체 ${n.toLocaleString()}개: 비워두고 확인`, '5');
+    if (limStr === null) return;
+    const t = limStr.trim();
+    const limit = t ? parseInt(t, 10) : null;
+    if (limit !== null && (isNaN(limit) || limit < 1)) { alert('숫자를 입력하거나, 전체는 비워두세요.'); return; }
+    const label = limit ? `${limit}개(테스트)` : `전체 ${n.toLocaleString()}개`;
+    if (!window.confirm(`🛑 ${label} 상품을 지마켓에서 판매중지합니다(삭제 아님, 재판매 가능).\n\n진행할까요?`)) return;
+    const body: any = { ym_from: ymFrom, ym_to: ymTo, eid: lossEid || '', stop_only: 1 };
+    if (limit) body.limit = limit;
+    api.post('/cpc/gmarket/loss-products/delete/', body)
+      .then(r => alert(r.data?.message || '판매중지 시작 — 진행상황은 텔레그램/로그로 확인하세요.'))
       .catch(e => alert(e?.response?.data?.error || '시작 실패 — 다른 지마켓 크롤이 실행 중일 수 있습니다.'));
   };
   const deleteGmktLoss = () => {
@@ -780,6 +797,7 @@ export default function GmarketRoasPage() {
               </>)}
               {LMODES[lossMode].del && <button onClick={markLossDeleted} title="지마켓에서 직접 삭제 완료한 상품을 '삭제완료'로 표시" className="px-2.5 py-1 text-[12px] font-bold bg-[#dc2626] text-white rounded hover:bg-[#b91c1c]">✓ 삭제완료 처리</button>}
               {LMODES[lossMode].del && <button onClick={validateGmktDelete} title="셀러오피스 접속·셀렉터를 1상품으로 검증(실제 삭제 안 함)" className="px-2.5 py-1 text-[12px] font-semibold bg-[#0369a1] text-white rounded hover:bg-[#075985]">🔎 삭제 검증</button>}
+              {LMODES[lossMode].del && <button onClick={stopOnlyGmktLoss} title="셀러오피스에서 실제 판매중지(삭제는 안 함, 되돌리기 쉬움)" className="px-2.5 py-1 text-[12px] font-bold bg-[#c2410c] text-white rounded hover:bg-[#9a3412]">🛑 판매중지</button>}
               {LMODES[lossMode].del && <button onClick={deleteGmktLoss} title="⚠️ 위험: 셀러오피스에서 실제 영구 삭제(검증 후 진행)" className="px-2.5 py-1 text-[12px] font-bold bg-[#7f1d1d] text-white rounded hover:bg-[#601515]">🗑 실제 삭제</button>}
               <button onClick={() => setLossOpen(false)} className="text-[#999] hover:text-[#333] text-[13px]">✕</button>
             </div>
@@ -804,6 +822,7 @@ export default function GmarketRoasPage() {
                     <th className="px-2 py-1.5 text-center">번호</th>
                     <th onClick={() => lossSortClick('login_id')} className="px-2 py-1.5 text-left cursor-pointer hover:text-[#1d4ed8]">계정{lossArrow('login_id')}</th>
                     <th onClick={() => lossSortClick('product_no')} className="px-2 py-1.5 text-left cursor-pointer hover:text-[#1d4ed8]">상품번호{lossArrow('product_no')}</th>
+                    <th className="px-2 py-1.5 text-left">상품명</th>
                     <th onClick={() => lossSortClick('seller_code')} className="px-2 py-1.5 text-left cursor-pointer hover:text-[#1d4ed8]">판매자코드{lossArrow('seller_code')}</th>
                     <th onClick={() => lossSortClick('cum_sold_qty')} className="px-2 py-1.5 text-right cursor-pointer hover:text-[#1d4ed8]" title="2025-01-01 ~ 현재 누적 판매수량(판매자코드 전역매칭, 지마켓+옥션)">누적판매<span className="text-[10px] text-[#999] font-normal">(25~)</span>{lossArrow('cum_sold_qty')}</th>
                     <th onClick={() => lossSortClick('avg_click_cost')} className="px-2 py-1.5 text-right cursor-pointer hover:text-[#1d4ed8]" title="평균단가=광고비/클릭">평균단가{lossArrow('avg_click_cost')}</th>
@@ -829,6 +848,7 @@ export default function GmarketRoasPage() {
                         <td className="px-2 py-1.5 text-center text-[#999]">{d.first ? d.pi + 1 : ''}</td>
                         <td className={`px-2 py-1.5 text-[#555] ${cont ? 'opacity-40' : ''}`}>{r.login_id}</td>
                         <td className={`px-2 py-1.5 font-mono ${cont ? 'opacity-40' : ''}`}><a href={gmktUrl(r)} target="_blank" rel="noreferrer" className="text-[#1d4ed8] hover:underline">{r.product_no}</a></td>
+                        <td className={`px-2 py-1.5 text-[#333] max-w-[220px] truncate ${cont ? 'opacity-40' : ''}`} title={r.product_name || ''}>{r.product_name || '-'}</td>
                         <td className={`px-2 py-1.5 font-mono text-[#666] ${cont ? 'opacity-40' : ''}`}>{r.seller_code || '-'}</td>
                         <td className={`px-2 py-1.5 text-right font-semibold ${(r.cum_sold_qty || 0) > 0 ? 'text-[#1d7a46]' : 'text-[#bbb]'} ${cont ? 'opacity-40' : ''}`}>{(r.cum_sold_qty || 0).toLocaleString()}</td>
                         <td className={`px-2 py-1.5 text-right text-[#555] ${cont ? 'opacity-40' : ''}`}>{formatKRW(r.clicks ? Math.round(r.cost / r.clicks) : 0)}</td>

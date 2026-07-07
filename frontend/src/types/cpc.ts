@@ -91,7 +91,7 @@ export interface Last15MinResponse {
 }
 
 export type TelegramMode = 'off' | 'change' | '15m' | '1h';
-export type PeriodMode = 'daily' | 'monthly' | 'yearly' | 'range';
+export type { PeriodMode, PeriodPreset } from '../utils/periodRange';
 
 export interface AiHistoryRow {
   event_time: string;

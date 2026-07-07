@@ -56,6 +56,7 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
     guard.clear_control_stop('gmarket')   # 새 실행 — 묵은 중지플래그 제거
     driver = None
     done = 0
+    failed_accounts = []
     try:
         driver = create_driver()
         try:
@@ -71,9 +72,19 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
                 if guard.is_control_stop('gmarket'):
                     _log(log_fn, '🛑 강제중지 — 로그인 전 중단')
                     break
-                driver.delete_all_cookies()
-                if not _login(driver, lid, acct.password_enc):
-                    _log(log_fn, f'[{lid}] 로그인 실패 — 건너뜀')
+                # 로그인 실패 시 1회 재시도(2026-07-07 실측 — dlwodb000이 1회 실패 후 재시도 없이
+                # 그냥 건너뛰어져서 그날 광고 OFF가 누락된 채 방치됐음).
+                logged_in = False
+                for attempt in range(2):
+                    driver.delete_all_cookies()
+                    if _login(driver, lid, acct.password_enc):
+                        logged_in = True
+                        break
+                    if attempt == 0:
+                        time.sleep(3)
+                if not logged_in:
+                    _log(log_fn, f'[{lid}] 로그인 실패(2회) — 건너뜀')
+                    failed_accounts.append(lid)
                     continue
                 _log(log_fn, f'[{lid}] 로그인 성공 → 제어 시작')
 
@@ -147,3 +158,10 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
         guard.clear_control_stop('gmarket')
         guard.clear_adcontrol_busy('gmarket')
     _log(log_fn, f'통합광고제어 완료 — {done}개 계정 ({action})')
+    if failed_accounts:
+        # 로그인 실패로 완전히 스킵된 계정 — 눈에 띄게 남겨서 방치되지 않도록(2026-07-07 dlwodb000
+        # 사례: 실패 후 아무 기록도 안 남아 저녁까지 광고 OFF 안 된 채 방치됐었음).
+        _log(log_fn, f'⚠️ 로그인 실패로 미처리된 계정 {len(failed_accounts)}개: {failed_accounts}')
+        CrawlerLog.objects.create(
+            platform='gmarket', level='error',
+            message=f'통합광고제어({action}) 로그인실패 미처리: {failed_accounts}')

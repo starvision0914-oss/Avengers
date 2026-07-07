@@ -67,3 +67,16 @@
 - [쿠팡 연동 구축](project_coupang_integration.md) — 오픈API(주문/상품, HMAC서명 '?'제외 필수+IP화이트리스트 계정별등록)+부가세크롤러+상품명최적화 프롬프트2종. 7계정 완료(2026-07-03)
 - [스마트스토어 광고비 수집 범위](project_smartstore_adcost_scope.md) — 실제 광고계정은 3개(rejoice999/666/888)뿐, 나머지 15스토어는 광고 미집행. 스타쇼핑몰AI(rejoice888) 비즈머니 소진→7/1부터 광고중지(정상,버그아님, 2026-07-06)
 - [쿠팡 유진문구 상품명최적화](project_coupang_jujinmungu_name_opt.md) — 14,912건 API없이 스크립트로 J열 생성완료. 21건(무기5+캐릭터라이선스미확인16) 검토필요, 원본유지
+- [지마켓 광고제어 버그 3종 수정](project_gmarket_ad_control_bugs_2026-07-07.md) — 로그인실패 무재시도/그룹인식 고정3초대기/재시도크론 __date버그. AI저녁ON은 정상설계(다음날 시작일 예약)
+- [지마켓 상태확인 안전수칙](feedback_gmarket_status_check_safety.md) — on/off 명령은 액션! 확인만 하려면 crawl_gmarket_cpc_status/crawl_gmarket_ai(읽기전용) 사용, 실수로 액션명령 써서 사고 2회
+- [클린위반 스캔 오탐사전](project_clean_violation_false_positives.md) — 표창=상장, 삼단봉=합법호신, 에어건=워터건/공구, 레플리카=스포츠공정식용어, 스틸레토=하이힐, 정글도=캠핑도구
+- [크론로그 미로테이션 함정](project_cron_log_no_rotation.md) — 로그 몇주씩 누적+날짜없는 타임스탬프로 원인조사 혼란. DB History테이블이 진실, 로그는 참고용
+- [롯데온 발견+11번가OTP크론](project_lotteon_and_11st_otp_cron.md) — SalesRecord에 lotteon 이미 존재(미문서화, 크롤러유무 미확인). 11번가 OTP 매일10시 자동점검 신규등록
+- [지마켓 살생물제 규제대응](project_gmarket_biocide_regulation.md) — 모기향등 화학상품 전플랫폼 1,224건 확정(오탐필터링 방법론 포함). 실제 판매중지는 미실행, 마감07-08 13시
+- [롯데온 연동 시도](project_lotteon_integration_attempt.md) — 신규계정3개, 2FA(OTP) 채팅릴레이 3회실패로 미완료. VNC(192.168.45.100:5905)로 이어가야함
+- [2026-07-07 시스템 전체점검](project_system_audit_2026-07-07.md) — 대체로 정상, profit-dashboard 1.2초/미동기화상품비율/스케줄외크롤/좀비프로세스 재발견(시점스냅샷)
+- [11번가 rejoice666 상품명최적화](project_11st_rejoice666_name_opt.md) — 등급3계정 13,486개 중 약430건 진행(배치1~3), 나머지 대기. 이어하려면 offset430부터
+- [11번가 400에러(원산지/인증정보)](project_11st_400_certification_origin_errors.md) — 상품명+홍보문구 동시저장시 RAW_MATERIAL/ORIGIN/CERTIFICATION 400. 반응형 재시도로 자동대응(_apply_11st_decisions.py), CERTIFICATION은 진짜 인증정보없인 불가
+- [폰 무선adb(같은WiFi)](project_phone_wireless_adb_wifi.md) — USB탈피 시도. 네이트가 기본브라우저라 Tailscale구글로그인 막힘(크롬으로교체), 최종 같은WiFi+adb tcpip로 성공하나 불안정. 정식무선디버깅 토글 미완료. 크롬원격데스크톱 발견삭제(은행앱 원격탐지 차단원인)
+- [스마트스토어 공유로그인 대시보드버그](project_smartstore_dual_login_dashboard_bug.md) — 아이리스./아이리스홈스토어 같은로그인 공유로 매출이 한쪽에만 몰림(dict충돌). shop_name기반 재매칭으로 수정(2026-07-07)
+- [롯데온 로그인 성공](project_lotteon_login_success.md) — rejoice234 2FA 자동화 성공. WebSquare는 ActionChains클릭 필요(일반.click() 안먹음), 코드는 파일폴링 0.5초로 3분타임아웃 극복. scripts/_lotteon_login_otp.py 완성

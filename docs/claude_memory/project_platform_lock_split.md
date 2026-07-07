@@ -22,3 +22,5 @@ metadata:
 **메모리**: 분리 자체는 비용 0(파일경로일 뿐). 메모리는 실제 동시 크롬 실행시에만(크롬 1개 ~2.4GB). 호스트 4코어/15GB → 동시 2~3플랫폼 쾌적, 5개 전부 동시는 한계(RAM 증설 권장). 새 쇼핑몰은 _REACH_URL에 추가 + 크롤러별 platform 지정.
 
 관련: [[project_11st_ip_block_prevention]] (동일 플랫폼 내부는 여전히 직렬), [[project_gmarket_esm_groups]].
+
+**2026-07-07 갱신**: 쿠팡(`platform='coupang'`)도 이미 분리 적용 확인. 스마트스토어는 이 guard 시스템을 아예 안 쓰고 자체 계정별 락(`/tmp/smartstore_{account_id}.lock`, 계정간 동시실행 허용)을 씀 — 구조가 달라도 파일경로가 다르니 결과적으로 다른 플랫폼과는 이미 분리되어 있었음. 다만 `crawl_smartstore_adcost` 명령엔 자체 락이 전혀 없어서(시간별 크론 신설로 자기 자신끼리 겹칠 위험 생김) `platform='smartstore'`로 guard 락 신규 추가함. 롯데온은 [[project_lotteon_platform_setup]] 구축 시 `platform='lotteon'` 사용 예정(락 경로 사전 검증 완료: `avengers_crawl_chrome_lotteon.lock`). 5개 플랫폼(11st/gmarket/smartstore/coupang/lotteon) 전부 독립 락파일 확인됨.

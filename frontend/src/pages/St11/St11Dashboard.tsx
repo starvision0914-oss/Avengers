@@ -9,7 +9,8 @@ import St11MobileCard from '../../components/st11/St11MobileCard';
 import St11CostModal from '../../components/st11/St11CostModal';
 import St11GradeModal from '../../components/st11/St11GradeModal';
 import St11PeriodSummaryModal from '../../components/st11/St11PeriodSummaryModal';
-import { todayStr, formatKRW, ymd } from '../../utils/format';
+import { formatKRW } from '../../utils/format';
+import { resolveRange } from '../../utils/periodRange';
 import api from '../../api/client';
 
 export default function St11Dashboard() {
@@ -17,7 +18,7 @@ export default function St11Dashboard() {
     date, setDate, summary, delta,
     selectedSeller, setSelectedSeller,
     loading, prevDate, nextDate, goToday,
-    periodMode, setPeriodMode,
+    periodMode, pickPeriod,
     rangeStart, setRangeStart, rangeEnd, setRangeEnd, searchRange,
     refresh,
   } = useSt11Data();
@@ -154,19 +155,12 @@ export default function St11Dashboard() {
       : summary.sellers
     : [];
 
-  const costRange = periodMode === 'range'
-    ? { start_date: rangeStart, end_date: rangeEnd }
-    : periodMode === 'yearly'
-      ? { start_date: `${date.slice(0, 4)}-01-01`, end_date: `${date.slice(0, 4)}-12-31` }
-      : periodMode === 'monthly'
-        ? (() => {
-            const d = new Date(date);
-            return {
-              start_date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`,
-              end_date: ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0)),
-            };
-          })()
-        : undefined;
+  const costRange = periodMode === 'daily'
+    ? undefined
+    : (() => {
+        const r = resolveRange(periodMode, date, rangeStart, rangeEnd);
+        return { start_date: r.from, end_date: r.to };
+      })();
 
   const blockedSet = new Set(blockedSellers.map(b => b.seller_id));
 
@@ -219,6 +213,8 @@ export default function St11Dashboard() {
           {periodMode === 'range' ? (
             <DateRangePicker startDate={rangeStart} endDate={rangeEnd}
               onStartChange={setRangeStart} onEndChange={setRangeEnd} onSearch={searchRange} />
+          ) : periodMode === 'recent30' ? (
+            <span className="text-[12px] font-semibold text-[#333]">최근 30일</span>
           ) : (
             <DateNavigator date={date} onPrev={prevDate} onNext={nextDate} onToday={goToday} onDateChange={setDate} periodMode={periodMode} />
           )}
@@ -231,7 +227,7 @@ export default function St11Dashboard() {
           <>
             <St11SummaryBar
               totals={summary.totals} delta={delta} lastCollected={lastCollected}
-              periodMode={periodMode} onPeriodChange={setPeriodMode} onRefresh={refresh}
+              periodMode={periodMode} date={date} onPick={pickPeriod} onRefresh={refresh}
             />
 
             {/* 크롤링 현황 바 (한 줄) */}
@@ -349,7 +345,7 @@ export default function St11Dashboard() {
           <>
             <St11SummaryBar
               totals={summary.totals} delta={delta} lastCollected={lastCollected}
-              periodMode={periodMode} onPeriodChange={setPeriodMode} onRefresh={refresh}
+              periodMode={periodMode} date={date} onPick={pickPeriod} onRefresh={refresh}
             />
             <div className="bg-white border border-[#e0e0e0] rounded p-3">
               <div className="flex items-center justify-between text-[11px] mb-1">

@@ -47,6 +47,20 @@ class Command(BaseCommand):
                             help='billing 스크랩 계정만 처리')
 
     def handle(self, *args, **options):
+        from apps.cpc import eleven_block_guard as guard
+        # 스마트스토어 전용 락(platform='smartstore') — 11번가/지마켓/쿠팡과 완전히 분리된
+        # 락 파일(/tmp/avengers_crawl_chrome_smartstore.lock)이라 서로 안 겹치고 동시 실행 가능.
+        # 다만 스마트스토어 자체 크롤(일 1회 01:00 + 시간별 광고비)끼리는 겹치면 안 되므로 자체 락으로 보호.
+        ok, holder = guard.acquire_global_lock('스마트스토어광고비', platform='smartstore')
+        if not ok:
+            self.stdout.write(f'스마트스토어 크롤 이미 실행 중({holder}) — 스킵')
+            return
+        try:
+            self._run(options)
+        finally:
+            guard.release_global_lock(platform='smartstore')
+
+    def _run(self, options):
         since_str = options['since']
         until_str = options['until']
         account_id = options['account_id']

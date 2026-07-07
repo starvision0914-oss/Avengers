@@ -953,7 +953,8 @@ class OverviewView(views.APIView):
         elif period in ('mtd', 'thismonth'):
             end_d, start_d = today, today.replace(day=1)   # 이번 달 1일~오늘
         elif period in ('year', '1y', '365d'):
-            end_d, start_d = today, today - timedelta(days=364)
+            # G마켓/스마트스토어/11번가의 "1년"(년간)과 동일 정의: 올해 1/1~오늘(calendar YTD)
+            end_d, start_d = today, today.replace(month=1, day=1)
         else:                                   # 기본 = 어제(완성된 최신일)
             start_d = end_d = yesterday
         if end_d < start_d:
@@ -965,8 +966,13 @@ class OverviewView(views.APIView):
             q[k] = v
         q['date_from'] = start_d.isoformat()
         q['date_to'] = end_d.isoformat()
+        q['start'] = start_d.isoformat()   # 스마트스토어 DashboardView가 쓰는 파라미터명
+        q['end'] = end_d.isoformat()
         q.pop('date', None)
         q.pop('period', None)
+        # /gmarket 페이지 기본값(종합=지마켓+옥션)과 일치시킴 — GmarketDashboardView 자체 기본값은 'gmarket' 단독이라
+        # market 파라미터를 안 넘기면 Overview만 옥션 매출이 빠진 채 집계되는 불일치가 있었음.
+        q.setdefault('market', 'combined')
         request._request.GET = q
 
         # 지마켓 = 거래내역 기반(기간합산 정확) / 11번가 = 기간 거래 집계
@@ -1029,28 +1035,19 @@ class OverviewView(views.APIView):
             if (s.get('cpc_spend', 0) or 0) == 0:
                 zero_ad.append({'platform': '11st', 'seller': s.get('seller_alias')})
 
-        # ── 스마트스토어 집계 ──
-        from apps.smartstore.models import (
-            SmartStoreSales as SSSales, SmartStoreAdCost as SSAdCost,
-            SmartStoreAccount as SSAccount,
-        )
-        from django.db.models import Sum as _Sum
+        # ── 스마트스토어 집계 ── /smartstore 페이지와 동일한 DashboardView 재사용(SalesRecord 기준).
+        # 예전엔 SmartStoreSales/SmartStoreAdCost를 따로 집계해 /smartstore 페이지(SalesRecord 기준)와
+        # 매출이 어긋났음 — 지마켓/11번가처럼 같은 뷰를 재사용해 항상 일치하도록 수정.
+        from apps.smartstore.models import SmartStoreAccount as SSAccount
+        from apps.smartstore.views import DashboardView as SSDashboardView
         ss_accounts = SSAccount.objects.filter(is_active=True).count()
-        ss_sales_agg = SSSales.objects.filter(
-            date__gte=start_d, date__lte=end_d
-        ).aggregate(settlement=_Sum('settlement_amount'), orders=_Sum('order_count'))
-        ss_ad_by_type = {
-            r['ad_type']: r['cost'] or 0
-            for r in SSAdCost.objects.filter(
-                date__gte=start_d, date__lte=end_d
-            ).values('ad_type').annotate(cost=_Sum('cost'))
-        }
-        ss_cpc = ss_ad_by_type.get('cpc', 0)
-        ss_ai  = ss_ad_by_type.get('ai', 0)
+        ss = SSDashboardView().get(request).data.get('summary', {})
 
-        ss_settlement = ss_sales_agg['settlement'] or 0
-        ss_orders = ss_sales_agg['orders'] or 0
-        ss_ad = ss_cpc + ss_ai
+        ss_cpc = ss.get('total_ad_cpc', 0) or 0
+        ss_ai = ss.get('total_ad_ai', 0) or 0
+        ss_settlement = ss.get('total_settlement', 0) or 0
+        ss_orders = ss.get('total_orders', 0) or 0
+        ss_ad = ss.get('total_ad_cost', 0) or 0
         ss_net = ss_settlement - ss_ad
 
         markets.append({
@@ -4667,6 +4664,10 @@ def _gmkt_product_rows(request):
     synced_by_pno = {r['product_no']: r['m'] for r in
                      (GmarketMyProduct.objects.filter(product_no__in=all_pno)
                       .values('product_no').annotate(m=Max('synced_at'))) if r['m']}
+    # 상품명 — 어떤 상품이 대상인지 화면/로그에서 바로 보이도록(판매중지 같은 실제 액션 전 확인용)
+    name_by_pno = {r['product_no']: r['product_name'] for r in
+                   GmarketMyProduct.objects.filter(product_no__in=all_pno)
+                   .values('product_no', 'product_name') if r['product_name']}
     _now = _tz.now()
     deleted = set(GmarketLossDeleted.objects.values_list('login_id', 'product_no'))
     # 상품별 수집 키워드(있으면) — 기간 집계(키워드 단위 합), 광고비 오른쪽에 표기용
@@ -4718,7 +4719,8 @@ def _gmkt_product_rows(request):
         _stale = bool(st == '판매중' and _sy and (_now - _sy).days >= STALE_DAYS)
         rows.append({
             'login_id': lid, 'seller_name': name_map.get(lid, lid),
-            'product_no': pno, 'seller_code': code_by_pno.get(pno, ''),
+            'product_no': pno, 'product_name': name_by_pno.get(pno, ''),
+            'seller_code': code_by_pno.get(pno, ''),
             'site': a.get('site', ''),
             'cost': cost, 'clicks': g['clicks'] or 0,
             'cum_sold_qty': cum_qty_by_pno.get(pno, 0),  # 누적 판매수량(2025~현재)
@@ -4783,11 +4785,14 @@ class GmarketLossDeleteView(views.APIView):
         if not re.match(r'^\d{4}-\d{2}$', ymf) or not re.match(r'^\d{4}-\d{2}$', ymt):
             return Response({'error': '기간(YYYY-MM) 형식 오류'}, status=400)
         real = str(d.get('real', '')).lower() in ('1', 'true', 'yes')
-        # 안전장치: 지마켓 셀러오피스 삭제 플로우(전체선택·판매중지 드롭다운) 검증 전까지 실삭제 차단.
+        stop_only = str(d.get('stop_only', '')).lower() in ('1', 'true', 'yes')
+        # 안전장치: 실삭제(데이터 복구불가)만 검증 전까지 차단. 판매중지(stop_only)는 되돌리기
+        # 쉬운 조치라 이 게이트 대상 아님 — 2026-07-07 셀러오피스 플로우 검증(dry-run) 완료 후 허용.
         VERIFIED = False
         if real and not VERIFIED:
             return Response({'status': 'blocked',
                              'message': '⚠️ 지마켓 실삭제는 아직 비활성화 상태입니다. 먼저 검증(dry-run)으로 셀러오피스 플로우를 확인한 뒤 활성화됩니다.'}, status=400)
+        mode_flag = ' --stop-only' if (stop_only and not real) else (' --real' if real else '')
         # ★ 상품번호 지정 삭제(나의상품 선택삭제)
         pnos = [re.sub(r'\D', '', str(p)) for p in (d.get('product_nos') or [])]
         pnos = [p for p in pnos if p]
@@ -4795,30 +4800,28 @@ class GmarketLossDeleteView(views.APIView):
             eid = str(d.get('eid') or '').strip()
             if not eid or not re.match(r'^[A-Za-z0-9_]+$', eid):
                 return Response({'error': '상품지정 삭제는 eid(계정) 필수'}, status=400)
-            a = f'manage.py delete_loss_gmarket --eid {eid} --product-nos ' + ' '.join(pnos[:300])
-            if real:
-                a += ' --real'
+            a = f'manage.py delete_loss_gmarket --eid {eid} --product-nos ' + ' '.join(pnos[:300]) + mode_flag
             sc = (f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {a} >> /tmp/delete_loss_gmarket.log 2>&1')
             try:
                 subprocess.Popen(['bash', '-c', sc], start_new_session=True,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception as e:
                 return Response({'status': 'error', 'error': str(e)}, status=500)
+            action_label = '판매중지' if stop_only else ('실삭제' if real else '검증(dry-run)')
             return Response({'status': 'started',
-                             'message': f'🗑 지마켓 지정상품 {len(pnos)}개 {"실삭제" if real else "검증(dry-run)"} 시작 — 텔레그램/로그로 확인하세요.'})
+                             'message': f'🛑 지마켓 지정상품 {len(pnos)}개 {action_label} 시작 — 텔레그램/로그로 확인하세요.'})
         try:
             lim = int(d.get('limit')) if str(d.get('limit') or '').strip() else None
         except (ValueError, TypeError):
             lim = None
-        limit = 1 if not real else lim
+        limit = 1 if not (real or stop_only) else lim
         eid = d.get('eid') or ''
         args = f'manage.py delete_loss_gmarket --ym-from {ymf} --ym-to {ymt}'
         if eid and re.match(r'^[A-Za-z0-9_]+$', str(eid)):
             args += f' --eid {eid}'
         if limit:
             args += f' --limit {limit}'
-        if real:
-            args += ' --real'
+        args += mode_flag
         script = (f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {args} '
                   f'>> /tmp/delete_loss_gmarket.log 2>&1')
         try:
@@ -4826,7 +4829,10 @@ class GmarketLossDeleteView(views.APIView):
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             return Response({'status': 'error', 'error': str(e)}, status=500)
-        if real:
+        if stop_only:
+            scope = f'소량 {limit}개(테스트)' if limit else '전체'
+            msg = f'🛑 지마켓 판매중지 시작 — {scope}. 진행상황은 텔레그램/로그(/tmp/delete_loss_gmarket.log)로 확인하세요.'
+        elif real:
             scope = f'소량 {limit}개(테스트)' if limit else '전체'
             msg = f'🗑 지마켓 실삭제 시작 — {scope} 판매중지+삭제. 진행상황은 텔레그램/로그(/tmp/delete_loss_gmarket.log)로 확인하세요.'
         else:

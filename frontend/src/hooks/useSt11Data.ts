@@ -2,22 +2,16 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { getSt11Summary, getSt11Last15Min } from '../api/eleven';
 import { todayStr, ymd } from '../utils/format';
 import type { St11SummaryResponse, St11Last15MinResponse } from '../types/st11';
-import type { PeriodMode } from '../types/cpc';
+import type { PeriodMode, PeriodPreset } from '../utils/periodRange';
+import { resolveRange, yesterdayStr } from '../utils/periodRange';
 
-const REFRESH_INTERVAL = 5 * 60 * 1000;
+const REFRESH_INTERVAL = 30 * 60 * 1000;
 const EMPTY_DELTA: St11Last15MinResponse = { cpc_delta: 0, ad_delta: 0, sales_delta: 0 };
-
-function monthStart(d: string) { return d.slice(0, 8) + '01'; }
-function monthEnd(d: string) {
-  const dt = new Date(d);
-  return ymd(new Date(dt.getFullYear(), dt.getMonth() + 1, 0));
-}
-function yearStart(d: string) { return d.slice(0, 4) + '-01-01'; }
-function yearEnd(d: string) { return d.slice(0, 4) + '-12-31'; }
 
 export function useSt11Data() {
   const [date, setDate] = useState(todayStr);
-  const [periodMode, setPeriodMode] = useState<PeriodMode>('daily');
+  // Overview/G마켓/스마트스토어와 동일한 기본 진입 화면(당월)로 통일
+  const [periodMode, setPeriodMode] = useState<PeriodMode>('monthly');
   const [rangeStart, setRangeStart] = useState(todayStr);
   const [rangeEnd, setRangeEnd] = useState(todayStr);
   const [summary, setSummary] = useState<St11SummaryResponse | null>(null);
@@ -30,9 +24,10 @@ export function useSt11Data() {
     setLoading(true);
     try {
       let range: { start_date: string; end_date: string } | undefined;
-      if (mode === 'yearly') range = { start_date: yearStart(d), end_date: yearEnd(d) };
-      else if (mode === 'monthly') range = { start_date: monthStart(d), end_date: monthEnd(d) };
-      else if (mode === 'range') range = { start_date: rStart, end_date: rEnd };
+      if (mode !== 'daily') {
+        const r = resolveRange(mode, d, rStart, rEnd);
+        range = { start_date: r.from, end_date: r.to };
+      }
 
       const data = await getSt11Summary(d, range);
       setSummary(data);
@@ -52,15 +47,21 @@ export function useSt11Data() {
 
   useEffect(() => { fetchAll(date, periodMode, rangeStart, rangeEnd); }, [date, periodMode, fetchAll]);
 
-  useEffect(() => {
+  // 30분마다 자동 갱신(오늘·일간 모드일 때만). 수동 새로고침 시 타이머를 리셋해
+  // "마지막 새로고침으로부터 30분 후"에 다시 돌도록 한다.
+  const scheduleTimer = useCallback(() => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (periodMode === 'daily' && date === todayStr()) {
       timerRef.current = setInterval(() => {
         fetchAll(date, periodMode, rangeStart, rangeEnd);
       }, REFRESH_INTERVAL);
     }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [date, periodMode, rangeStart, rangeEnd, fetchAll]);
+
+  useEffect(() => {
+    scheduleTimer();
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [scheduleTimer]);
 
   const prevDate = () => {
     const d = new Date(date);
@@ -87,13 +88,25 @@ export function useSt11Data() {
 
   const refresh = useCallback(() => {
     fetchAll(date, periodMode, rangeStart, rangeEnd);
-  }, [date, periodMode, rangeStart, rangeEnd, fetchAll]);
+    scheduleTimer();
+  }, [date, periodMode, rangeStart, rangeEnd, fetchAll, scheduleTimer]);
+
+  // Overview/G마켓/스마트스토어와 동일한 6종 프리셋 버튼(PeriodSelector) 클릭 처리
+  const pickPeriod = useCallback((preset: PeriodPreset) => {
+    const today = todayStr();
+    if (preset === 'today') { setPeriodMode('daily'); setDate(today); }
+    else if (preset === 'yesterday') { setPeriodMode('daily'); setDate(yesterdayStr()); }
+    else if (preset === 'monthly') { setPeriodMode('monthly'); setDate(today); }
+    else if (preset === 'yearly') { setPeriodMode('yearly'); setDate(today); }
+    else if (preset === 'recent30') { setPeriodMode('recent30'); }
+    else { setPeriodMode('range'); }
+  }, []);
 
   return {
     date, setDate, summary, delta,
     selectedSeller, setSelectedSeller,
     loading, prevDate, nextDate, goToday,
-    periodMode, setPeriodMode,
+    periodMode, setPeriodMode, pickPeriod,
     rangeStart, setRangeStart, rangeEnd, setRangeEnd, searchRange,
     refresh,
   };

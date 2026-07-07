@@ -16,6 +16,7 @@ function periodLabel(periodMode: PeriodMode, date: string, rangeStart: string, r
   if (periodMode === 'range') return `${rangeStart} ~ ${rangeEnd}`;
   if (periodMode === 'yearly') return `${date.slice(0, 4)}년`;
   if (periodMode === 'monthly') return `${date.slice(0, 4)}년 ${Number(date.slice(5, 7))}월`;
+  if (periodMode === 'recent30') return '최근 30일';
   return date;
 }
 

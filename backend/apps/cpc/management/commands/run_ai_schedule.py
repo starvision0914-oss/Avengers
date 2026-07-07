@@ -6,7 +6,7 @@ AI광고 예약 스케줄 실행 (ai100 참조)
 - 수동 OFF 오버라이드: 마지막 히스토리가 manual+OFF면 건너뜀
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -111,9 +111,16 @@ class Command(BaseCommand):
         from apps.cpc import eleven_block_guard as guard
 
         # 오늘 이미 성공적으로 실행됐으면 재시도 크론이 또 돌 필요 없음(중복작업 방지)
+        # 타임존 함정: event_time__date는 USE_TZ 상태에서 KST 자정 기준과 어긋나 이 체크가
+        # 무력화됐었음(2026-07-07 실측 — 19:38 성공했는데 20:18 재시도가 또 실행됨) →
+        # KST 자정 기준 datetime 범위로 비교.
         today = timezone.localdate()
+        tz = timezone.get_current_timezone()
+        day_start = timezone.make_aware(datetime.combine(today, dt_time.min), tz)
+        day_end = timezone.make_aware(datetime.combine(today, dt_time.max), tz)
         if GmarketAiAdHistory.objects.filter(
-            history_type='AI ON (schedule)', event_time__date=today, detail__contains='성공'
+            history_type='AI ON (schedule)', event_time__gte=day_start, event_time__lte=day_end,
+            detail__contains='성공'
         ).exists():
             self._log('⏭️ AI ON 스킵 — 오늘 이미 성공 실행됨(재시도 불필요)')
             return

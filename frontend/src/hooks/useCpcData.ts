@@ -2,17 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { getDailySummary, getTimeseries, getLast15Min, sendTelegram, getTgMode, setTgMode as apiSetTgMode } from '../api/gmarket';
 import { todayStr, ymd } from '../utils/format';
 import type { DailySummaryResponse, TimeseriesRow, SalesTimeseriesRow, Last15MinResponse, TelegramMode, PeriodMode } from '../types/cpc';
+import type { PeriodPreset } from '../utils/periodRange';
+import { resolveRange, yesterdayStr } from '../utils/periodRange';
 
 const REFRESH_INTERVAL = 5 * 60 * 1000;
 const EMPTY_DELTA: Last15MinResponse = { cpc_delta: 0, ai_delta: 0, prime_delta: 0, ad_delta: 0, sales_delta: 0 };
-
-function monthStart(d: string) { return d.slice(0, 8) + '01'; }
-function monthEnd(d: string) {
-  const dt = new Date(d);
-  return ymd(new Date(dt.getFullYear(), dt.getMonth() + 1, 0));
-}
-function yearStart(d: string) { return d.slice(0, 4) + '-01-01'; }
-function yearEnd(d: string) { return d.slice(0, 4) + '-12-31'; }
 
 export function useCpcData() {
   const [date, setDate] = useState(todayStr);
@@ -54,9 +48,10 @@ export function useCpcData() {
     setLoading(true);
     try {
       let range: { start_date: string; end_date: string } | undefined;
-      if (mode === 'yearly') range = { start_date: yearStart(d), end_date: yearEnd(d) };
-      else if (mode === 'monthly') range = { start_date: monthStart(d), end_date: monthEnd(d) };
-      else if (mode === 'range') range = { start_date: rStart, end_date: rEnd };
+      if (mode !== 'daily') {
+        const r = resolveRange(mode, d, rStart, rEnd);
+        range = { start_date: r.from, end_date: r.to };
+      }
 
       const data = await getDailySummary(d, range);
       setSummary(data);
@@ -123,12 +118,22 @@ export function useCpcData() {
     fetchAll(date, 'range', rangeStart, rangeEnd);
   }, [date, rangeStart, rangeEnd, fetchAll]);
 
+  const pickPeriod = useCallback((preset: PeriodPreset) => {
+    const today = todayStr();
+    if (preset === 'today') { setPeriodMode('daily'); setDate(today); }
+    else if (preset === 'yesterday') { setPeriodMode('daily'); setDate(yesterdayStr()); }
+    else if (preset === 'monthly') { setPeriodMode('monthly'); setDate(today); }
+    else if (preset === 'yearly') { setPeriodMode('yearly'); setDate(today); }
+    else if (preset === 'recent30') { setPeriodMode('recent30'); }
+    else { setPeriodMode('range'); }
+  }, []);
+
   return {
     date, setDate, summary, timeseries, salesTimeseries, delta,
     selectedSeller, setSelectedSeller,
     loading, prevDate, nextDate, goToday,
     tgMode, setTgMode, tgStatus, manualSend,
-    periodMode, setPeriodMode,
+    periodMode, setPeriodMode, pickPeriod,
     rangeStart, setRangeStart, rangeEnd, setRangeEnd, searchRange,
   };
 }

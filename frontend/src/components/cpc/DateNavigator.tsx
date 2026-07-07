@@ -20,7 +20,9 @@ export default function DateNavigator({ date, onPrev, onNext, onToday, onDateCha
     ? `${date.split('-')[0]}년`
     : periodMode === 'monthly'
       ? `${date.split('-')[0]}년 ${date.split('-')[1]}월`
-      : `${date} (${getKoreanDay(date)})`;
+      : periodMode === 'recent30'
+        ? '최근 30일'
+        : `${date} (${getKoreanDay(date)})`;
 
   return (
     <div className="flex items-center gap-1">

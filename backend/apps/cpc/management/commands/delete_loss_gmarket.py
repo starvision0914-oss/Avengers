@@ -10,6 +10,7 @@ class Command(BaseCommand):
         parser.add_argument('--eid', help='특정 계정만')
         parser.add_argument('--limit', type=int, help='소량 테스트 개수')
         parser.add_argument('--real', action='store_true', help='실제 판매중지+삭제 (미지정=검증)')
+        parser.add_argument('--stop-only', action='store_true', help='판매중지만(삭제 안 함)')
         parser.add_argument('--product-nos', nargs='*', dest='product_nos',
                             help='상품번호 지정 삭제(나의상품 선택삭제용). --eid 필수.')
 
@@ -20,14 +21,15 @@ class Command(BaseCommand):
         class _Req:
             def __init__(self, p): self.query_params = p
 
+        mode = 'stop_only' if o.get('stop_only') else ('real' if o['real'] else 'validate')
+
         # 상품번호 지정 삭제(나의상품 선택삭제)
         if o.get('product_nos'):
             eid = o.get('eid') or ''
             targets = [{'login_id': eid, 'product_no': str(p), 'seller_code': '', 'status': ''}
                        for p in o['product_nos']]
-            self.stdout.write(f'지정상품 {len(targets)}개 (mode={"real" if o["real"] else "validate"}) eid={eid}')
-            res = run_delete(targets, mode=('real' if o['real'] else 'validate'),
-                             log_fn=lambda m: self.stdout.write(m))
+            self.stdout.write(f'지정상품 {len(targets)}개 (mode={mode}) eid={eid}')
+            res = run_delete(targets, mode=mode, log_fn=lambda m: self.stdout.write(m))
             self.stdout.write(str(res))
             return
 
@@ -38,12 +40,14 @@ class Command(BaseCommand):
         if o.get('limit'):
             rows = rows[:o['limit']]
         targets = [{'login_id': r['login_id'], 'product_no': r['product_no'],
+                    'product_name': r.get('product_name', ''),
                     'seller_code': r.get('seller_code', ''), 'status': r.get('status', '')}
                    for r in rows if r.get('login_id') and r.get('product_no')]
-        self.stdout.write(f'적자 대상 {len(targets)}개 (mode={"real" if o["real"] else "validate"})')
+        self.stdout.write(f'적자 대상 {len(targets)}개 (mode={mode})')
+        for t in targets:
+            self.stdout.write(f'  - [{t["login_id"]}] {t["product_no"]} {t.get("product_name") or "(상품명 미확인)"}')
         if not targets:
             self.stdout.write('대상 없음 — 종료')
             return
-        res = run_delete(targets, mode=('real' if o['real'] else 'validate'),
-                         log_fn=lambda m: self.stdout.write(m))
+        res = run_delete(targets, mode=mode, log_fn=lambda m: self.stdout.write(m))
         self.stdout.write(str(res))

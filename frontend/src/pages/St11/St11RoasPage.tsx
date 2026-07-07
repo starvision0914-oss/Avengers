@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../../api/client';
 import { formatKRW, todayStr, ymd } from '../../utils/format';
-import type { PeriodMode } from '../../types/cpc';
+import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
+import { resolveRange, yesterdayStr } from '../../utils/periodRange';
 import PeriodSelector from '../../components/cpc/PeriodSelector';
 import DateNavigator from '../../components/cpc/DateNavigator';
 import DateRangePicker from '../../components/cpc/DateRangePicker';
@@ -41,16 +42,8 @@ function roasColor(roas: number | null): string {
   return 'text-[#dc2626] font-semibold';                       // 적자권
 }
 
-// periodMode + 기준일(date) → 조회 시작/종료일 (오늘 이후로는 안 넘어감)
-function rangeOf(mode: PeriodMode, date: string, rStart: string, rEnd: string): { from: string; to: string } {
-  const today = todayStr();
-  const [y, m] = date.split('-').map(Number);
-  const cap = (d: string) => (d > today ? today : d);
-  if (mode === 'yearly') return { from: `${y}-01-01`, to: cap(`${y}-12-31`) };
-  if (mode === 'monthly') return { from: `${y}-${String(m).padStart(2, '0')}-01`, to: cap(ymd(new Date(y, m, 0))) };
-  if (mode === 'range') return { from: rStart, to: rEnd };
-  return { from: date, to: date }; // daily
-}
+// periodMode + 기준일(date) → 조회 시작/종료일 (Overview/G마켓/스마트스토어/11번가 공통 계산)
+const rangeOf = resolveRange;
 
 // 모달 기간 프리셋 → date_from/date_to (adoffice는 전일까지라 to=어제)
 function modalRange(p: string, cFrom: string, cTo: string): { from: string; to: string } {
@@ -82,6 +75,16 @@ export default function St11RoasPage() {
   const [rangeEnd, setRangeEnd] = useState<string>(todayStr());
   const [data, setData] = useState<RoasResp | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const pickPeriod = (preset: PeriodPreset) => {
+    const today = todayStr();
+    if (preset === 'today') { setPeriodMode('daily'); setDate(today); }
+    else if (preset === 'yesterday') { setPeriodMode('daily'); setDate(yesterdayStr()); }
+    else if (preset === 'monthly') { setPeriodMode('monthly'); setDate(today); }
+    else if (preset === 'yearly') { setPeriodMode('yearly'); setDate(today); }
+    else if (preset === 'recent30') setPeriodMode('recent30');
+    else setPeriodMode('range');
+  };
 
   // 크롤링(상품/키워드 수집) — 기간 지정
   const yyy = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return ymd(d); })();
@@ -403,11 +406,13 @@ export default function St11RoasPage() {
             ? <DateRangePicker startDate={rangeStart} endDate={rangeEnd}
                 onStartChange={setRangeStart} onEndChange={setRangeEnd}
                 onSearch={() => fetchRoas('range', date, rangeStart, rangeEnd)} />
-            : <DateNavigator date={date} periodMode={periodMode}
-                onPrev={onPrev} onNext={onNext} onToday={() => setDate(todayStr())}
-                onDateChange={setDate} />}
+            : periodMode === 'recent30'
+              ? <span className="text-[12px] font-semibold text-[#333]">최근 30일</span>
+              : <DateNavigator date={date} periodMode={periodMode}
+                  onPrev={onPrev} onNext={onNext} onToday={() => setDate(todayStr())}
+                  onDateChange={setDate} />}
           <button onClick={load} className="px-3 py-1 text-[11px] font-semibold bg-[#e67700] text-white rounded hover:bg-[#bf5600]">새로고침</button>
-          <PeriodSelector value={periodMode} onChange={setPeriodMode} />
+          <PeriodSelector mode={periodMode} date={date} onPick={pickPeriod} />
         </div>
       </div>
 

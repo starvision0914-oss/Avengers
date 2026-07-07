@@ -19,7 +19,8 @@ import api from '../../api/client';
 import DateNavigator from '../../components/cpc/DateNavigator';
 import DateRangePicker from '../../components/cpc/DateRangePicker';
 import PeriodSelector from '../../components/cpc/PeriodSelector';
-import type { PeriodMode } from '../../types/cpc';
+import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
+import { resolveRange, yesterdayStr } from '../../utils/periodRange';
 
 const SS = '#03C75A';
 const fmt = (n: number) => (n || 0).toLocaleString();
@@ -36,8 +37,6 @@ const ymd = (d: Date) => {
 };
 const todayYmd = () => ymd(new Date());
 const monthStart = (d: Date) => ymd(new Date(d.getFullYear(), d.getMonth(), 1));
-const monthEnd = (d: Date) => ymd(new Date(d.getFullYear(), d.getMonth() + 1, 0));
-const yearStart = (d: Date) => `${d.getFullYear()}-01-01`;
 
 export default function SmartStorePage() {
   const navigate = useNavigate();
@@ -60,13 +59,8 @@ export default function SmartStorePage() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const getRange = useCallback((mode: PeriodMode, d: string): [string, string] => {
-    if (mode === 'range') return [rangeStart || monthStart(new Date()), rangeEnd || todayYmd()];
-    if (mode === 'yearly') return [yearStart(new Date(d)), `${new Date(d).getFullYear()}-12-31`];
-    if (mode === 'monthly') {
-      const dt = new Date(d);
-      return [monthStart(dt), monthEnd(dt)];
-    }
-    return [d, d];
+    const r = resolveRange(mode, d, rangeStart || monthStart(new Date()), rangeEnd || todayYmd());
+    return [r.from, r.to];
   }, [rangeStart, rangeEnd]);
 
   const prevDate = () => {
@@ -84,6 +78,17 @@ export default function SmartStorePage() {
     if (ymd(dt) <= todayYmd()) setDate(ymd(dt));
   };
   const goToday = () => setDate(todayYmd());
+
+  // Overview/G마켓/11번가와 동일한 6종 프리셋 버튼(PeriodSelector) 클릭 처리
+  const pickPeriod = (preset: PeriodPreset) => {
+    const today = todayYmd();
+    if (preset === 'today') { setPeriodMode('daily'); setDate(today); }
+    else if (preset === 'yesterday') { setPeriodMode('daily'); setDate(yesterdayStr()); }
+    else if (preset === 'monthly') { setPeriodMode('monthly'); setDate(today); }
+    else if (preset === 'yearly') { setPeriodMode('yearly'); setDate(today); }
+    else if (preset === 'recent30') setPeriodMode('recent30');
+    else setPeriodMode('range');
+  };
 
   const loadAccounts = useCallback(async () => {
     const data = await getAccounts().catch(() => []);
@@ -165,6 +170,8 @@ export default function SmartStorePage() {
           {periodMode === 'range' ? (
             <DateRangePicker startDate={rangeStart} endDate={rangeEnd}
               onStartChange={setRangeStart} onEndChange={setRangeEnd} onSearch={loadDash} />
+          ) : periodMode === 'recent30' ? (
+            <span className="text-[14px] font-semibold text-[#333]">최근 30일</span>
           ) : (
             <DateNavigator date={date} onPrev={prevDate} onNext={nextDate} onToday={goToday} onDateChange={setDate} periodMode={periodMode} />
           )}
@@ -216,7 +223,7 @@ export default function SmartStorePage() {
               style={{ background: loading ? '#aaa' : SS }}>
               <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> 새로고침
             </button>
-            <PeriodSelector value={periodMode} onChange={setPeriodMode} />
+            <PeriodSelector mode={periodMode} date={date} onPick={pickPeriod} />
           </span>
         </div>
 
@@ -295,8 +302,8 @@ export default function SmartStorePage() {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-[15px]">
-              <thead className="bg-[#fafafa]">
-                <tr className="text-[#666]">
+              <thead>
+                <tr className="text-[#666] bg-[#fafafa] sticky top-[52px] z-30">
                   <th className="px-3 py-2.5 text-center font-semibold text-[#aaa] w-10">#</th>
                   <th className="px-4 py-2.5 text-left font-semibold">계정</th>
                   <th className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>매출</th>
@@ -310,6 +317,28 @@ export default function SmartStorePage() {
                   <th className="px-4 py-2.5 text-center font-semibold text-[#dc2626]">클린위반</th>
                   <th className="px-4 py-2.5 text-center font-semibold">비고</th>
                 </tr>
+                {byAcc.length > 0 && (
+                  <tr className="font-bold text-[#333] bg-[#f5f5f5] sticky top-[93px] z-20 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                    <td className="px-3 py-2.5"></td>
+                    <td className="px-4 py-2.5">합계 ({byAcc.length}개)</td>
+                    <td className="px-4 py-2.5 text-right" style={{ color: SS }}>{fmt(s?.total_excel_revenue || 0)}</td>
+                    <td className="px-4 py-2.5 text-right text-[#0284c7]">{fmt(s?.total_cogs || 0)}</td>
+                    <td className="px-4 py-2.5 text-right text-[#f97316]">{fmt(s?.total_ad_cpc || 0)}</td>
+                    <td className="px-4 py-2.5 text-right text-[#6366f1]">{fmt(s?.total_ad_ai || 0)}</td>
+                    <td className={`px-4 py-2.5 text-right ${net >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(net)}</td>
+                    <td className={`px-4 py-2.5 text-right ${s?.roas != null && s.roas >= 200 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>
+                      {s?.roas != null ? s.roas + '%' : '-'}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">{fmt(s?.total_orders || 0)}</td>
+                    <td className="px-4 py-2.5 text-right">{fmt(prodStats?.total || 0)}</td>
+                    {totalClean > 0 ? (
+                      <td className="px-4 py-2.5 text-center text-[#dc2626] font-bold">{totalClean}건</td>
+                    ) : (
+                      <td className="px-4 py-2.5 text-center text-[#ccc]">-</td>
+                    )}
+                    <td className="px-4 py-2.5"></td>
+                  </tr>
+                )}
               </thead>
               <tbody className="divide-y divide-[#f5f5f5]">
                 {byAcc.length === 0 ? (
@@ -380,30 +409,6 @@ export default function SmartStorePage() {
                   })
                 )}
               </tbody>
-              {byAcc.length > 0 && (
-                <tfoot className="bg-[#f5f5f5]">
-                  <tr className="font-bold text-[#333]">
-                    <td className="px-3 py-2.5"></td>
-                    <td className="px-4 py-2.5">합계 ({byAcc.length}개)</td>
-                    <td className="px-4 py-2.5 text-right" style={{ color: SS }}>{fmt(s?.total_excel_revenue || 0)}</td>
-                    <td className="px-4 py-2.5 text-right text-[#0284c7]">{fmt(s?.total_cogs || 0)}</td>
-                    <td className="px-4 py-2.5 text-right text-[#f97316]">{fmt(s?.total_ad_cpc || 0)}</td>
-                    <td className="px-4 py-2.5 text-right text-[#6366f1]">{fmt(s?.total_ad_ai || 0)}</td>
-                    <td className={`px-4 py-2.5 text-right ${net >= 0 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>{fmt(net)}</td>
-                    <td className={`px-4 py-2.5 text-right ${s?.roas != null && s.roas >= 200 ? 'text-[#16a34a]' : 'text-[#dc2626]'}`}>
-                      {s?.roas != null ? s.roas + '%' : '-'}
-                    </td>
-                    <td className="px-4 py-2.5 text-right">{fmt(s?.total_orders || 0)}</td>
-                    <td className="px-4 py-2.5 text-right">{fmt(prodStats?.total || 0)}</td>
-                    {totalClean > 0 ? (
-                      <td className="px-4 py-2.5 text-center text-[#dc2626] font-bold">{totalClean}건</td>
-                    ) : (
-                      <td></td>
-                    )}
-                    <td></td>
-                  </tr>
-                </tfoot>
-              )}
             </table>
           </div>
         </div>

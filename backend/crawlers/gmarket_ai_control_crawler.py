@@ -69,9 +69,16 @@ def _call_esm_api(driver, api_path, payload):
 
 
 def _get_group_info(driver):
-    """관리 페이지에서 그룹 정보 추출"""
+    """관리 페이지에서 그룹 정보 추출.
+    고정 3초 대기만으로는 그룹 수가 많은 공유계정(rejoice234/235/236, dlwodbs666 등)이 렌더링
+    끝나기 전에 읽혀 일부 그룹이 누락되는 사례가 있었음(2026-07-07) — 실제 행이 뜰 때까지 대기."""
     driver.get(AI_MGMT_URL)
-    time.sleep(3)
+    try:
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'tr[data-groupno]')))
+    except Exception:
+        pass
+    time.sleep(1.5)   # 행이 뜬 뒤에도 전체 목록이 마저 채워질 시간 여유
 
     groups = []
     seen = set()   # group_no 중복 제거 — 중첩 table 셀렉터로 같은 행이 여러번 잡히는 폭주 방지

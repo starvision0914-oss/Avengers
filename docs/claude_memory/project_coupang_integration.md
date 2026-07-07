@@ -56,3 +56,17 @@ dlrmsgh012·rejoice666·rejoice444 — 전부 오픈API 키 등록+IP허용+데�
 **How to apply:** 신규 계정 추가시 add_coupang_account + API키 직접 모델에 저장 →
 sync_coupang_orders / sync_coupang_products 실행 → IP 미등록시 403 발생하므로 사용자에게
 Wing IP등록 요청 먼저 확인.
+
+## 업데이트 (2026-07-06~07)
+- **대시보드 완성**: `/coupang` 페이지(CoupangDashboard.tsx) — 계정별 상품수/승인반려/주문/
+  부가세매출 표. 백엔드 `apps/coupang/views.py::CoupangDashboardView`. 만들 때 타임존 함정
+  (`__date` 필터→0건) 또 걸렸다가 aware datetime 범위로 수정.
+- **쿠팡 애즈(광고)는 별도 시스템**: `ads.coupang.com`(Wing과 다른 도메인). 확인된 7계정 중
+  4개(rejoice678,234,567,999) **전부 광고 한번도 시작 안 함**("처음이신가요?" 랜딩페이지).
+  나머지 3개(dlrmsgh012,666,444)는 사용자가 직접 확인하기로 함(브라우저 자동화 반복시 Akamai
+  차단 심해짐 확인).
+- **VAT크롤러(부가세) 2025년 백필 시도 실패**: Akamai 차단이 하루 지나도 재발(같은 계정
+  rejoice678 이틀 연속 차단) — 완전한 해결책 없음, 속도조절이 유일한 완화책.
+- **2025년 매출도 오픈API로 수집완료**: 239건/6,490,730원(3계정만 활동). rejoice999는 API
+  150건 vs 매출페이지업로드 733건으로 5배 차이 — 원인 미확인(ordersheets 상태별 페이징 누락
+  가능성), 추가조사 필요할 수 있음.

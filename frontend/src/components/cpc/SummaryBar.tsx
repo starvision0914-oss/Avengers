@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { TotalsSummary, Last15MinResponse, TelegramMode, PeriodMode } from '../../types/cpc';
+import type { TotalsSummary, Last15MinResponse, TelegramMode } from '../../types/cpc';
+import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
 import { formatKRW } from '../../utils/format';
 import PeriodSelector from './PeriodSelector';
 
@@ -16,14 +17,15 @@ interface Props {
   tgStatus: string;
   onManualSend: () => void;
   periodMode: PeriodMode;
-  onPeriodChange: (mode: PeriodMode) => void;
+  date: string;
+  onPick: (preset: PeriodPreset) => void;
   onExcelDownload?: () => void;
   onAiManage?: () => void;
   onCpc2Manage?: () => void;
   onSellerGrade?: () => void;
 }
 
-export default function SummaryBar({ totals, delta, lastCollected, tgMode, onTgModeChange, tgStatus, onManualSend, periodMode, onPeriodChange, onExcelDownload, onAiManage, onCpc2Manage, onSellerGrade }: Props) {
+export default function SummaryBar({ totals, delta, lastCollected, tgMode, onTgModeChange, tgStatus, onManualSend, periodMode, date, onPick, onExcelDownload, onAiManage, onCpc2Manage, onSellerGrade }: Props) {
   const np = totals.net_profit;
   const isDaily = periodMode === 'daily';
   const [tgOpen, setTgOpen] = useState(false);
@@ -64,7 +66,7 @@ export default function SummaryBar({ totals, delta, lastCollected, tgMode, onTgM
           {onExcelDownload && (
             <button onClick={onExcelDownload} className="px-3 py-1 text-[11px] font-semibold bg-[#217346] text-white rounded hover:bg-[#1a5c38]">Excel</button>
           )}
-          <PeriodSelector value={periodMode} onChange={onPeriodChange} />
+          <PeriodSelector mode={periodMode} date={date} onPick={onPick} />
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 md:px-5 py-2 md:py-2.5 text-[11px] md:text-[12px]">

@@ -1,5 +1,5 @@
 import type { St11TotalsSummary, St11Last15MinResponse } from '../../types/st11';
-import type { PeriodMode } from '../../types/cpc';
+import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
 import { formatKRW } from '../../utils/format';
 import PeriodSelector from '../cpc/PeriodSelector';
 
@@ -8,11 +8,12 @@ interface Props {
   delta: St11Last15MinResponse;
   lastCollected: string;
   periodMode: PeriodMode;
-  onPeriodChange: (mode: PeriodMode) => void;
+  date: string;
+  onPick: (preset: PeriodPreset) => void;
   onRefresh?: () => void;
 }
 
-export default function St11SummaryBar({ totals, delta, lastCollected, periodMode, onPeriodChange, onRefresh }: Props) {
+export default function St11SummaryBar({ totals, delta, lastCollected, periodMode, date, onPick, onRefresh }: Props) {
   const isDaily = periodMode === 'daily';
 
   return (
@@ -73,7 +74,7 @@ export default function St11SummaryBar({ totals, delta, lastCollected, periodMod
           {onRefresh && (
             <button onClick={onRefresh} className="px-3 py-1 text-[11px] font-semibold bg-[#e67700] text-white rounded hover:bg-[#bf5600]">새로고침</button>
           )}
-          <PeriodSelector value={periodMode} onChange={onPeriodChange} />
+          <PeriodSelector mode={periodMode} date={date} onPick={onPick} />
         </span>
       </div>
     </div>

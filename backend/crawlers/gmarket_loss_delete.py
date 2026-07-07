@@ -129,8 +129,8 @@ def _result_count(driver):
 
 
 def run_delete(targets, mode='validate', log_fn=None):
-    """targets: [{login_id, product_no, seller_code, status}]. mode: validate(기본) | real."""
-    from apps.cpc.models import CrawlerAccount, GmarketLossDeleted
+    """targets: [{login_id, product_no, seller_code, status}]. mode: validate(기본) | real | stop_only(판매중지만, 삭제안함)."""
+    from apps.cpc.models import CrawlerAccount, GmarketLossDeleted, GmarketMyProduct
     from apps.cpc import eleven_block_guard as guard
     from crawlers.browser import create_driver
     from crawlers.gmarket_cost_crawler import _esm_login
@@ -159,6 +159,8 @@ def run_delete(targets, mode='validate', log_fn=None):
             if not nums:
                 continue
             _log(log_fn, f'[{eid}] 대상 {len(nums)}개 (판매중지→재조회→삭제) mode={mode}')
+            for t in items:
+                _log(log_fn, f'    · {t.get("product_no","")} {t.get("product_name") or "(상품명 미확인)"}')
             acc = CrawlerAccount.objects.filter(platform='gmarket', login_id=eid).first()
             if not acc:
                 summary['failed'] += 1
@@ -203,16 +205,37 @@ def run_delete(targets, mode='validate', log_fn=None):
                     summary['accounts'] += 1
                     continue
 
-                # ---- real 모드 (파괴적) ----
+                # ---- real / stop_only 모드 (판매중지는 공통, 삭제는 real만) ----
                 _click(d, XP_SELECT_ALL, '전체선택', log_fn)
                 time.sleep(1)
+                stopped = False
                 if _click(d, XP_STATUS_CHANGE, '판매 상태 변경', log_fn):
                     time.sleep(1)
-                    _click(d, XP_STOPSELL, '판매중지', log_fn)
+                    stopped = _click(d, XP_STOPSELL, '판매중지', log_fn)
                     _clear_popups(d, log_fn)
                     time.sleep(2)
 
-                # === 2) 재조회 → 전체선택 → 삭제 ===
+                if mode == 'stop_only':
+                    # 클릭체인(전체선택→판매상태변경→판매중지)이 전부 성공했으면 판매중지 완료로 간주.
+                    # (그리드 셀렉터가 가상그리드라 재조회 문구 파싱은 부정확할 수 있어 클릭성공 여부로 판단)
+                    _log(log_fn, f'  판매중지 {"성공" if stopped else "실패(버튼 못 찾음)"}')
+                    if stopped:
+                        # DB(GmarketMyProduct) 비고 즉시 갱신 — 다음날 야간크롤 전까지
+                        # 비고가 낡은 '판매중' 그대로 남지 않도록.
+                        for t in items:
+                            pn = ''.join(ch for ch in str(t.get('product_no', '')) if ch.isdigit())
+                            if pn:
+                                GmarketMyProduct.objects.filter(
+                                    account=acc, product_no=pn).update(status_type='판매중지')
+                        summary.setdefault('stopped', 0)
+                        summary['stopped'] += len(nums)
+                    else:
+                        summary['failed'] += 1
+                    results.append({'login_id': eid, 'stopped': stopped})
+                    summary['accounts'] += 1
+                    continue
+
+                # === 2) 재조회 → 전체선택 → 삭제 (real 모드만) ===
                 okp2, _ = _paste_and_search(d, nums, log_fn)
                 _click(d, XP_SELECT_ALL, '전체선택(삭제전)', log_fn)
                 time.sleep(1)
@@ -247,10 +270,14 @@ def run_delete(targets, mode='validate', log_fn=None):
         except Exception:
             pass
 
-    label = 'VALIDATE(검증)' if mode == 'validate' else '실삭제'
-    msg = (f'🗑 [지마켓 적자삭제 {label} 완료] (판매중지→재조회→삭제)\n'
-           f'계정 {summary["accounts"]} / 삭제완료 {summary["deleted"]} / '
-           f'비고기록 {summary["marked"]} / 실패 {summary["failed"]}')
+    label = {'validate': 'VALIDATE(검증)', 'real': '실삭제', 'stop_only': '판매중지'}.get(mode, mode)
+    if mode == 'stop_only':
+        msg = (f'🛑 [지마켓 적자상품 {label} 완료]\n'
+               f'계정 {summary["accounts"]} / 판매중지 {summary.get("stopped", 0)}건 / 실패 {summary["failed"]}')
+    else:
+        msg = (f'🗑 [지마켓 적자삭제 {label} 완료] (판매중지→재조회→삭제)\n'
+               f'계정 {summary["accounts"]} / 삭제완료 {summary["deleted"]} / '
+               f'비고기록 {summary["marked"]} / 실패 {summary["failed"]}')
     _log(log_fn, msg)
     try:
         from apps.cpc import eleven_block_guard as guard2

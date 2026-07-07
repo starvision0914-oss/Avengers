@@ -17,13 +17,15 @@ function daysAgoKST(n: number): string {
   return d.toLocaleDateString('en-CA');
 }
 
-type PeriodKey = 'year' | 'month' | 'mtd' | 'today' | 'yesterday' | 'custom';
+// Overview/G마켓/스마트스토어/11번가 4개 대시보드 공통 프리셋과 동일한 순서·의미로 통일.
+// year=올해(1/1~오늘, calendar YTD) / month=최근30일(rolling) / mtd=당월(이번달 1일~오늘)
+type PeriodKey = 'today' | 'yesterday' | 'mtd' | 'month' | 'year' | 'custom';
 const PERIODS: { key: PeriodKey; label: string }[] = [
-  { key: 'year', label: '1년' },
-  { key: 'month', label: '한달' },
-  { key: 'mtd', label: '당월' },
   { key: 'today', label: '오늘' },
   { key: 'yesterday', label: '어제' },
+  { key: 'mtd', label: '당월' },
+  { key: 'month', label: '한달' },
+  { key: 'year', label: '1년' },
   { key: 'custom', label: '기간별' },
 ];
 
@@ -31,6 +33,10 @@ function firstDayOfMonthKST(): string {
   const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
   d.setDate(1);
   return d.toLocaleDateString('en-CA');
+}
+function firstDayOfYearKST(): string {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+  return `${d.getFullYear()}-01-01`;
 }
 
 function periodToOverviewParam(period: PeriodKey, cFrom: string, cTo: string): OverviewParams {
@@ -45,7 +51,7 @@ function periodToOverviewParam(period: PeriodKey, cFrom: string, cTo: string): O
 function periodToMallProfitParam(period: PeriodKey, cFrom: string, cTo: string) {
   const today = todayKST();
   if (period === 'custom') return { date_from: cFrom, date_to: cTo };
-  if (period === 'year') return { date_from: daysAgoKST(364), date_to: today };
+  if (period === 'year') return { date_from: firstDayOfYearKST(), date_to: today };
   if (period === 'month') return { date_from: daysAgoKST(29), date_to: today };
   if (period === 'mtd') return { date_from: firstDayOfMonthKST(), date_to: today };
   if (period === 'today') return { date_from: today, date_to: today };
@@ -53,8 +59,8 @@ function periodToMallProfitParam(period: PeriodKey, cFrom: string, cTo: string) 
 }
 
 function periodLabel(period: PeriodKey, dateFrom: string, dateTo: string): string {
-  if (period === 'year') return '최근 1년';
-  if (period === 'month') return '최근 한달';
+  if (period === 'year') return '올해';
+  if (period === 'month') return '최근 30일';
   if (period === 'mtd') return '이번 달';
   if (period === 'today') return '오늘';
   if (period === 'yesterday') return '어제';
@@ -78,9 +84,11 @@ const CARD: React.CSSProperties = {
 };
 
 export default function OverviewDashboard() {
-  const [period, setPeriod] = useState<PeriodKey>('month');
-  const [cFrom, setCFrom] = useState(ydayKST());
-  const [cTo, setCTo] = useState(ydayKST());
+  // G마켓/스마트스토어/11번가와 동일한 기본 진입 화면(당월)로 통일
+  const initialPeriod: PeriodKey = 'mtd';
+  const [period, setPeriod] = useState<PeriodKey>(initialPeriod);
+  const [cFrom, setCFrom] = useState(firstDayOfMonthKST());
+  const [cTo, setCTo] = useState(todayKST());
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [profit, setProfit] = useState<MallProfitResponse | null>(null);
   const [loading, setLoading] = useState(false);

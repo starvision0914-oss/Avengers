@@ -2,6 +2,17 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RefreshCw, ShoppingBag, Wallet, Megaphone, Package, X } from 'lucide-react';
 import api from '../../api/client';
+import DateNavigator from '../../components/cpc/DateNavigator';
+import DateRangePicker from '../../components/cpc/DateRangePicker';
+import PeriodSelector from '../../components/cpc/PeriodSelector';
+import { ymd } from '../../utils/format';
+import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
+import { resolveRange, yesterdayStr } from '../../utils/periodRange';
+
+// KST 기준 오늘
+function todayStrKST(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+}
 
 interface Row {
   no: number; login_id: string; seller_name: string; shop_name?: string; balance: number;
@@ -19,35 +30,48 @@ interface DashResp {
 }
 
 const fmt = (n: number) => (n || 0).toLocaleString();
-const sv = (d: Date) => d.toLocaleDateString('sv');
-type PMode = 'day' | 'month' | 'year' | 'range';
 
 export default function GmarketDashboard() {
   const navigate = useNavigate();
   const [data, setData] = useState<DashResp | null>(null);
   const [loading, setLoading] = useState(true);
-  const [mode, setMode] = useState<PMode>('month');
-  const [from, setFrom] = useState(sv(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
-  const [to, setTo] = useState(sv(new Date()));
+  // Overview/스마트스토어/11번가와 동일한 기본 진입 화면(당월)·프리셋으로 통일
+  const [mode, setMode] = useState<PeriodMode>('monthly');
+  const [date, setDate] = useState(todayStrKST());
+  const [rangeStart, setRangeStart] = useState(todayStrKST());
+  const [rangeEnd, setRangeEnd] = useState(todayStrKST());
   const [sortKey, setSortKey] = useState<string>('no');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [costModal, setCostModal] = useState<{ seller: string; type?: string } | null>(null);
   const [market, setMarket] = useState<'gmarket' | 'auction' | 'combined'>('combined');
 
-  const applyMode = (m: PMode) => {
-    const now = new Date();
-    if (m === 'day') { setFrom(sv(now)); setTo(sv(now)); }
-    else if (m === 'month') { setFrom(sv(new Date(now.getFullYear(), now.getMonth(), 1))); setTo(sv(now)); }
-    else if (m === 'year') { setFrom(`${now.getFullYear()}-01-01`); setTo(sv(now)); }
-    setMode(m);
+  const { from, to } = resolveRange(mode, date, rangeStart, rangeEnd);
+
+  const prevDate = () => {
+    const d = new Date(date);
+    if (mode === 'yearly') d.setFullYear(d.getFullYear() - 1);
+    else if (mode === 'monthly') d.setMonth(d.getMonth() - 1);
+    else d.setDate(d.getDate() - 1);
+    setDate(ymd(d));
   };
-  const setYesterday = () => {
-    const d = new Date(); d.setDate(d.getDate() - 1); const s = sv(d);
-    setFrom(s); setTo(s); setMode('day');
+  const nextDate = () => {
+    const d = new Date(date);
+    if (mode === 'yearly') d.setFullYear(d.getFullYear() + 1);
+    else if (mode === 'monthly') d.setMonth(d.getMonth() + 1);
+    else d.setDate(d.getDate() + 1);
+    const next = ymd(d);
+    if (next <= todayStrKST()) setDate(next);
   };
-  const shiftDay = (delta: number) => {
-    const b = new Date((to || sv(new Date())) + 'T00:00:00'); b.setDate(b.getDate() + delta);
-    const s = sv(b); setFrom(s); setTo(s); setMode('day');
+  const goToday = () => setDate(todayStrKST());
+
+  const pickPeriod = (preset: PeriodPreset) => {
+    const today = todayStrKST();
+    if (preset === 'today') { setMode('daily'); setDate(today); }
+    else if (preset === 'yesterday') { setMode('daily'); setDate(yesterdayStr()); }
+    else if (preset === 'monthly') { setMode('monthly'); setDate(today); }
+    else if (preset === 'yearly') { setMode('yearly'); setDate(today); }
+    else if (preset === 'recent30') setMode('recent30');
+    else setMode('range');
   };
 
   const load = useCallback(async () => {
@@ -111,10 +135,6 @@ export default function GmarketDashboard() {
   const Th = ({ k, label, left }: { k: string; label: string; left?: boolean }) => (
     <th className={`${cell} ${left ? 'text-left' : 'text-right'} cursor-pointer select-none hover:bg-[#eee]`} onClick={() => sortBy(k)}>{label}{arrow(k)}</th>
   );
-  const pbtn = (m: PMode, label: string) => (
-    <button onClick={() => applyMode(m)} className={`px-2.5 py-1 rounded text-[12px] font-semibold ${mode === m ? 'bg-[#00a651] text-white' : 'bg-white border text-[#555]'}`}>{label}</button>
-  );
-
   const Card = ({ icon, label, value, color }: any) => (
     <div className="bg-white border border-[#e0e0e0] rounded-lg px-4 py-3 flex items-center gap-3">
       <div className="p-2 rounded-lg" style={{ background: color + '1a', color }}>{icon}</div>
@@ -130,14 +150,15 @@ export default function GmarketDashboard() {
         {loading && <span className="text-[11px] text-[#999] animate-pulse">로딩중...</span>}
         <div className="ml-auto flex flex-wrap items-center gap-1.5 text-[12px]">
           <button onClick={load} className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#00a651] text-white rounded font-semibold"><RefreshCw size={13} /> 새로고침</button>
-          {pbtn('day', '오늘')}
-          <button onClick={setYesterday} className={`px-2.5 py-1 rounded text-[12px] font-semibold ${from === to && from !== sv(new Date()) ? 'bg-[#00a651] text-white' : 'bg-white border text-[#555]'}`}>어제</button>
-          {pbtn('month', '월간')}{pbtn('year', '년간')}{pbtn('range', '기간별')}
-          <button onClick={() => shiftDay(-1)} title="하루 전" className="px-2 py-1 rounded text-[12px] bg-white border text-[#555]">◀</button>
-          <input type="date" value={from} onChange={e => { setFrom(e.target.value); setMode('range'); }} className="border rounded px-2 py-1" />
-          <span>~</span>
-          <input type="date" value={to} onChange={e => { setTo(e.target.value); setMode('range'); }} className="border rounded px-2 py-1" />
-          <button onClick={() => shiftDay(1)} title="하루 후" className="px-2 py-1 rounded text-[12px] bg-white border text-[#555]">▶</button>
+          {mode === 'range' ? (
+            <DateRangePicker startDate={rangeStart} endDate={rangeEnd}
+              onStartChange={setRangeStart} onEndChange={setRangeEnd} onSearch={load} />
+          ) : mode === 'recent30' ? (
+            <span className="text-[12px] font-semibold text-[#333]">최근 30일</span>
+          ) : (
+            <DateNavigator date={date} onPrev={prevDate} onNext={nextDate} onToday={goToday} onDateChange={setDate} periodMode={mode} />
+          )}
+          <PeriodSelector mode={mode} date={date} onPick={pickPeriod} />
           <button onClick={() => navigate('/gmarket-my')} className="px-2.5 py-1 bg-[#9333ea] text-white rounded font-semibold">상품목록</button>
           <button onClick={() => navigate('/gmarket-adgroup')} className="px-2.5 py-1 bg-[#e67700] text-white rounded font-semibold">광고그룹별</button>
           <button onClick={() => navigate('/gmarket-roas')} className="px-2.5 py-1 bg-[#2563eb] text-white rounded font-semibold">지마켓/옥션 상품 ROAS</button>
