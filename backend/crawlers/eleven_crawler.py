@@ -326,6 +326,17 @@ def _parse_int_safe(text):
         return 0
 
 
+def _office_val(driver, label, timeout=2.5):
+    """절대경로 XPath 대신 화면에 보이는 라벨 텍스트를 기준으로 값을 찾는다.
+    2026-07 셀러오피스 메인 페이지 개편으로 li 인덱스가 전부 밀려 기존 절대경로가
+    깨졌음(예: '셀러포인트' 실제값이 있어도 point=0으로 저장됨) → 라벨 상대탐색으로 교체.
+    항목마다 count 요소가 title div의 형제(캐시/포인트)이거나 title div 내부 자식(상품/한도/판매금지)
+    인 두 가지 마크업이 섞여 있어, label이 속한 li 전체를 앵커로 잡아 첫 count 요소를 찾는다."""
+    xp = (f"//li[div[contains(@class,'title')]/span[normalize-space(text())='{label}']]"
+          f"//*[contains(@class,'count')][1]//a")
+    return _get_text(driver, xp, timeout=timeout)
+
+
 def _collect_office(driver, login_id):
     """로그인된 상태에서 메인 페이지 → 14개 항목 수집"""
     data = {k: 0 for k in (
@@ -344,22 +355,40 @@ def _collect_office(driver, login_id):
         pass
     time.sleep(1.5)
 
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.7);")
-    time.sleep(1)
+    cash_txt = _office_val(driver, '셀러캐시')
+    point_txt = _office_val(driver, '셀러포인트')
 
-    data['cash'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['cash']))
-    data['point'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['point']))
-    data['ad_balance'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['ad']))
+    # '상품' 위젯은 스크롤로 뷰포트에 들어와야 렌더되는 지연로딩 영역이라 즉시 조회하면 미검출됨.
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+    time.sleep(1.5)
+    products_txt = _office_val(driver, '판매중', timeout=4)
+    limit_txt = _office_val(driver, '판매 중 상품 보유 한도', timeout=4)
+    banned_txt = _office_val(driver, '판매금지', timeout=4)
 
-    driver.execute_script("window.scrollTo(0, 0);")
-    time.sleep(1)
+    # 핵심 항목을 전부 못 찾으면 페이지 구조가 또 바뀐 것 → 조용히 0 저장하지 않고
+    # 예외를 던져 '오피스 수집 실패' 로그로 남긴다(이전엔 여기서 그냥 0을 저장해 계정이
+    # 실제론 정상인데 포인트/상품수가 0으로 보이는 오탐이 발생했음).
+    if not any((cash_txt, point_txt, products_txt)):
+        raise RuntimeError('오피스 핵심 항목(셀러캐시/셀러포인트/판매중) 전부 미검출 — 페이지 구조 변경 의심')
 
-    data['product_limit'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['product_limit']))
-    data['products'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['products']))
-    data['banned'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['banned']))
+    data['cash'] = _parse_int_safe(cash_txt)
+    data['point'] = _parse_int_safe(point_txt)
+    data['products'] = _parse_int_safe(products_txt)
+    data['product_limit'] = _parse_int_safe(limit_txt)
+    data['banned'] = _parse_int_safe(banned_txt)
     data['available'] = max(data['product_limit'] - data['products'], 0)
-    data['overdue'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['overdue']))
-    data['undelivered'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['undelivered']))
+
+    # 광고잔액/연체/미배송은 신 레이아웃에서 위치를 아직 확인 못함 — 기존 절대경로로
+    # 시도만 하고 실패해도 무시(기존에도 이미 0으로 저장되던 항목, 회귀 아님).
+    try:
+        data['ad_balance'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['ad']))
+    except Exception:
+        pass
+    try:
+        data['overdue'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['overdue']))
+        data['undelivered'] = _parse_int_safe(_get_text(driver, _OFFICE_XPATHS['undelivered']))
+    except Exception:
+        pass
     # 평점 + 퍼센트 합쳐 저장 ("우수 97.3%")
     import re as _re_pct
     def _rate_pct(key):

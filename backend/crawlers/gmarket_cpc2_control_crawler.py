@@ -174,9 +174,13 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
 
 def run_control(action, source='manual', log_fn=None, account_filter=None, include_cpc1=False):
     """간편광고(스마트) ON/OFF. include_cpc1=True면 같은 로그인으로 일반광고(일반그룹)도 함께 제어."""
-    from apps.cpc.models import CrawlerAccount, Cpc2History, GmarketCpcAdStatus, CrawlerLog
+    from apps.cpc.models import CrawlerAccount, Cpc2History, GmarketCpcAdStatus, CrawlerLog, protected_login_ids
     from apps.cpc import eleven_block_guard as guard
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
+    # 테스트/타사 계정은 account_filter로 명시 지정해도 절대 제어하지 않음(뷰어·다운로드만 허용)
+    protected = protected_login_ids('gmarket')
+    if protected:
+        qs = qs.exclude(login_id__in=protected)
     if account_filter:
         acct_map = {a.login_id: a for a in qs.filter(login_id__in=account_filter)}
         qs = [acct_map[lid] for lid in account_filter if lid in acct_map]
@@ -254,11 +258,13 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
                         cpc2_after=after_val,
                         source=source,
                     )
-                    if not result.get('skipped'):
-                        GmarketCpcAdStatus.objects.update_or_create(
-                            gmarket_id=acct.login_id,
-                            defaults={'cpc2_on': result.get('after_on', 0), 'cpc2_off': result.get('after_off', 0)}
-                        )
+                    # 스킵(이미 ON/OFF)이어도 현재 값으로 상태 테이블은 항상 갱신
+                    cur_on = result.get('after_on', result.get('before_on', 0))
+                    cur_off = result.get('after_off', result.get('before_off', 0))
+                    GmarketCpcAdStatus.objects.update_or_create(
+                        gmarket_id=acct.login_id,
+                        defaults={'cpc2_on': cur_on, 'cpc2_off': cur_off}
+                    )
                 results.append(result)
                 CrawlerLog.objects.create(platform='gmarket', level='success',
                     message=f'간편광고 {action}: {result.get("before_on") if result else "-"}→{after_val}',

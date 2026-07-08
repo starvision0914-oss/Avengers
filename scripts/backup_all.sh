@@ -40,7 +40,18 @@ grep -q 'sql.gz' .gitignore 2>/dev/null || echo '*.sql.gz' >> .gitignore
 git add -A 2>>"$LOG"
 if ! git diff --cached --quiet 2>/dev/null; then
   git -c user.name='avengers-backup' -c user.email='backup@avengers.local' commit -m "auto backup ${DAY}" >> "$LOG" 2>&1
-  git push origin main >> "$LOG" 2>&1 && echo "$(date '+%F %T') git push 완료" >> "$LOG" || echo "$(date '+%F %T') git push 실패" >> "$LOG"
+  if git push origin main >> "$LOG" 2>&1; then
+    echo "$(date '+%F %T') git push 완료" >> "$LOG"
+  else
+    echo "$(date '+%F %T') git push 실패" >> "$LOG"
+    cd "$REPO/backend" && /usr/bin/python3 -c "
+import django, os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings')
+django.setup()
+from apps.cpc.eleven_block_guard import _send_telegram_alert
+_send_telegram_alert('🚨 [백업] GitHub git push 실패 — 로컬 커밋은 됐지만 원격 백업 안 됨. 토큰 만료 가능성, 확인 필요.')
+" >> "$LOG" 2>&1
+  fi
 else
   echo "$(date '+%F %T') 변경 없음 — 커밋 생략" >> "$LOG"
 fi

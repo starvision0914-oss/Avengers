@@ -105,15 +105,18 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
                 if lid in cpc2_accounts:
                     try:
                         result = control_one(driver, lid, action, source, log_fn)
-                        if result and not result.get('skipped'):
-                            Cpc2History.objects.create(
-                                gmarket_id=lid, action=action,
-                                cpc2_before=result.get('before_on', 0),
-                                cpc2_after=result.get('after_on', 0), source=source)
+                        if result and not result.get('stopped'):
+                            if not result.get('skipped'):
+                                Cpc2History.objects.create(
+                                    gmarket_id=lid, action=action,
+                                    cpc2_before=result.get('before_on', 0),
+                                    cpc2_after=result.get('after_on', 0), source=source)
+                            # 스킵(이미 ON/OFF)이어도 현재 값으로 상태 테이블은 항상 갱신
+                            cur_on = result.get('after_on', result.get('before_on', 0))
+                            cur_off = result.get('after_off', result.get('before_off', 0))
                             GmarketCpcAdStatus.objects.update_or_create(
                                 gmarket_id=lid,
-                                defaults={'cpc2_on': result.get('after_on', 0),
-                                          'cpc2_off': result.get('after_off', 0)})
+                                defaults={'cpc2_on': cur_on, 'cpc2_off': cur_off})
                         _log(log_fn, f'[{lid}] 간편 {action} 완료')
                     except Exception as e:
                         _log(log_fn, f'[{lid}] 간편 제어 오류: {e}')
@@ -123,13 +126,18 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
                         try:
                             from crawlers.gmarket_cpc1_control_crawler import control_one as _cpc1_one
                             r1 = _cpc1_one(driver, lid, action, source, log_fn)
-                            a1 = r1.get('after_on') if r1 else None
-                            if a1 is None:
-                                a1 = r1.get('before_on', 0) if r1 else 0
-                            Cpc2History.objects.create(
-                                gmarket_id=lid, action=action,
-                                cpc2_before=r1.get('before_on', 0) if r1 else 0,
-                                cpc2_after=a1, source=f'{source}/일반')
+                            if r1:
+                                if not r1.get('skipped'):
+                                    Cpc2History.objects.create(
+                                        gmarket_id=lid, action=action,
+                                        cpc2_before=r1.get('before_on', 0),
+                                        cpc2_after=r1.get('after_on', 0), source=f'{source}/일반')
+                                cur1_on = r1.get('after_on', r1.get('before_on', 0))
+                                cur1_off = r1.get('after_off', r1.get('before_off', 0))
+                                GmarketCpcAdStatus.objects.update_or_create(
+                                    gmarket_id=lid,
+                                    defaults={'cpc1_on': cur1_on, 'cpc1_off': cur1_off})
+                            a1 = cur1_on if r1 else '-'
                             CrawlerLog.objects.create(
                                 platform='gmarket', level='success',
                                 message=f'일반광고 {action}: {r1.get("before_on") if r1 else "-"}→{a1}',

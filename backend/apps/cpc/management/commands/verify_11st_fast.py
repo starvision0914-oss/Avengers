@@ -67,6 +67,28 @@ class Command(BaseCommand):
         parser.add_argument('--out', type=str, default='/tmp/11st_fast_result.json')
 
     def handle(self, *args, **opts):
+        import os
+        # 대시보드 "만료계정 자동인증" 버튼(verify_11st_logins, 같은 락파일 사용)과 동시에 돌면
+        # 같은 계정에 로그인 세션이 충돌해 OTP 문자 중복 발송 + 일부 계정 인증 실패로 이어짐
+        # (2026-07-08 실제 발생: 10:00 크론과 10:02 수동실행이 겹침). 겹치면 이 크론은 양보.
+        lock = '/tmp/eleven_verify_otp_running.lock'
+        if os.path.exists(lock):
+            self.stdout.write(f'⏭️ 다른 11번가 OTP 인증이 진행 중 — 건너뜀 ({lock})')
+            return
+        try:
+            from pathlib import Path as _Path
+            _Path(lock).write_text(f'{os.getpid()}|verify_11st_fast')
+        except Exception:
+            pass
+        try:
+            self._run(opts)
+        finally:
+            try:
+                os.remove(lock)
+            except Exception:
+                pass
+
+    def _run(self, opts):
         qs = CrawlerAccount.objects.filter(
             platform='11st', is_active=True
         ).order_by('display_order', 'id')

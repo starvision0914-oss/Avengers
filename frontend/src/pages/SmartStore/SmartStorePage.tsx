@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw, Settings, Package, ChevronLeft,
   ShoppingBag, Lock, BarChart3, Clock, TrendingUp, AlertTriangle, X, ChevronDown, ChevronRight,
-  Sparkles,
+  Sparkles, Download,
 } from 'lucide-react';
 import {
   getAccounts, getDashboard, getProductStats, getCleanViolations, getCleanViolationDetail,
@@ -303,7 +303,7 @@ export default function SmartStorePage() {
           <div className="overflow-x-auto">
             <table className="w-full text-[15px]">
               <thead>
-                <tr className="text-[#666] bg-[#fafafa] sticky top-[52px] z-30">
+                <tr className="text-[#666] bg-[#fafafa]">
                   <th className="px-3 py-2.5 text-center font-semibold text-[#aaa] w-10">#</th>
                   <th className="px-4 py-2.5 text-left font-semibold">계정</th>
                   <th className="px-4 py-2.5 text-right font-semibold" style={{ color: SS }}>매출</th>
@@ -318,7 +318,7 @@ export default function SmartStorePage() {
                   <th className="px-4 py-2.5 text-center font-semibold">비고</th>
                 </tr>
                 {byAcc.length > 0 && (
-                  <tr className="font-bold text-[#333] bg-[#f5f5f5] sticky top-[93px] z-20 shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
+                  <tr className="font-bold text-[#333] bg-[#f5f5f5] shadow-[0_1px_3px_rgba(0,0,0,0.08)]">
                     <td className="px-3 py-2.5"></td>
                     <td className="px-4 py-2.5">합계 ({byAcc.length}개)</td>
                     <td className="px-4 py-2.5 text-right" style={{ color: SS }}>{fmt(s?.total_excel_revenue || 0)}</td>
@@ -699,10 +699,37 @@ function PredictedViolationModal({ onClose }: { onClose: () => void }) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [details, setDetails] = useState<Record<string, PredictedViolationDetail>>({});
   const [detailLoading, setDetailLoading] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     getPredictedViolations().then(setSummary).catch(() => setSummary([])).finally(() => setLoading(false));
   }, []);
+
+  const exportExcel = async () => {
+    if (!summary.length) { alert('대상이 없습니다.'); return; }
+    setExporting(true);
+    try {
+      const all = await Promise.all(summary.map(s => details[s.key] ? Promise.resolve(details[s.key]) : getPredictedViolationDetail(s.key)));
+      const head = ['분류', '신뢰도', '계정', '상품명', '판매가', '상품번호', '채널상품번호'];
+      const body = all.flatMap((d, i) => {
+        const s = summary[i];
+        const confLabel = _CONFIDENCE_STYLE[s.confidence]?.label || s.confidence;
+        return d.items.map(it => [s.label, confLabel, it.account_name, it.name, it.sale_price, it.product_no, it.channel_product_no]);
+      });
+      const csv = '﻿' + [head, ...body].map(row => row.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
+      a.href = url; a.download = `스마트스토어_예상클린위반_${today}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('다운로드 실패');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const toggle = (key: string) => {
     if (openKey === key) { setOpenKey(null); return; }
@@ -728,7 +755,11 @@ function PredictedViolationModal({ onClose }: { onClose: () => void }) {
             <div className="text-[16px] font-bold text-[#222]">전계정 예상 클린위반 품목</div>
             <div className="text-[13px] text-[#888]">실제 위반이력 패턴(상품명 휴리스틱) 기반 자동 스캔 · 확정 위반 아님, 수동 확인 필요</div>
           </div>
-          <button onClick={onClose} className="ml-auto p-1.5 rounded hover:bg-[#f5f5f5] transition-colors">
+          <button onClick={exportExcel} disabled={loading || exporting || !summary.length}
+            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-[13px] font-semibold bg-[#15803d] text-white rounded hover:bg-[#166534] disabled:opacity-50 disabled:cursor-not-allowed">
+            <Download size={14} /> {exporting ? '다운로드 중...' : '엑셀 다운로드'}
+          </button>
+          <button onClick={onClose} className="p-1.5 rounded hover:bg-[#f5f5f5] transition-colors">
             <X size={18} className="text-[#888]" />
           </button>
         </div>

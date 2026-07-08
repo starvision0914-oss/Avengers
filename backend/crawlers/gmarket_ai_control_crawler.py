@@ -186,10 +186,14 @@ def control_account(driver, login_id, action, source='manual', log_fn=None):
 
 def run_control(action, source='manual', log_fn=None, account_filter=None):
     """전체 계정 AI ON/OFF 제어"""
-    from apps.cpc.models import CrawlerAccount, GmarketAiAdHistory, CrawlerLog
+    from apps.cpc.models import CrawlerAccount, GmarketAiAdHistory, CrawlerLog, protected_login_ids
 
     from apps.cpc import eleven_block_guard as guard
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
+    # 테스트/타사 계정은 account_filter로 명시 지정해도 절대 제어하지 않음(뷰어·다운로드만 허용)
+    protected = protected_login_ids('gmarket')
+    if protected:
+        qs = qs.exclude(login_id__in=protected)
     if account_filter:
         qs = qs.filter(login_id__in=account_filter)
     else:

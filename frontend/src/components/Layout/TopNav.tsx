@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, BarChart3, Users, ShoppingCart, CheckSquare,
-  MessageCircle, Mail, Settings, LogOut, Bot, PieChart, MessageSquare,
+  LayoutDashboard, Users, ShoppingCart, CheckSquare,
+  MessageCircle, Mail, Settings, LogOut, Bot, MessageSquare,
   Sliders, Smartphone, Leaf, UserCog, Store, Package, MoreHorizontal,
-  BadgeCheck, Tags, ShoppingBag, Dices, Layers, Map, Receipt,
+  BadgeCheck, Tags, Dices, Layers, Map, Receipt, Truck,
 } from 'lucide-react';
 import { logout } from '../../api/auth';
 
@@ -12,14 +12,13 @@ const primary = [
   { to: '/overview', icon: Layers, label: '통합현황' },
   { to: '/ownerclan', icon: Package, label: '예비상품' },
   { to: '/myproduct', icon: BadgeCheck, label: '나의 상품' },
-  { to: '/gmarket-my', icon: ShoppingBag, label: '지마켓상품' },
   { to: '/st11', icon: Store, label: '11번가' },
   { to: '/gmarket', icon: Store, label: '지마켓' },
   { to: '/smartstore', icon: ShoppingCart, label: '스스' },
-  { to: '/cpc', icon: BarChart3, label: 'CPC' },
+  { to: '/coupang', icon: Truck, label: '쿠팡' },
+  { to: '/lotteon', icon: ShoppingCart, label: '롯데ON' },
   { to: '/sales', icon: ShoppingCart, label: '매출' },
   { to: '/tax', icon: Receipt, label: '세무' },
-  { to: '/analysis', icon: PieChart, label: '분석' },
   { to: '/ad-settings', icon: Sliders, label: '광고설정' },
   { to: '/speedgo', icon: Leaf, label: '스피드고' },
   { to: '/keyword', icon: Tags, label: '키워드추출기' },
@@ -28,7 +27,6 @@ const primary = [
 const more = [
   { to: '/dashboard', icon: LayoutDashboard, label: '대시보드' },
   { to: '/roadmap', icon: Map, label: '개발로드맵' },
-  { to: '/eleven-my', icon: ShoppingBag, label: '11번가 나의 상품' },
   { to: '/accounts', icon: Users, label: '판매자 계정' },
   { to: '/crawler-accounts', icon: UserCog, label: 'ID 관리' },
   { to: '/crawler', icon: Bot, label: '크롤러' },

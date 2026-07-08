@@ -677,19 +677,21 @@ class ElevenSummaryView(views.APIView):
         ):
             stats_map[s['seller_id']] = s
 
-        # 매출/구매가/상품순익 (SalesRecord, 같은 기간, 셀러명 기준) — 순수익 계산용
+        # 매출/구매가/상품순익 (SalesRecord, 같은 기간, 셀러ID 기준) — 순수익 계산용
         # 11번가 대시보드이므로 platform='11st' 매출만 합산 (지마켓/스마트스토어 등 제외)
+        # ※ 셀러명(seller_name)은 세무 통합 등을 위해 수시로 바뀔 수 있어 매칭 키로 쓰면 이름을
+        #   바꾸는 순간 매출이 0으로 끊긴다 — login_id에 해당하는 seller_id(불변)로 매칭한다.
         from apps.sales.models import SalesRecord
         sales_map = {}
         for r in SalesRecord.objects.filter(
             platform='11st',
             order_date__gte=start.date(), order_date__lt=end.date()
-        ).values('seller__seller_name').annotate(
+        ).values('seller__seller_id').annotate(
             rev=Sum('total_price'), prof=Sum('net_profit'), cnt=Count('id')
         ):
-            nm = r['seller__seller_name']
-            if nm:
-                sales_map[nm] = r
+            sidk = r['seller__seller_id']
+            if sidk:
+                sales_map[sidk] = r
 
         # 이전 크롤링 시점 CPC (증감 계산용) — CrawlerLog에서 직전 성공 시각 조회
         from .models import CrawlerLog
@@ -800,9 +802,9 @@ class ElevenSummaryView(views.APIView):
                 'cookie_saved_at': acct.cookie_saved_at.isoformat() if acct.cookie_saved_at else None,
             }
 
-            # 매출/상품순익/순수익 (매출데이터 기준, 셀러명 매칭)
+            # 매출/상품순익/순수익 (매출데이터 기준, 셀러ID=login_id 매칭 — 이름 변경에 안전)
             # total_price=정산받는금액(매출), net_profit=정산받는금액-구매가(상품순익), 순수익=상품순익-광고비
-            srow = sales_map.get(acct.seller_name or sid)
+            srow = sales_map.get(sid)
             sales_rev = (srow['rev'] or 0) if srow else 0
             prod_profit = (srow['prof'] or 0) if srow else 0
             buy_cost = sales_rev - prod_profit   # 구매가 = 매출 - 상품순익
@@ -861,10 +863,11 @@ class ElevenSummaryView(views.APIView):
             if acct.last_crawled_at and (not last_collected_at or acct.last_crawled_at > last_collected_at):
                 last_collected_at = acct.last_crawled_at
 
-        # 매출은 있으나 대시보드(크롤계정 셀러명)에 매칭 안 된 쇼핑몰 — 누락 확인용
-        matched_names = set()
-        for acct in accounts:
-            matched_names.add(acct.seller_name or acct.login_id)
+        # 매출은 있으나 대시보드(크롤계정)에 매칭 안 된 쇼핑몰 — 누락 확인용.
+        # sales_map은 seller__seller_id(login_id) 키인데, 예전엔 여기를 seller_name(상호)
+        # 기준으로 비교해서 정상 매칭된 계정까지 전부 '미매칭'으로 오판 → 합계에 이중집계됨
+        # (2026-07-08 발견: 순수익 합계가 개별 셀러 합과 43만원+ 차이나던 원인).
+        matched_names = {acct.login_id for acct in accounts}
         unmatched_shops = []
         unmatched_sales = 0
         unmatched_cost = 0
@@ -1739,12 +1742,15 @@ class ElevenLossDeleteView(views.APIView):
             return Response({'error': '날짜 형식 오류'}, status=400)
         rmax = float(d.get('roas_max', 100)); cmin = float(d.get('cost_min', 2000)); kmin = float(d.get('clicks_min', 10))
         real = str(d.get('real', '')).lower() in ('1', 'true', 'yes')
+        stop_only = str(d.get('stop_only', '')).lower() in ('1', 'true', 'yes')
         # 실삭제 활성화됨. 프론트에서 "검증(dry-run) → 확인 → 실삭제" 다단계 확인을 거침.
         # 안전: 실삭제도 limit(소량)을 받아 첫 실행은 소수만 삭제해 실제 작동을 검증할 수 있음.
         VERIFIED = True
         if real and not VERIFIED:
             return Response({'status': 'blocked',
                              'message': '⚠️ 실삭제는 아직 비활성화 상태입니다. 1상품 dry-run으로 검증한 뒤 활성화됩니다.'}, status=400)
+        from apps.cpc.models import protected_login_ids
+        stop_flag = ' --stop-only' if stop_only else ''
         # ★ 상품번호 지정 삭제(나의상품 선택삭제) — date/적자 산출 없이 그 상품만
         pnos = [re.sub(r'\D', '', str(p)) for p in (d.get('product_nos') or [])]
         pnos = [p for p in pnos if p]
@@ -1752,7 +1758,10 @@ class ElevenLossDeleteView(views.APIView):
             eid = str(d.get('eid') or '').strip()
             if not eid or not re.match(r'^[A-Za-z0-9_]+$', eid):
                 return Response({'error': '상품지정 삭제는 eid(계정) 필수'}, status=400)
-            a = f'manage.py delete_loss_products --eid {eid} --product-nos ' + ' '.join(pnos[:300])
+            if eid in protected_login_ids('11st'):
+                return Response({'status': 'blocked',
+                                 'message': f'⛔ {eid}는 테스트/타사 계정이라 조치가 차단됩니다(조회·다운로드만 허용).'}, status=400)
+            a = f'manage.py delete_loss_products --eid {eid} --product-nos ' + ' '.join(pnos[:300]) + stop_flag
             if real:
                 a += ' --real'
             sc = (f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {a} >> /tmp/delete_loss.log 2>&1')
@@ -1761,18 +1770,26 @@ class ElevenLossDeleteView(views.APIView):
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception as e:
                 return Response({'status': 'error', 'error': str(e)}, status=500)
+            action_label = '판매중지' if stop_only else ('실삭제' if real else '검증(dry-run)')
             return Response({'status': 'started',
-                             'message': f'🗑 11번가 지정상품 {len(pnos)}개 {"실삭제" if real else "검증(dry-run)"} 시작 — 텔레그램/로그로 확인하세요.'})
+                             'message': f'🛑 11번가 지정상품 {len(pnos)}개 {action_label} 시작 — 텔레그램/로그로 확인하세요.'})
         try:
             lim = int(d.get('limit')) if str(d.get('limit') or '').strip() else None
         except (ValueError, TypeError):
             lim = None
+        eid = str(d.get('eid') or '').strip()
+        if eid and eid in protected_login_ids('11st'):
+            return Response({'status': 'blocked',
+                             'message': f'⛔ {eid}는 테스트/타사 계정이라 조치가 차단됩니다(조회·다운로드만 허용).'}, status=400)
         # dry-run(real 아님)=1상품 검증 / real+limit=소량 실삭제 / real+limit없음=전체 실삭제
-        limit = 1 if not real else lim
+        # 판매중지(stop_only)는 삭제보다 되돌리기 쉬운 조치라 별도 limit=1 강제 없이 그대로 사용.
+        limit = (1 if not (real or stop_only) else lim)
         args = (f'manage.py delete_loss_products --from {df}'
                 + (f' --to {dt}' if dt else '')
                 + f' --roas-max {rmax} --cost-min {cmin} --clicks-min {kmin}'
+                + (f' --eid {eid}' if eid else '')
                 + (f' --limit {limit}' if limit else '')
+                + stop_flag
                 + (' --real' if real else ''))
         script = (f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {args} '
                   f'>> /tmp/delete_loss.log 2>&1')
@@ -1781,7 +1798,10 @@ class ElevenLossDeleteView(views.APIView):
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             return Response({'status': 'error', 'error': str(e)}, status=500)
-        if real:
+        if stop_only:
+            scope = f'소량 {limit}개(테스트)' if limit else '전체'
+            msg = f'🛑 11번가 판매중지 시작 — {scope}(판매중 상품만 대상). 진행상황은 텔레그램/로그(/tmp/delete_loss.log)로 확인하세요.'
+        elif real:
             scope = f'소량 {limit}개(테스트)' if limit else '전체'
             msg = f'🗑 실삭제 시작 — {scope} 상품을 셀러오피스에서 판매중지+삭제합니다. 진행상황은 텔레그램/로그(/tmp/delete_loss.log)로 확인하세요.'
         else:
@@ -3345,7 +3365,7 @@ class GmarketDashboardView(views.APIView):
         from datetime import datetime, timedelta
         from django.db.models import Count, Sum, Max
         from apps.cpc.models import (CrawlerAccount, GmarketDepositSnapshot,
-                                     GmarketCostHistory, GmarketMyProduct)
+                                     GmarketCostHistory, GmarketMyProduct, GmarketSellerGrade)
         df = request.query_params.get('date_from')
         dt = request.query_params.get('date_to')
         d1 = datetime.strptime(dt, '%Y-%m-%d').date() if _re.match(r'^\d{4}-\d{2}-\d{2}$', dt or '') else timezone.localdate()
@@ -3356,6 +3376,11 @@ class GmarketDashboardView(views.APIView):
             market = 'gmarket'
         accts = list(CrawlerAccount.objects.filter(platform='gmarket', is_active=True, hide_from_dashboard=False)
                      .order_by('display_order', 'login_id'))
+        # 테스트/타사 계정(hide_from_dashboard=True) — 목록 표(합계 제외 별도 섹션)에는 표시하되
+        # 대시보드 계정 수·합계 카드에는 절대 섞이지 않도록 accts와 분리해서 관리.
+        hidden_test_accts = list(CrawlerAccount.objects.filter(
+            platform='gmarket', is_active=True, hide_from_dashboard=True, is_test_account=True
+        ).order_by('display_order', 'login_id'))
         # 옥션 뷰: 옥션에 없는 공유ESM 중복 서브아이디만 제외(나머지 계정은 유지).
         # 이 계정들은 옥션 상품이 복제돼 있을 뿐 옥션 거래·매출이 없음. 지마켓 계정 레코드는 보존(삭제 아님).
         if market == 'auction':
@@ -3385,7 +3410,7 @@ class GmarketDashboardView(views.APIView):
         # market('gmarket'/'auction')로 분리 집계해 탭별 정확한 값 표시.
         from collections import defaultdict
         other = 'auction' if market == 'gmarket' else ('gmarket' if market == 'auction' else None)
-        acct_ids = [a.login_id for a in accts]
+        acct_ids = [a.login_id for a in accts] + [a.login_id for a in hidden_test_accts]
         cost = defaultdict(lambda: {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0, 'server': 0, 'cnt': 0})
         for r in (GmarketCostHistory.objects
                   .filter(seller_id__in=acct_ids,
@@ -3416,6 +3441,14 @@ class GmarketDashboardView(views.APIView):
             GmarketMyProduct.objects.values('account__login_id').annotate(n=Count('id')))}
         prod_mkt = {(r['account__login_id'], r['market']): r['n'] for r in (
             GmarketMyProduct.objects.values('account__login_id', 'market').annotate(n=Count('id')))}
+        # 등록가능수량(등급별 최대 상품등록수) — 최신 수집분만
+        max_items = {}
+        for g in (GmarketSellerGrade.objects.values('gmarket_id')
+                  .annotate(m=Max('collected_at'))):
+            last = (GmarketSellerGrade.objects.filter(gmarket_id=g['gmarket_id'], collected_at=g['m'])
+                    .values('max_item_count').first())
+            if last:
+                max_items[g['gmarket_id']] = last['max_item_count']
 
         # 계정별 매출/순수익 — SalesRecord(지마켓+옥션 플랫폼, 셀러 login_id, 기간)
         # 공유ESM 서브아이디(활성계정 아님)의 매출은 상호(shop_name)로 부모 활성계정에 합산.
@@ -3429,10 +3462,10 @@ class GmarketDashboardView(views.APIView):
         sales = {}
         try:
             from apps.sales.models import SalesRecord
-            active_lids = {a.login_id for a in accts}
+            active_lids = {a.login_id for a in accts} | {a.login_id for a in hidden_test_accts}
             # 상호 → 활성 login_id 인덱스 (셀러명 + 활성계정 대표 매출 shop_name)
             name2lid = {}
-            for a in accts:
+            for a in accts + hidden_test_accts:
                 if a.seller_name:
                     name2lid.setdefault(_norm_shop(a.seller_name), a.login_id)
             for r in (SalesRecord.objects.filter(platform__in=['gmarket', 'auction'],
@@ -3484,11 +3517,7 @@ class GmarketDashboardView(views.APIView):
         except Exception:
             pass
 
-        rows = []
-        tot = {'ad_spend': 0, 'cpc_spend': 0, 'ai_spend': 0, 'server_spend': 0,
-               'auction_spend': 0, 'balance': 0, 'product_count': 0,
-               'revenue': 0, 'profit': 0, 'net_after_ad': 0, 'orders': 0}
-        for a in accts:
+        def _row_for(a):
             lid = a.login_id
             b = bal.get(lid) or {}
             c = cost.get(lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0, 'server': 0, 'cnt': 0}
@@ -3511,7 +3540,7 @@ class GmarketDashboardView(views.APIView):
             sl = sales.get(lid) or {'revenue': 0, 'profit': 0, 'orders': 0}
             revenue = sl['revenue']; profit = sl['profit']
             net_after_ad = profit - spend   # 실질순이익 = 순수익(매출-원가) - 광고비
-            rows.append({
+            return {
                 'no': a.display_order, 'login_id': lid, 'seller_name': a.seller_name,
                 'shop_name': shop_map.get(lid, ''),
                 'balance': b.get('total_balance') or 0,
@@ -3520,23 +3549,36 @@ class GmarketDashboardView(views.APIView):
                 'ad_count': c['cnt'], 'product_count': pc,
                 'gmarket_products': prod_mkt.get((lid, 'gmarket'), 0),
                 'auction_products': prod_mkt.get((lid, 'auction'), 0),
+                'max_item_count': max_items.get(lid),
                 'revenue': revenue, 'profit': profit, 'net_after_ad': net_after_ad,
                 'orders': sl['orders'],
                 'margin': round(net_after_ad * 100.0 / revenue, 1) if revenue else 0,  # 순수익(광고비 차감 후) 마진
                 'roas': round(revenue / spend, 1) if spend else 0,
                 'collected_at': b.get('collected_at').isoformat() if b.get('collected_at') else None,
-            })
-            tot['ad_spend'] += spend; tot['cpc_spend'] += cpc; tot['ai_spend'] += ai
-            tot['server_spend'] += server; tot['auction_spend'] += auction
+                '_is_sub': bool(a.gmarket_origin_id and a.gmarket_origin_id != a.login_id),
+            }
+
+        rows = []
+        tot = {'ad_spend': 0, 'cpc_spend': 0, 'ai_spend': 0, 'server_spend': 0,
+               'auction_spend': 0, 'balance': 0, 'product_count': 0,
+               'revenue': 0, 'profit': 0, 'net_after_ad': 0, 'orders': 0, 'max_item_count': 0}
+        for a in accts:
+            r = _row_for(a)
+            is_sub = r.pop('_is_sub')
+            rows.append(r)
+            tot['ad_spend'] += r['ad_spend']; tot['cpc_spend'] += r['cpc_spend']; tot['ai_spend'] += r['ai_spend']
+            tot['server_spend'] += r['server_spend']; tot['auction_spend'] += r['auction_spend']
             # 잔액 합계: 공유ESM 서브계정은 마스터와 같은 지갑(잔액) → 중복합산 방지 위해 서브는 제외(마스터만 1회)
-            _is_sub = bool(a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)
-            if not _is_sub:
-                tot['balance'] += (b.get('total_balance') or 0)
-            tot['product_count'] += pc
-            tot['revenue'] += revenue; tot['profit'] += profit
-            tot['net_after_ad'] += net_after_ad; tot['orders'] += sl['orders']
+            if not is_sub:
+                tot['balance'] += r['balance']
+            tot['product_count'] += r['product_count']
+            tot['max_item_count'] += (r['max_item_count'] or 0)
+            tot['revenue'] += r['revenue']; tot['profit'] += r['profit']
+            tot['net_after_ad'] += r['net_after_ad']; tot['orders'] += r['orders']
         tot['account_count'] = len(accts)
-        return Response({'market': market, 'other_market': other,
+        # 테스트/타사 계정(sglobal2 등) — 대시보드에 데이터는 보여주되 위 합계(tot)에는 절대 포함하지 않음.
+        excluded_rows = [{k: v for k, v in _row_for(a).items() if k != '_is_sub'} for a in hidden_test_accts]
+        return Response({'market': market, 'other_market': other, 'excluded_rows': excluded_rows,
                          'date_from': str(d0), 'date_to': str(d1), 'totals': tot, 'rows': rows})
 
 
@@ -3679,6 +3721,277 @@ class GmarketAdGroupView(views.APIView):
         })
 
 
+_SS_STATUS_MAP = {
+    'SALE': '판매중', 'SUSPENSION': '판매중지', 'OUTOFSTOCK': '품절',
+    'WAIT': '판매대기', 'PROHIBITION': '판매금지', 'UNADMISSION': '미승인',
+}
+_SS_STATUS_REVERSE = {v: k for k, v in _SS_STATUS_MAP.items()}
+
+
+class MyProductsAllView(views.APIView):
+    """11번가+지마켓/옥션+쿠팡+스마트스토어 나의 상품 통합 조회 — 플랫폼 구분 없이 하나의 그리드로 병합.
+    스키마가 다른 여러 테이블 사이의 진짜 SQL UNION은 불가하므로, 각 소스에서 정렬된 상위
+    (page*per_page)개를 가져와 파이썬에서 합쳐 재정렬 후 페이지를 자른다. 내부 도구 규모(페이지
+    깊이가 크지 않음)에서는 정확하고, 아주 깊은 페이지(수천 페이지 너머)에서만 근사치가 된다.
+    쿠팡은 오픈API 등록상품 목록에 판매가/재고 데이터가 없어 해당 컬럼은 빈 값으로 표시된다."""
+    permission_classes = [IsAuthenticated]
+
+    _COMMON_SORT = {'product_name', 'sale_price', 'stock_quantity', 'status_type',
+                     'seller_product_code', 'login_id', 'seller_name', 'synced_at'}
+
+    def get(self, request):
+        import math
+        from django.db.models import Q
+        from apps.cpc.models import ElevenMyProduct, GmarketMyProduct
+
+        page = int(request.query_params.get('page', 1))
+        per_page = int(request.query_params.get('per_page', 50))
+        status_q = request.query_params.get('status') or None
+        search = request.query_params.get('search') or None
+        sort = request.query_params.get('sort') or 'synced_at'
+        order = request.query_params.get('order') or 'desc'
+        needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
+        dedup_on = request.query_params.get('dedup') in ('1', 'true', 'True')
+        if sort not in self._COMMON_SORT:
+            sort = 'synced_at'
+
+        depth = min(page * per_page, 5000)   # 병합 정렬을 위해 각 소스에서 가져올 상한
+
+        # ── 11번가 (status_type은 지마켓과 동일하게 한글 라벨로 저장됨) ──
+        eleven_allowed = True
+        eq = ElevenMyProduct.objects.select_related('account')
+        if status_q:
+            eq = eq.filter(status_type=status_q)
+            if status_q not in ('판매중', '판매중지', '품절', '판매금지'):
+                eleven_allowed = False   # 지마켓 전용 상태(예: 판매불가/판매종료) → 11번가는 대상 없음
+        if search:
+            eq = eq.filter(Q(product_name__icontains=search) | Q(seller_product_code__icontains=search)
+                            | Q(account__login_id__icontains=search) | Q(account__seller_name__icontains=search))
+        if needs_check:
+            eq = eq.filter(cost_diff__lt=0)
+        _E_SORT = {'product_name': 'product_name', 'sale_price': 'sale_price', 'stock_quantity': 'stock_quantity',
+                   'status_type': 'status_type', 'seller_product_code': 'seller_product_code',
+                   'login_id': 'account__login_id', 'seller_name': 'account__seller_name', 'synced_at': 'synced_at'}
+        ef = _E_SORT[sort]
+        eq = eq.order_by(('-' if order == 'desc' else '') + ef, '-id')
+
+        eleven_total = 0
+        eleven_rows = []
+        if eleven_allowed:
+            from django.core.cache import cache as _cache
+            ecnt_key = f"emp_all_count:{status_q}:{search}:{int(needs_check)}"
+            eleven_total = _cache.get(ecnt_key)
+            if eleven_total is None:
+                eleven_total = eq.count()
+                _cache.set(ecnt_key, eleven_total, 120)
+            for p in eq[:depth]:
+                eleven_rows.append({
+                    'id': p.id, 'platform': '11st', 'login_id': p.account.login_id,
+                    'seller_name': p.account.seller_name, 'is_focused': p.account.is_focused,
+                    'market': None, 'product_no': p.product_no, 'product_name': p.product_name,
+                    'sale_price': p.sale_price, 'stock_quantity': p.stock_quantity,
+                    'status_type': p.status_type, 'status_label': p.status_type,
+                    'seller_product_code': p.seller_product_code, 'category': p.category_id,
+                    'product_image_url': p.product_image_url,
+                    'synced_at': p.synced_at.isoformat() if p.synced_at else None,
+                    'purchase_cost': p.purchase_cost, 'cost_diff': p.cost_diff,
+                })
+
+        # ── 지마켓/옥션 ──
+        gmkt_allowed = True
+        gq = GmarketMyProduct.objects.select_related('account')
+        if status_q:
+            gq = gq.filter(status_type=status_q)
+        if search:
+            gq = gq.filter(Q(product_name__icontains=search) | Q(product_no__icontains=search)
+                           | Q(seller_product_code__icontains=search) | Q(account__login_id__icontains=search))
+        if needs_check:
+            gmkt_allowed = False   # 확인필요(역마진)는 11번가 전용 개념
+        if dedup_on:
+            from django.db.models import Min
+            from django.core.cache import cache as _cache
+            sig = f"gmkt_dedup_losers_all:{status_q}:{search}"
+            loser_ids = _cache.get(sig)
+            if loser_ids is None:
+                base = gq.exclude(seller_product_code='')
+                keep = set(base.values('account_id', 'seller_product_code')
+                               .annotate(mid=Min('id')).values_list('mid', flat=True))
+                loser_ids = [i for i in base.values_list('id', flat=True) if i not in keep]
+                _cache.set(sig, loser_ids, 180)
+            if loser_ids:
+                gq = gq.exclude(id__in=loser_ids)
+        gf = _GMKT_SORT.get(sort, 'synced_at')
+        gq = gq.order_by(('-' if order == 'desc' else '') + gf, '-id')
+
+        gmkt_total = 0
+        gmkt_rows = []
+        if gmkt_allowed:
+            from django.core.cache import cache as _cache
+            gcnt_key = f"gmkt_all_count:{status_q}:{search}:{int(dedup_on)}"
+            gmkt_total = _cache.get(gcnt_key)
+            if gmkt_total is None:
+                gmkt_total = gq.count()
+                _cache.set(gcnt_key, gmkt_total, 180)
+            for p in gq[:depth]:
+                gmkt_rows.append({
+                    'id': p.id, 'platform': 'gmarket', 'login_id': p.account.login_id,
+                    'seller_name': p.account.seller_name, 'is_focused': None,
+                    'market': p.market, 'product_no': p.product_no, 'product_name': p.product_name,
+                    'sale_price': p.sale_price, 'stock_quantity': p.stock_quantity,
+                    'status_type': p.status_type, 'status_label': p.status_type,
+                    'seller_product_code': p.seller_product_code, 'category': p.category_code,
+                    'product_image_url': p.product_image_url,
+                    'synced_at': p.synced_at.isoformat() if p.synced_at else None,
+                    'purchase_cost': None, 'cost_diff': None,
+                })
+
+        # ── 쿠팡 (오픈API 등록상품 — 판매가/재고 데이터 없음, 승인상태만 존재) ──
+        from apps.coupang.models import CoupangProduct
+        coupang_allowed = status_q is None   # 승인상태(승인완료/승인반려) 어휘가 달라 판매상태 필터 적용 불가
+        cq = CoupangProduct.objects.select_related('account')
+        if search:
+            cq = cq.filter(Q(product_name__icontains=search) | Q(seller_product_id__icontains=search)
+                            | Q(account__login_id__icontains=search) | Q(account__seller_name__icontains=search))
+        if needs_check or dedup_on:
+            coupang_allowed = False   # 확인필요/중복제외는 11번가·지마켓 전용 개념
+        _CP_SORT = {'product_name': 'product_name', 'sale_price': 'id', 'stock_quantity': 'id',
+                    'status_type': 'status_name', 'seller_product_code': 'seller_product_id',
+                    'login_id': 'account__login_id', 'seller_name': 'account__seller_name', 'synced_at': 'collected_at'}
+        cf = _CP_SORT.get(sort, 'collected_at')
+        cq = cq.order_by(('-' if order == 'desc' else '') + cf, '-id')
+
+        coupang_total = 0
+        coupang_rows = []
+        if coupang_allowed:
+            from django.core.cache import cache as _cache
+            ccnt_key = f"coupang_all_count:{search}"
+            coupang_total = _cache.get(ccnt_key)
+            if coupang_total is None:
+                coupang_total = cq.count()
+                _cache.set(ccnt_key, coupang_total, 180)
+            for p in cq[:depth]:
+                coupang_rows.append({
+                    'id': p.id, 'platform': 'coupang', 'login_id': p.account.login_id,
+                    'seller_name': p.account.seller_name, 'is_focused': None,
+                    'market': None, 'product_no': p.seller_product_id, 'product_name': p.product_name,
+                    'sale_price': None, 'stock_quantity': None,
+                    'status_type': p.status_name, 'status_label': p.status_name,
+                    'seller_product_code': '', 'category': p.category_id,
+                    'product_image_url': '',
+                    'synced_at': p.collected_at.isoformat() if p.collected_at else None,
+                    'purchase_cost': None, 'cost_diff': None,
+                })
+
+        # ── 스마트스토어 (내부 API 수집 — status_type은 영문 코드로 저장됨) ──
+        from apps.smartstore.models import SmartStoreProduct
+        ss_allowed = True
+        sq = SmartStoreProduct.objects.select_related('account')
+        if status_q:
+            code = _SS_STATUS_REVERSE.get(status_q)
+            if code:
+                sq = sq.filter(status_type=code)
+            else:
+                ss_allowed = False
+        if search:
+            sq = sq.filter(Q(name__icontains=search) | Q(product_no__icontains=search)
+                           | Q(seller_management_code__icontains=search) | Q(account__login_id__icontains=search))
+        if needs_check or dedup_on:
+            ss_allowed = False   # 확인필요/중복제외는 11번가·지마켓 전용 개념
+        _SS_SORT = {'product_name': 'name', 'sale_price': 'sale_price', 'stock_quantity': 'stock_quantity',
+                    'status_type': 'status_type', 'seller_product_code': 'seller_management_code',
+                    'login_id': 'account__login_id', 'seller_name': 'account__display_name', 'synced_at': 'synced_at'}
+        sf = _SS_SORT.get(sort, 'synced_at')
+        sq = sq.order_by(('-' if order == 'desc' else '') + sf, '-id')
+
+        ss_total = 0
+        ss_rows = []
+        if ss_allowed:
+            from django.core.cache import cache as _cache
+            scnt_key = f"ss_all_count:{status_q}:{search}"
+            ss_total = _cache.get(scnt_key)
+            if ss_total is None:
+                ss_total = sq.count()
+                _cache.set(scnt_key, ss_total, 180)
+            for p in sq[:depth]:
+                ss_rows.append({
+                    'id': p.id, 'platform': 'smartstore', 'login_id': p.account.login_id,
+                    'seller_name': p.account.display_name or p.account.store_name, 'is_focused': None,
+                    'market': None, 'product_no': p.product_no, 'product_name': p.name,
+                    'sale_price': p.sale_price, 'stock_quantity': p.stock_quantity,
+                    'status_type': p.status_type, 'status_label': _SS_STATUS_MAP.get(p.status_type, p.status_type),
+                    'seller_product_code': p.seller_management_code, 'category': p.category_id,
+                    'product_image_url': p.product_image_url,
+                    'synced_at': p.synced_at.isoformat() if p.synced_at else None,
+                    'purchase_cost': None, 'cost_diff': None,
+                })
+
+        # ── 롯데온 (세션 토큰 크롤러 수집 — 판매가만 존재, 재고 데이터 없음) ──
+        from apps.lotteon.models import LotteonMyProduct
+        _LOTTEON_STATUS_MAP = {'SALE': '판매중', 'END': '판매종료', 'SOUT': '품절', 'STP': '판매중지'}
+        _LOTTEON_STATUS_REVERSE = {v: k for k, v in _LOTTEON_STATUS_MAP.items()}
+        lotteon_allowed = True
+        lq = LotteonMyProduct.objects.select_related('account')
+        if status_q:
+            code = _LOTTEON_STATUS_REVERSE.get(status_q)
+            if code:
+                lq = lq.filter(status_code=code)
+            else:
+                lotteon_allowed = False
+        if search:
+            lq = lq.filter(Q(product_name__icontains=search) | Q(pd_no__icontains=search)
+                           | Q(account__login_id__icontains=search))
+        if needs_check or dedup_on:
+            lotteon_allowed = False   # 확인필요/중복제외는 11번가·지마켓 전용 개념
+        _LOTTEON_SORT = {'product_name': 'product_name', 'sale_price': 'sale_price',
+                         'status_type': 'status_code', 'seller_product_code': 'seller_product_code',
+                         'login_id': 'account__login_id', 'seller_name': 'account__store_name', 'synced_at': 'synced_at'}
+        lf = _LOTTEON_SORT.get(sort, 'synced_at')
+        lq = lq.order_by(('-' if order == 'desc' else '') + lf, '-id')
+
+        lotteon_total = 0
+        lotteon_rows = []
+        if lotteon_allowed:
+            from django.core.cache import cache as _cache
+            lcnt_key = f"lotteon_all_count:{status_q}:{search}"
+            lotteon_total = _cache.get(lcnt_key)
+            if lotteon_total is None:
+                lotteon_total = lq.count()
+                _cache.set(lcnt_key, lotteon_total, 180)
+            for p in lq[:depth]:
+                lotteon_rows.append({
+                    'id': p.id, 'platform': 'lotteon', 'login_id': p.account.login_id,
+                    'seller_name': p.account.store_name, 'is_focused': None,
+                    'market': None, 'product_no': p.pd_no, 'product_name': p.product_name,
+                    'sale_price': p.sale_price, 'stock_quantity': None,
+                    'status_type': p.status_code, 'status_label': _LOTTEON_STATUS_MAP.get(p.status_code, p.status_code),
+                    'seller_product_code': p.seller_product_code, 'category': p.category_path,
+                    'product_image_url': '',
+                    'synced_at': p.synced_at.isoformat() if p.synced_at else None,
+                    'purchase_cost': None, 'cost_diff': None,
+                })
+
+        # ── 병합 정렬 후 페이지 슬라이스 ──
+        merged = eleven_rows + gmkt_rows + coupang_rows + ss_rows + lotteon_rows
+
+        def _key(r):
+            v = r.get(sort)
+            if v is None:
+                return '' if sort in ('product_name', 'status_type', 'seller_product_code',
+                                       'login_id', 'seller_name', 'synced_at') else -10 ** 15
+            return v
+        merged.sort(key=_key, reverse=(order == 'desc'))
+
+        total = eleven_total + gmkt_total + coupang_total + ss_total + lotteon_total
+        start = (page - 1) * per_page
+        items = merged[start:start + per_page]
+
+        return Response({
+            'items': items, 'total': total, 'page': page, 'per_page': per_page,
+            'total_pages': math.ceil(total / per_page) if per_page else 1,
+            'needs_check_total': None,
+        })
+
+
 class GmarketMyAccountsView(views.APIView):
     """지마켓 계정 목록(아이디 선택용) + 계정별 상품수."""
     permission_classes = [IsAuthenticated]
@@ -3791,8 +4104,74 @@ class ElevenBlockClearView(views.APIView):
         return Response({'cleared': cleared})
 
 
+def _tax_group_key(seller_name, login_id):
+    """셀러 그룹핑 기준점 — 셀러명 앞 3글자로 통일(예: 주노그1/주노그2 → 주노그).
+    셀러명이 없으면 login_id를 그대로 사용(서로 다른 계정이 우연히 섞이지 않도록 자르지 않음)."""
+    if seller_name:
+        return seller_name[:3]
+    return login_id or '?'
+
+
+# 세무 집계에서 제외할 테스트용 계정(실제 사업자 아님) — CrawlerAccount.is_test_account=True 기준(DB, 하드코딩 아님)
+def _tax_excluded_login_ids():
+    from apps.cpc.models import protected_login_ids
+    return protected_login_ids(platform=None)
+
+
+def _tax_order_map():
+    """셀러 그룹 고정 정렬 기준 — 지마켓 계정의 display_order(대시보드 전반에 쓰이는 고정 순번)를
+    그룹키(앞 3글자)에 매핑. 순번 없는 그룹은 맨 마지막(매출 내림차순)으로 밀림."""
+    from apps.cpc.models import CrawlerAccount
+    m = {}
+    for a in CrawlerAccount.objects.filter(platform='gmarket', display_order__gt=0).values(
+            'seller_name', 'login_id', 'display_order'):
+        key = _tax_group_key(a['seller_name'], a['login_id'])
+        if key not in m or a['display_order'] < m[key]:
+            m[key] = a['display_order']
+    return m
+
+_PLATFORM_LABELS = {'11st': '11번가', 'gmarket': '지마켓', 'auction': '옥션', 'smartstore': '스마트스토어', 'coupang': '쿠팡'}
+_PLATFORM_ORDER = {'gmarket': 0, 'auction': 1, '11st': 2, 'smartstore': 3, 'coupang': 4}
+
+
+def _tax_natural_key(s):
+    """'유진스1' < '유진스2' < '유진스3' < '유진스타일'처럼 자연스러운 순서로 정렬하기 위한 키."""
+    import re
+    return [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', s or '')]
+
+
+def _tax_add_member(g, platform, login_id, seller_name, month, amount):
+    """그룹에 계정별(플랫폼+로그인ID) 월별 세부내역을 누적 — 세무 페이지에서 클릭 시 펼쳐보는 근거 데이터."""
+    amount = amount or 0
+    g['months'][str(month)] = g['months'].get(str(month), 0) + amount
+    g['total'] += amount
+    mkey = (platform, login_id)
+    m = g['_members'].setdefault(mkey, {
+        'platform': platform, 'platform_label': _PLATFORM_LABELS.get(platform, platform),
+        'login_id': login_id, 'seller_name': seller_name or '',
+        'months': {}, 'total': 0,
+    })
+    m['months'][str(month)] = m['months'].get(str(month), 0) + amount
+    m['total'] += amount
+
+
+def _tax_finalize_group(g):
+    members = g.pop('_members')
+    member_list = sorted(members.values(), key=lambda x: -x['total'])
+    g['rep_login_id'] = member_list[0]['login_id'] if member_list else ''
+    g['member_count'] = len(member_list)
+    # 세부내역(펼쳐보기) 정렬은 매출 변동에 흔들리지 않도록 플랫폼(지마켓 우선) + 계정명 자연정렬로 고정
+    # (예: 유진스1 → 유진스2 → 유진스3 → 유진스타일 순으로 항상 동일하게 보임)
+    g['members'] = sorted(
+        member_list,
+        key=lambda x: (_PLATFORM_ORDER.get(x['platform'], 99),
+                        _tax_natural_key(x['seller_name'] or x['login_id']))
+    )
+    return g
+
+
 class TaxVatSummaryView(views.APIView):
-    """부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률. platform=11st|gmarket|smartstore|coupang"""
+    """부가세(VAT) 종합 — 계정별·월별 과세매출 + 수집 진행률. platform=11st|gmarket|smartstore|coupang|all(통합)"""
     def get(self, request):
         from django.db.models import Q
         from apps.cpc.models import TaxVatMonthly, CrawlerAccount
@@ -3801,27 +4180,22 @@ class TaxVatSummaryView(views.APIView):
 
         if platform == 'coupang':
             return Response(self._coupang_summary(year))
+        if platform == 'all':
+            return Response(self._combined_summary(year))
 
-        qs = TaxVatMonthly.objects.filter(platform=platform, year=year)
+        qs = TaxVatMonthly.objects.filter(platform=platform, year=year).exclude(login_id__in=_tax_excluded_login_ids())
         groups = {}
         monthly_totals = {}
         for r in qs.values('login_id', 'seller_name', 'month').annotate(taxable=Sum('taxable_sales')):
-            if platform == '11st':
-                # 11번가: 셀러명 앞 3글자로 그룹 합산 (스타코1/2/3 → 스타코)
-                key = (r['seller_name'] or '?')[:3]
-            else:
-                # 지마켓: seller_name을 그대로 표시 (login_id를 fallback)
-                key = r['seller_name'] or r['login_id']
+            # 셀러명 앞 3글자로 그룹 합산 (스타코1/2/3 → 스타코) — 전 플랫폼 공통 규칙
+            key = _tax_group_key(r['seller_name'], r['login_id'])
             g = groups.setdefault(key, {'group': key, 'months': {}, 'total': 0, '_members': {}})
-            g['months'][str(r['month'])] = g['months'].get(str(r['month']), 0) + r['taxable']
-            g['total'] += r['taxable']
-            g['_members'][r['login_id']] = g['_members'].get(r['login_id'], 0) + (r['taxable'] or 0)
-            monthly_totals[str(r['month'])] = monthly_totals.get(str(r['month']), 0) + r['taxable']
+            _tax_add_member(g, platform, r['login_id'], r['seller_name'], r['month'], r['taxable'])
+            monthly_totals[str(r['month'])] = monthly_totals.get(str(r['month']), 0) + (r['taxable'] or 0)
         for g in groups.values():
-            members = g.pop('_members')
-            g['rep_login_id'] = max(members.items(), key=lambda x: x[1])[0] if members else ''
-            g['member_count'] = len(members)
-        accounts = sorted(groups.values(), key=lambda x: -x['total'])
+            _tax_finalize_group(g)
+        order_map = _tax_order_map()
+        accounts = sorted(groups.values(), key=lambda x: (order_map.get(x['group'], 10**6), -x['total']))
         if platform == '11st':
             target = CrawlerAccount.objects.filter(platform='11st', is_active=True).exclude(api_key='').count()
         elif platform == 'smartstore':
@@ -3852,23 +4226,21 @@ class TaxVatSummaryView(views.APIView):
         """쿠팡은 별도 모델(CoupangVatSales, 판매자윙+로켓그로스)이라 TaxVatMonthly와 구조가 달라 분리 집계."""
         from apps.coupang.models import CoupangVatSales, CoupangAccount
 
-        qs = CoupangVatSales.objects.filter(year=year).select_related('account')
+        qs = CoupangVatSales.objects.filter(year=year).exclude(
+            account__login_id__in=_tax_excluded_login_ids()).select_related('account')
         groups = {}
         monthly_totals = {}
         for r in qs.values('account_id', 'account__login_id', 'account__seller_name', 'month').annotate(
                 sales=Sum('total_sales')):
             login_id = r['account__login_id']
-            key = r['account__seller_name'] or login_id
+            key = _tax_group_key(r['account__seller_name'], login_id)
             g = groups.setdefault(key, {'group': key, 'months': {}, 'total': 0, '_members': {}})
-            g['months'][str(r['month'])] = g['months'].get(str(r['month']), 0) + r['sales']
-            g['total'] += r['sales']
-            g['_members'][login_id] = g['_members'].get(login_id, 0) + (r['sales'] or 0)
-            monthly_totals[str(r['month'])] = monthly_totals.get(str(r['month']), 0) + r['sales']
+            _tax_add_member(g, 'coupang', login_id, r['account__seller_name'], r['month'], r['sales'])
+            monthly_totals[str(r['month'])] = monthly_totals.get(str(r['month']), 0) + (r['sales'] or 0)
         for g in groups.values():
-            members = g.pop('_members')
-            g['rep_login_id'] = max(members.items(), key=lambda x: x[1])[0] if members else ''
-            g['member_count'] = len(members)
-        accounts = sorted(groups.values(), key=lambda x: -x['total'])
+            _tax_finalize_group(g)
+        order_map = _tax_order_map()
+        accounts = sorted(groups.values(), key=lambda x: (order_map.get(x['group'], 10**6), -x['total']))
 
         target = CoupangAccount.objects.filter(is_active=True).count()
         collected = qs.values('account_id').distinct().count()
@@ -3887,8 +4259,170 @@ class TaxVatSummaryView(views.APIView):
             'vat_payable': round(grand / 11),
         }
 
+    def _combined_summary(self, year):
+        """통합 — 11번가/지마켓/스마트스토어/쿠팡 전체를 셀러명 앞 3글자 기준으로 교차 매칭해 하나로 합산
+        (예: 11번가 '스타드림' + 지마켓 '스타드림딜' → '스타드'로 통합)."""
+        from django.db.models import Q
+        from apps.cpc.models import TaxVatMonthly, CrawlerAccount
+        from apps.smartstore.models import SmartStoreAccount
+        from apps.coupang.models import CoupangVatSales, CoupangAccount
+
+        groups = {}
+        monthly_totals = {}
+
+        def add(platform, seller_name, login_id, month, amount):
+            key = _tax_group_key(seller_name, login_id)
+            g = groups.setdefault(key, {'group': key, 'months': {}, 'total': 0, '_members': {}})
+            _tax_add_member(g, platform, login_id, seller_name, month, amount)
+            monthly_totals[str(month)] = monthly_totals.get(str(month), 0) + (amount or 0)
+
+        vat_qs = TaxVatMonthly.objects.filter(year=year).exclude(
+            login_id__in=_tax_excluded_login_ids()).values('platform', 'login_id', 'seller_name', 'month').annotate(
+            taxable=Sum('taxable_sales'))
+        for r in vat_qs:
+            add(r['platform'], r['seller_name'], r['login_id'], r['month'], r['taxable'] or 0)
+
+        cp_qs = CoupangVatSales.objects.filter(year=year).exclude(
+            account__login_id__in=_tax_excluded_login_ids()).select_related('account').values(
+            'account__login_id', 'account__seller_name', 'month').annotate(sales=Sum('total_sales'))
+        for r in cp_qs:
+            add('coupang', r['account__seller_name'], r['account__login_id'], r['month'], r['sales'] or 0)
+
+        for g in groups.values():
+            _tax_finalize_group(g)
+        order_map = _tax_order_map()
+        accounts = sorted(groups.values(), key=lambda x: (order_map.get(x['group'], 10**6), -x['total']))
+
+        target = (
+            CrawlerAccount.objects.filter(platform='11st', is_active=True).exclude(api_key='').count()
+            + CrawlerAccount.objects.filter(platform='gmarket', is_active=True).filter(
+                Q(gmarket_origin_id__isnull=True) | Q(gmarket_origin_id='')).exclude(
+                login_id__in=_tax_excluded_login_ids()).count()
+            + SmartStoreAccount.objects.filter(is_active=True).exclude(login_pw='').count()
+            + CoupangAccount.objects.filter(is_active=True).count()
+        )
+        collected = (
+            TaxVatMonthly.objects.filter(year=year).exclude(login_id__in=_tax_excluded_login_ids()).values(
+                'platform', 'login_id').distinct().count()
+            + CoupangVatSales.objects.filter(year=year).exclude(
+                account__login_id__in=_tax_excluded_login_ids()).values('account_id').distinct().count()
+        )
+        last_dates = [
+            d for d in [
+                TaxVatMonthly.objects.filter(year=year).order_by('-collected_at').values_list('collected_at', flat=True).first(),
+                CoupangVatSales.objects.filter(year=year).order_by('-collected_at').values_list('collected_at', flat=True).first(),
+            ] if d
+        ]
+        grand = sum(monthly_totals.values())
+        return {
+            'year': year,
+            'platform': 'all',
+            'progress': {
+                'collected': collected, 'target': target,
+                'last_collected_at': max(last_dates).isoformat() if last_dates else None,
+            },
+            'accounts': accounts,
+            'monthly_totals': monthly_totals,
+            'grand_total': grand,
+            'vat_payable': round(grand / 11),
+        }
+
+
+# 독립적으로 크롤 커맨드가 있는 플랫폼(락 단위). 옥션은 지마켓 크롤 안에서 탭만 전환해 같이 수집되므로
+# 별도 커맨드가 없다 — 'auction' 요청은 'gmarket' 실행에 매핑(_TAX_VAT_RUN_AS)한다.
+_TAX_VAT_PLATFORMS = ('11st', 'gmarket', 'smartstore', 'coupang')
+_TAX_VAT_VIEW_PLATFORMS = ('11st', 'gmarket', 'auction', 'smartstore', 'coupang')
+_TAX_VAT_RUN_AS = {'auction': 'gmarket'}
+
+
+class TaxVatCrawlView(views.APIView):
+    """세무 페이지 '크롤링' 버튼 — 플랫폼별 부가세신고내역 크롤을 백그라운드로 실행.
+    platform='all'이면 5개 탭을 순서대로(동시크롤 금지) 실행. 옥션은 지마켓 크롤에 포함되어 함께 수집됨."""
+    def get(self, request):
+        """실행 상태 조회 — 플랫폼별 락(guard) 기준 busy 여부."""
+        from apps.cpc import eleven_block_guard as guard
+        result = {}
+        for p in _TAX_VAT_VIEW_PLATFORMS:
+            lock_p = _TAX_VAT_RUN_AS.get(p, p)
+            lock_path = guard._lock_path(lock_p)
+            busy = False
+            if lock_path.exists():
+                try:
+                    pid = int(lock_path.read_text(encoding='utf-8').split('|')[0])
+                    busy = guard._pid_alive(pid)
+                except Exception:
+                    busy = False
+            result[p] = {'busy': busy}
+        return Response(result)
+
+    def post(self, request):
+        import subprocess
+        from datetime import date
+        from apps.cpc import eleven_block_guard as guard
+
+        platform = request.data.get('platform') or request.query_params.get('platform') or '11st'
+        requested = list(_TAX_VAT_VIEW_PLATFORMS) if platform == 'all' else [platform]
+        for p in requested:
+            if p not in _TAX_VAT_VIEW_PLATFORMS:
+                return Response({'error': f'invalid platform: {p}'}, status=400)
+        # 실제 실행 커맨드 기준으로 매핑 + 중복 제거(순서 유지) — 옥션+지마켓 동시 선택 시 1회만 실행
+        seen = set()
+        platforms = []
+        for p in requested:
+            run_p = _TAX_VAT_RUN_AS.get(p, p)
+            if run_p not in seen:
+                seen.add(run_p)
+                platforms.append(run_p)
+
+        year = int(request.data.get('year') or request.query_params.get('year') or date.today().year)
+        cur_ym = int(date.today().strftime('%Y%m'))
+        start = f'{year}01'
+        end = f'{year}12' if year < date.today().year else str(min(year * 100 + 12, cur_ym))
+
+        busy_platforms = []
+        for p in platforms:
+            lock_path = guard._lock_path(p)
+            if lock_path.exists():
+                try:
+                    pid = int(lock_path.read_text(encoding='utf-8').split('|')[0])
+                    if guard._pid_alive(pid):
+                        busy_platforms.append(p)
+                except Exception:
+                    pass
+        if busy_platforms:
+            return Response(
+                {'status': 'busy', 'error': f'이미 실행 중인 플랫폼: {", ".join(busy_platforms)}'},
+                status=409)
+
+        script = '/home/rejoice888/Avengers/backend/scripts/tax_vat_crawl.sh'
+        # 여러 플랫폼을 한 번에 요청해도 동시크롤 금지 원칙에 따라 순차 실행(&& 로 연결)
+        chained = ' && '.join(f'bash {script} {p} {start} {end}' for p in platforms)
+        try:
+            subprocess.Popen(['bash', '-c', chained], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+        return Response({'status': 'started', 'platforms': platforms, 'start': start, 'end': end})
+
 
 _VERIFY_LOCK = '/tmp/eleven_verify_otp_running.lock'
+
+
+def _verify_lock_pid_alive():
+    """OTP 인증 락의 PID가 살아있는지 확인 — 죽었으면 스테일로 간주.
+    2026-07-08: 백엔드 재시작(pm2 restart)이 백그라운드 인증 스레드를 강제종료시켜
+    락파일만 남고 대시보드가 '인증 진행 중'으로 영원히 고정 표시되는 사고 발생."""
+    import os as _os
+    try:
+        line = open(_VERIFY_LOCK).read().strip()
+        pid_str = line.split('|', 1)[0]
+        pid = int(pid_str)
+        _os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+    except Exception:
+        return True   # 형식 파싱 실패 등은 안전하게 '살아있음'으로 취급(구락 하위호환)
 
 
 class ElevenAuthStatusView(views.APIView):
@@ -3940,9 +4474,16 @@ class ElevenAuthStatusView(views.APIView):
             })
         running = os.path.exists(_VERIFY_LOCK)
         running_ids = []
-        if running:
+        if running and not _verify_lock_pid_alive():
+            # 스테일 락(백엔드 재시작 등으로 소유 프로세스가 죽었는데 파일만 남음) — 자동 정리
             try:
-                running_ids = open(_VERIFY_LOCK).read().strip().split(',')
+                os.remove(_VERIFY_LOCK)
+            except Exception:
+                pass
+            running = False
+        elif running:
+            try:
+                running_ids = open(_VERIFY_LOCK).read().strip().split('|', 1)[-1].split(',')
             except Exception:
                 pass
         return Response({'accounts': result, 'running': running, 'running_ids': running_ids})
@@ -3956,11 +4497,18 @@ class ElevenVerifyOtpView(views.APIView):
         from django.utils import timezone
 
         if os.path.exists(_VERIFY_LOCK):
-            try:
-                ids = open(_VERIFY_LOCK).read().strip()
-            except Exception:
-                ids = '?'
-            return Response({'error': f'이미 인증 진행 중입니다. ({ids})'}, status=400)
+            if not _verify_lock_pid_alive():
+                # 스테일 락 — 소유 프로세스가 죽었으므로 무시하고 새로 시작 가능하게 정리
+                try:
+                    os.remove(_VERIFY_LOCK)
+                except Exception:
+                    pass
+            else:
+                try:
+                    ids = open(_VERIFY_LOCK).read().strip().split('|', 1)[-1]
+                except Exception:
+                    ids = '?'
+                return Response({'error': f'이미 인증 진행 중입니다. ({ids})'}, status=400)
 
         login_ids = request.data.get('login_ids') or []
         auto = request.data.get('auto', False)
@@ -3981,14 +4529,18 @@ class ElevenVerifyOtpView(views.APIView):
             return Response({'error': 'login_ids 없음'}, status=400)
 
         def run():
-            pathlib.Path(_VERIFY_LOCK).write_text(','.join(login_ids))
+            cmd = (
+                'cd /home/rejoice888/Avengers/backend && '
+                f'python3 manage.py verify_11st_logins --only {",".join(login_ids)} '
+                '>> /tmp/eleven_verify_auto.log 2>&1'
+            )
+            # start_new_session=True — 백엔드(pm2) 재시작이 이 프로세스그룹까지 죽이지 않도록.
+            # 2026-07-08: pm2 restart로 이 서브프로세스가 도중에 강제종료되며 락파일만 남고
+            # 대시보드가 '인증 진행 중'으로 영구 고정 표시된 사고 발생 — 재발 방지.
+            proc = subprocess.Popen(['bash', '-c', cmd], start_new_session=True)
+            pathlib.Path(_VERIFY_LOCK).write_text(f'{proc.pid}|' + ','.join(login_ids))
             try:
-                cmd = (
-                    'cd /home/rejoice888/Avengers/backend && '
-                    f'python3 manage.py verify_11st_logins --only {",".join(login_ids)} '
-                    '>> /tmp/eleven_verify_auto.log 2>&1'
-                )
-                subprocess.run(['bash', '-c', cmd], timeout=7200)
+                proc.wait(timeout=7200)
             finally:
                 try:
                     os.remove(_VERIFY_LOCK)
@@ -4062,11 +4614,17 @@ class AllMallProfitView(views.APIView):
                        'gross_profit': r['prof'] or 0, 'commission': r['comm'] or 0,
                        'orders': r['n']}
 
-        # 2) 광고비 (플랫폼별)
+        # 2) 광고비 (플랫폼별) — /gmarket 대시보드와 동일하게 hide_from_dashboard 계정 제외
+        # (예: sglobal2는 매출 0인 숨김계정인데 광고비 이력만 남아있어 미제외 시 /gmarket과 합계 불일치)
+        from apps.cpc.models import CrawlerAccount as _CrAcct
+        _visible_gmkt_ids = list(_CrAcct.objects.filter(
+            platform='gmarket', is_active=True, hide_from_dashboard=False
+        ).values_list('login_id', flat=True))
         ad = {}
         for r in (GmarketCostHistory.objects
                   .filter(use_date__gte=ms, use_date__lte=me,
-                          transaction_type__in=['CPC', 'AI매출업'])
+                          transaction_type__in=['CPC', 'AI매출업'],
+                          seller_id__in=_visible_gmkt_ids)
                   .exclude(comment__icontains='판매예치금')   # 판매예치금 송금 등 비광고 차감 제외
                   .values('market').annotate(a=Sum('amount'))):
             mk = r['market'] or 'gmarket'
@@ -4306,17 +4864,40 @@ def _gmkt_status_label(raw, in_catalog=True):
     return _GMKT_STATUS.get(raw, raw)
 
 
-def _gmarket_realsales(d0, d1, product_nos):
+def _gmarket_login_identity_groups():
+    """login_id → 실매출(SalesRecord.seller__seller_id) 매칭에 쓸 '같은 사업자' ID 집합.
+    광고계정 자신 + 알려진 동일사업자 별칭(공유ESM 서브 gmarket_origin_id, 옥션 auction_seller_id)만 묶는다.
+    2026-07-08: 판매자코드(도매처 공통 상품코드) 전역매칭이 sglobal2(테스트-타사) 같은 무관 계정에
+    다른 진짜 계정의 매출을 잘못 붙여주는 문제 발견 → 광고계정 ID 기준으로 전환."""
+    from apps.cpc.models import CrawlerAccount
+    accounts = list(CrawlerAccount.objects.filter(platform='gmarket'))
+    children = {}
+    for a in accounts:
+        if a.gmarket_origin_id and a.gmarket_origin_id != a.login_id:
+            children.setdefault(a.gmarket_origin_id, set()).add(a.login_id)
+    groups = {}
+    for a in accounts:
+        master = a.gmarket_origin_id if (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id) else a.login_id
+        ids = {a.login_id, master} | children.get(master, set())
+        if a.auction_seller_id:
+            ids.add(a.auction_seller_id)
+        groups[a.login_id] = ids
+    return groups
+
+
+def _gmarket_realsales(d0, d1, pno_to_eid):
     """광고 상품번호 → (판매자코드, 실매출, 상품상태, 실구매건수) 매핑.
     다리: GmarketMyProduct.product_no→seller_product_code(자체/판매자코드) ↔ SalesRecord.product_code.
-    실매출 = 해당 판매자코드의 d0~d1 매출(total_price) 전역합, 실구매건수 = 매칭 주문 건수(Count).
-    (지마켓+옥션, 판매자ID 무관 전역매칭). status_by_pno: 최신 MyProduct status_type(키없음=삭제)."""
+    실매출 = 그 상품을 광고한 계정(login_id) 자신 및 동일사업자 별칭의 d0~d1 매출(total_price) 합,
+    실구매건수 = 매칭 주문 건수(Count). 판매자코드가 같아도 광고계정과 무관한 다른 사업자의 매출은 섞지 않는다.
+    pno_to_eid: {product_no: login_id}. status_by_pno: 최신 MyProduct status_type(키없음=삭제)."""
     if not d0 or not d1:
         return {}, {}, {}, {}
     from django.db.models import Sum as _Sum, Count as _Count
     from apps.cpc.models import GmarketMyProduct
     from django.db.models import Max as _Max
     from datetime import timedelta as _td
+    product_nos = list(pno_to_eid.keys())
     pnos = {p for p in product_nos if p}
     if not pnos:
         return {}, {}, {}, {}
@@ -4354,19 +4935,27 @@ def _gmarket_realsales(d0, d1, product_nos):
                 code_by_pno[p] = sc
                 status_by_pno.setdefault(p, '삭제(코드보존)')
     codes = set(code_by_pno.values())
-    sales_by_code = {}
-    orders_by_code = {}
+    sales_by_code_seller = {}
+    orders_by_code_seller = {}
     if codes:
         from apps.sales.models import SalesRecord
         for r in (SalesRecord.objects
                   .filter(platform__in=['gmarket', 'auction'],
                           order_date__gte=d0, order_date__lte=d1,
                           product_code__in=codes)
-                  .values('product_code').annotate(s=_Sum('total_price'), n=_Count('id'))):
-            sales_by_code[r['product_code']] = r['s'] or 0
-            orders_by_code[r['product_code']] = r['n'] or 0
-    real_by_pno = {pno: sales_by_code.get(code, 0) for pno, code in code_by_pno.items()}
-    realorders_by_pno = {pno: orders_by_code.get(code, 0) for pno, code in code_by_pno.items()}
+                  .values('product_code', 'seller__seller_id')
+                  .annotate(s=_Sum('total_price'), n=_Count('id'))):
+            key = (r['product_code'], r['seller__seller_id'])
+            sales_by_code_seller[key] = r['s'] or 0
+            orders_by_code_seller[key] = r['n'] or 0
+    id_groups = _gmarket_login_identity_groups()
+    real_by_pno = {}
+    realorders_by_pno = {}
+    for pno, code in code_by_pno.items():
+        eid = pno_to_eid.get(pno)
+        allowed = id_groups.get(eid, {eid} if eid else set())
+        real_by_pno[pno] = sum(sales_by_code_seller.get((code, sid), 0) for sid in allowed)
+        realorders_by_pno[pno] = sum(orders_by_code_seller.get((code, sid), 0) for sid in allowed)
     return code_by_pno, real_by_pno, status_by_pno, realorders_by_pno
 
 
@@ -4398,10 +4987,11 @@ class GmarketProductRoasView(views.APIView):
         name_map = {a.login_id: (a.seller_name or a.login_id)
                     for a in CrawlerAccount.objects.filter(platform='gmarket')}
 
-        # 상품번호 → 판매자코드 + 실매출(매출자료 전역매칭, 광고데이터 있는 월로 한정)
-        all_pno = set(base.values_list('product_no', flat=True))
+        # 상품번호 → 판매자코드 + 실매출(광고계정 기준 매칭, 광고데이터 있는 월로 한정)
+        pno_to_eid = dict(base.values_list('product_no', 'login_id'))
+        all_pno = set(pno_to_eid.keys())
         rd0, rd1 = _gmkt_realsales_window(base)
-        code_by_pno, real_by_pno, status_by_pno, realorders_by_pno = _gmarket_realsales(rd0, rd1, all_pno)
+        code_by_pno, real_by_pno, status_by_pno, realorders_by_pno = _gmarket_realsales(rd0, rd1, pno_to_eid)
 
         # 상품별 수집 키워드(GmarketKeywordReport, 기간 연도 집계) — 상세 표 키워드 컬럼용
         from collections import defaultdict as _dd
@@ -4549,21 +5139,31 @@ class GmarketRoasAccountsView(views.APIView):
         mq = _gmkt_month_q(months)
         name_map = {a.login_id: (a.seller_name or a.login_id)
                     for a in CrawlerAccount.objects.filter(platform='gmarket')}
-        # 계정별 광고 상품번호 → 실매출(매출자료 전역매칭)
+        from apps.cpc.models import protected_login_ids
+        test_ids = protected_login_ids('gmarket')
+        # 계정 단위 = seller_id(실제 판매자ID) 기준. login_id(크롤 로그인 계정)로 묶으면 안 되는 이유:
+        # 공유ESM 서브계정(예: rejoice234 그룹의 rejoice235/236)은 크롤 시 마스터 login_id 아래
+        # 다른 seller_id로 저장되는 경우가 있어, login_id로 집계하면 서브 광고비가 마스터에
+        # 잘못 합산되고 서브 자신은 0으로 보이는 문제가 있었다(2026-07-08 발견 — 거래내역과
+        # 상품별광고비 AI 금액이 계정마다 어긋나던 원인). seller_id는 정상계정에선 login_id와
+        # 항상 같으므로 안전하게 계정 식별자로 쓸 수 있다.
         from collections import defaultdict as _dd
         pno_by_lid = _dd(set)
+        pno_to_eid = {}
         for r in (GmarketProductAdCost.objects.filter(mq)
-                  .values('login_id', 'product_no')):
-            pno_by_lid[r['login_id']].add(r['product_no'])
-        all_pno = set().union(*pno_by_lid.values()) if pno_by_lid else set()
+                  .values('seller_id', 'product_no')):
+            pno_by_lid[r['seller_id']].add(r['product_no'])
+            pno_to_eid[r['product_no']] = r['seller_id']
         rd0, rd1 = _gmkt_realsales_window(GmarketProductAdCost.objects.filter(mq))   # 실매출은 광고데이터 있는 월로 한정
-        _code_by_pno, real_by_pno, _status_by_pno, _ord_by_pno = _gmarket_realsales(rd0, rd1, all_pno)
+        _code_by_pno, real_by_pno, _status_by_pno, _ord_by_pno = _gmarket_realsales(rd0, rd1, pno_to_eid)
         rows = {}
         for r in (GmarketProductAdCost.objects.filter(mq)
-                  .values('login_id', 'ad_type')
+                  .values('seller_id', 'ad_type')
                   .annotate(cost=Sum('cost'), conv=Sum('conv_amount'), n=Count('id'))):
-            d = rows.setdefault(r['login_id'], {
-                'login_id': r['login_id'], 'seller_name': name_map.get(r['login_id'], r['login_id']),
+            sid = r['seller_id']
+            d = rows.setdefault(sid, {
+                'login_id': sid, 'seller_name': name_map.get(sid, sid),
+                'is_test_account': sid in test_ids,
                 'cpc_cost': 0, 'ai_cost': 0, 'cpc_conv': 0, 'ai_conv': 0,
                 'cpc_products': 0, 'ai_products': 0})
             d[f"{r['ad_type']}_cost"] = r['cost'] or 0
@@ -4643,8 +5243,9 @@ def _gmkt_product_rows(request):
         attr.setdefault(a['product_no'], a)
     grp_list = list(grp)
     all_pno = {g['product_no'] for g in grp_list}
+    pno_to_eid = {p: a['login_id'] for p, a in attr.items() if p in all_pno}
     rd0, rd1 = _gmkt_realsales_window(base)
-    code_by_pno, real_by_pno, status_by_pno, realorders_by_pno = _gmarket_realsales(rd0, rd1, all_pno)
+    code_by_pno, real_by_pno, status_by_pno, realorders_by_pno = _gmarket_realsales(rd0, rd1, pno_to_eid)
     # 누적 판매수량(2025-01-01 ~ 현재) — 판매자코드 전역매칭(지마켓+옥션). 평균단가 왼쪽 표기용.
     from datetime import date as _cum_date
     cum_qty_by_pno = {}
@@ -4800,6 +5401,10 @@ class GmarketLossDeleteView(views.APIView):
             eid = str(d.get('eid') or '').strip()
             if not eid or not re.match(r'^[A-Za-z0-9_]+$', eid):
                 return Response({'error': '상품지정 삭제는 eid(계정) 필수'}, status=400)
+            from apps.cpc.models import protected_login_ids
+            if eid in protected_login_ids('gmarket'):
+                return Response({'status': 'blocked',
+                                 'message': f'⛔ {eid}는 테스트/타사 계정이라 조치가 차단됩니다(조회·다운로드만 허용).'}, status=400)
             a = f'manage.py delete_loss_gmarket --eid {eid} --product-nos ' + ' '.join(pnos[:300]) + mode_flag
             sc = (f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {a} >> /tmp/delete_loss_gmarket.log 2>&1')
             try:
@@ -4816,6 +5421,11 @@ class GmarketLossDeleteView(views.APIView):
             lim = None
         limit = 1 if not (real or stop_only) else lim
         eid = d.get('eid') or ''
+        if eid:
+            from apps.cpc.models import protected_login_ids
+            if str(eid) in protected_login_ids('gmarket'):
+                return Response({'status': 'blocked',
+                                 'message': f'⛔ {eid}는 테스트/타사 계정이라 조치가 차단됩니다(조회·다운로드만 허용).'}, status=400)
         args = f'manage.py delete_loss_gmarket --ym-from {ymf} --ym-to {ymt}'
         if eid and re.match(r'^[A-Za-z0-9_]+$', str(eid)):
             args += f' --eid {eid}'

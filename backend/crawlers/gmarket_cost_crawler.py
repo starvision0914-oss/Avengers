@@ -121,6 +121,18 @@ def _dismiss_esm_popups(driver):
                 driver.execute_script("arguments[0].click();", b)
     except Exception:
         pass
+    # '고객 응대 연락처 인증 및 변경' 모달 — X버튼/닫기 클래스에 안 걸려서 화면을 계속 가리며
+    # 이후 로그인 폼 조작이 전부 막혀 무한 대기처럼 보였음(rejoice987/911, 2026-07-08).
+    # ARS 인증을 자동 제출하면 안 되므로 '취소'만 클릭(체크박스/확인 버튼은 건드리지 않음).
+    try:
+        for h in driver.find_elements(By.XPATH, "//*[contains(text(),'고객 응대 연락처 인증')]"):
+            if h.is_displayed():
+                for b in driver.find_elements(By.XPATH, "//button[normalize-space()='취소']"):
+                    if b.is_displayed():
+                        driver.execute_script("arguments[0].click();", b)
+                break
+    except Exception:
+        pass
 
 
 def _esm_logged_in(driver):

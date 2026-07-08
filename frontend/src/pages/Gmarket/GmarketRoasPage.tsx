@@ -4,7 +4,7 @@ import { formatKRW } from '../../utils/format';
 import GmktKeywordDetailModal from '../../components/gmarket/GmktKeywordDetailModal';
 
 interface AcctRow {
-  login_id: string; seller_name: string;
+  login_id: string; seller_name: string; is_test_account?: boolean;
   cpc_cost: number; ai_cost: number; cpc_conv: number; ai_conv: number;
   cpc_products: number; ai_products: number;
   cpc_roas: number; ai_roas: number;
@@ -187,6 +187,21 @@ export default function GmarketRoasPage() {
   const toggleLossAll = () => setLossSel(lossAllChecked ? new Set() : new Set((lossData?.rows || []).map((r: any) => r.product_no)));
   const toggleLossSel = (pno: string) => setLossSel(s => { const n = new Set(s); n.has(pno) ? n.delete(pno) : n.add(pno); return n; });
   const lossTargets = (): any[] => { const rows = lossData?.rows || []; return lossSel.size ? rows.filter((r: any) => lossSel.has(r.product_no)) : rows; };
+  // 쇼핑몰(계정)별 적자상품 집계 — "전체 적자상품"(eid='')처럼 여러 계정이 섞인 목록에서
+  // 계정별로 몇 개씩인지 보여주고, 계정별 판매중지 버튼을 달기 위한 그룹핑.
+  const lossByAccount: { login_id: string; seller_name: string; count: number; cost: number; isTest: boolean }[] = (() => {
+    const rows = lossData?.rows || [];
+    const m = new Map<string, { login_id: string; seller_name: string; count: number; cost: number; isTest: boolean }>();
+    for (const r of rows) {
+      const lid = r.login_id || '';
+      const acct = accts.find(a => a.login_id === lid);
+      const cur = m.get(lid) || { login_id: lid, seller_name: acct?.seller_name || lid, count: 0, cost: 0, isTest: !!acct?.is_test_account };
+      cur.count += 1;
+      cur.cost += r.cost || 0;
+      m.set(lid, cur);
+    }
+    return Array.from(m.values()).sort((a, b) => b.cost - a.cost);
+  })();
   const copyText = (text: string) => {
     const done = () => alert('복사되었습니다');
     if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done));
@@ -291,17 +306,22 @@ export default function GmarketRoasPage() {
       .catch(e => alert(e?.response?.data?.error || '시작 실패 — 다른 지마켓 크롤이 실행 중일 수 있습니다.'));
   };
   // 판매중지만(삭제 안 함) — 삭제보다 되돌리기 쉬운 조치라 별도 안전장치 없이 바로 실행 가능
-  const stopOnlyGmktLoss = () => {
-    const n = lossData?.count || 0;
+  // eidOverride 지정 시 "쇼핑몰별" 패널에서 해당 계정 하나만 스코프해서 실행(전역 lossEid는 안 건드림).
+  const stopOnlyGmktLoss = (eidOverride?: string, labelOverride?: string) => {
+    const eid = eidOverride ?? (lossEid || '');
+    const n = eidOverride
+      ? (lossByAccount.find(a => a.login_id === eidOverride)?.count || 0)
+      : (lossData?.count || 0);
     if (!n) { alert('대상 적자상품이 없습니다.'); return; }
-    const limStr = window.prompt(`판매중지할 개수를 입력하세요.\n\n· 소량 테스트: 숫자 입력 (예: 5)\n· 전체 ${n.toLocaleString()}개: 비워두고 확인`, '5');
+    const who = labelOverride ? `${labelOverride} ` : '';
+    const limStr = window.prompt(`${who}판매중지할 개수를 입력하세요. (실매출ROAS 150% 초과 상품은 자동 제외됩니다)\n\n· 소량 테스트: 숫자 입력 (예: 5)\n· 전체 최대 ${n.toLocaleString()}개: 비워두고 확인`, '5');
     if (limStr === null) return;
     const t = limStr.trim();
     const limit = t ? parseInt(t, 10) : null;
     if (limit !== null && (isNaN(limit) || limit < 1)) { alert('숫자를 입력하거나, 전체는 비워두세요.'); return; }
-    const label = limit ? `${limit}개(테스트)` : `전체 ${n.toLocaleString()}개`;
-    if (!window.confirm(`🛑 ${label} 상품을 지마켓에서 판매중지합니다(삭제 아님, 재판매 가능).\n\n진행할까요?`)) return;
-    const body: any = { ym_from: ymFrom, ym_to: ymTo, eid: lossEid || '', stop_only: 1 };
+    const label = limit ? `${limit}개(테스트)` : `최대 ${n.toLocaleString()}개`;
+    if (!window.confirm(`🛑 ${who}${label} 상품을 지마켓에서 판매중지합니다(삭제 아님, 재판매 가능).\n실매출ROAS가 150%를 넘는 상품은 자동으로 제외되어 실제 처리 개수는 더 적을 수 있습니다.\n\n진행할까요?`)) return;
+    const body: any = { ym_from: ymFrom, ym_to: ymTo, eid, stop_only: 1 };
     if (limit) body.limit = limit;
     api.post('/cpc/gmarket/loss-products/delete/', body)
       .then(r => alert(r.data?.message || '판매중지 시작 — 진행상황은 텔레그램/로그로 확인하세요.'))
@@ -797,7 +817,7 @@ export default function GmarketRoasPage() {
               </>)}
               {LMODES[lossMode].del && <button onClick={markLossDeleted} title="지마켓에서 직접 삭제 완료한 상품을 '삭제완료'로 표시" className="px-2.5 py-1 text-[12px] font-bold bg-[#dc2626] text-white rounded hover:bg-[#b91c1c]">✓ 삭제완료 처리</button>}
               {LMODES[lossMode].del && <button onClick={validateGmktDelete} title="셀러오피스 접속·셀렉터를 1상품으로 검증(실제 삭제 안 함)" className="px-2.5 py-1 text-[12px] font-semibold bg-[#0369a1] text-white rounded hover:bg-[#075985]">🔎 삭제 검증</button>}
-              {LMODES[lossMode].del && <button onClick={stopOnlyGmktLoss} title="셀러오피스에서 실제 판매중지(삭제는 안 함, 되돌리기 쉬움)" className="px-2.5 py-1 text-[12px] font-bold bg-[#c2410c] text-white rounded hover:bg-[#9a3412]">🛑 판매중지</button>}
+              {LMODES[lossMode].del && <button onClick={() => stopOnlyGmktLoss()} title="셀러오피스에서 실제 판매중지(삭제는 안 함, 되돌리기 쉬움) — 전체 계정 대상. 실매출ROAS>150%인 상품은 자동 제외" className="px-2.5 py-1 text-[12px] font-bold bg-[#c2410c] text-white rounded hover:bg-[#9a3412]">🛑 판매중지(전체)</button>}
               {LMODES[lossMode].del && <button onClick={deleteGmktLoss} title="⚠️ 위험: 셀러오피스에서 실제 영구 삭제(검증 후 진행)" className="px-2.5 py-1 text-[12px] font-bold bg-[#7f1d1d] text-white rounded hover:bg-[#601515]">🗑 실제 삭제</button>}
               <button onClick={() => setLossOpen(false)} className="text-[#999] hover:text-[#333] text-[13px]">✕</button>
             </div>
@@ -812,6 +832,32 @@ export default function GmarketRoasPage() {
               <span className="text-[#1d4ed8] font-semibold ml-2">※ 구매수·구매금액·ROAS = 광고센터 기준</span>
               <span className="text-[#aaa]">실구매·실매출 = 매출자료(참고)</span>
             </div>
+            {LMODES[lossMode].del && lossByAccount.length > 1 && (
+              <div className="px-5 py-2.5 border-b border-[#f0f0f0] bg-[#fff7ed]">
+                <div className="text-[11px] text-[#9a3412] font-semibold mb-1.5">🛑 쇼핑몰별 판매중지 — 계정 하나씩만 골라서 실행</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {lossByAccount.map(a => (
+                    <span key={a.login_id} className={`inline-flex items-center gap-1 pl-2 pr-1 py-0.5 bg-white border rounded text-[11px] ${a.isTest ? 'border-[#ccc] opacity-70' : 'border-[#fdba74]'}`}>
+                      <span className="font-semibold text-[#333]">{a.seller_name}</span>
+                      <span className="text-[#aaa]">({a.login_id})</span>
+                      <b className={a.isTest ? 'text-[#888]' : 'text-[#c2410c]'}>{a.count}개</b>
+                      {a.isTest ? (
+                        <span title="테스트/타사 계정 — 조회·다운로드만 허용, 조치(판매중지 등)는 차단됨"
+                          className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-gray-200 text-gray-600 rounded cursor-not-allowed">
+                          🔒 조치불가(테스트)
+                        </span>
+                      ) : (
+                        <button onClick={() => stopOnlyGmktLoss(a.login_id, `${a.seller_name}(${a.login_id})`)}
+                          title="이 쇼핑몰 적자상품만 판매중지"
+                          className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-[#c2410c] text-white rounded hover:bg-[#9a3412]">
+                          판매중지
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="p-4">
               {lossLoading && <div className="text-center text-[#888] py-8">불러오는 중…</div>}
               {!lossLoading && lossData && lossRows.length === 0 && <div className="text-center text-[#888] py-8">대상 적자상품이 없습니다.</div>}

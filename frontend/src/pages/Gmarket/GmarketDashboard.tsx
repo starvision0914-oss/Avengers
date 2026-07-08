@@ -20,13 +20,15 @@ interface Row {
   ad_count: number; product_count: number;
   gmarket_products: number; auction_products: number; collected_at: string | null;
   revenue: number; profit: number; net_after_ad: number; orders: number; margin: number; roas: number;
+  max_item_count: number | null;
 }
 interface DashResp {
   date_from: string; date_to: string;
   totals: { ad_spend: number; cpc_spend: number; ai_spend: number; server_spend: number;
     balance: number; product_count: number; account_count: number;
-    revenue: number; profit: number; net_after_ad: number; orders: number };
+    revenue: number; profit: number; net_after_ad: number; orders: number; max_item_count: number };
   rows: Row[];
+  excluded_rows?: Row[];
 }
 
 const fmt = (n: number) => (n || 0).toLocaleString();
@@ -125,10 +127,10 @@ export default function GmarketDashboard() {
     s.balance += r.balance || 0; s.cpc_spend += r.cpc_spend || 0; s.ai_spend += r.ai_spend || 0;
     s.server_spend += r.server_spend || 0; s.auction_spend += r.auction_spend || 0; s.ad_spend += r.ad_spend || 0;
     s.product_count += r.product_count || 0; s.gmarket_products += r.gmarket_products || 0;
-    s.auction_products += r.auction_products || 0;
+    s.auction_products += r.auction_products || 0; s.max_item_count += r.max_item_count || 0;
     s.revenue += r.revenue || 0; s.profit += r.profit || 0; s.net_after_ad += r.net_after_ad || 0;
     return s;
-  }, { balance: 0, cpc_spend: 0, ai_spend: 0, server_spend: 0, auction_spend: 0, ad_spend: 0, product_count: 0, gmarket_products: 0, auction_products: 0, revenue: 0, profit: 0, net_after_ad: 0 });
+  }, { balance: 0, cpc_spend: 0, ai_spend: 0, server_spend: 0, auction_spend: 0, ad_spend: 0, product_count: 0, gmarket_products: 0, auction_products: 0, max_item_count: 0, revenue: 0, profit: 0, net_after_ad: 0 });
   const t = data?.totals;
   const cell = 'px-3 py-1.5';
   const arrow = (k: string) => (sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
@@ -159,7 +161,7 @@ export default function GmarketDashboard() {
             <DateNavigator date={date} onPrev={prevDate} onNext={nextDate} onToday={goToday} onDateChange={setDate} periodMode={mode} />
           )}
           <PeriodSelector mode={mode} date={date} onPick={pickPeriod} />
-          <button onClick={() => navigate('/gmarket-my')} className="px-2.5 py-1 bg-[#9333ea] text-white rounded font-semibold">상품목록</button>
+          <button onClick={() => navigate('/myproduct')} className="px-2.5 py-1 bg-[#9333ea] text-white rounded font-semibold">상품목록</button>
           <button onClick={() => navigate('/gmarket-adgroup')} className="px-2.5 py-1 bg-[#e67700] text-white rounded font-semibold">광고그룹별</button>
           <button onClick={() => navigate('/gmarket-roas')} className="px-2.5 py-1 bg-[#2563eb] text-white rounded font-semibold">지마켓/옥션 상품 ROAS</button>
           <div className="inline-flex rounded overflow-hidden border border-[#ccc] ml-1">
@@ -221,10 +223,11 @@ export default function GmarketDashboard() {
           <Card icon={<Megaphone size={18} />} color="#e08000" label="광고비 합계" value={`${fmt(t?.ad_spend || 0)}원`} />
           <Card icon={<Wallet size={18} />} color="#7c3aed" label="순수익(−원가−광고비)" value={`${fmt(t?.net_after_ad || 0)}원`} />
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <Card icon={<ShoppingBag size={18} />} color="#00a651" label="계정 수" value={`${fmt(t?.account_count || 0)}개`} />
           <Card icon={<Package size={18} />} color="#9333ea" label="수집 상품 수" value={`${fmt(t?.product_count || 0)}개`} />
           <Card icon={<ShoppingBag size={18} />} color="#555" label="주문 수" value={`${fmt(t?.orders || 0)}건`} />
+          <Card icon={<Package size={18} />} color="#e08000" label="등록가능수량 합계" value={`${fmt(t?.max_item_count || 0)}개`} />
         </div>
 
         <div className="bg-white border border-[#e0e0e0] rounded-lg overflow-auto">
@@ -243,12 +246,13 @@ export default function GmarketDashboard() {
                 <Th k="roas" label="ROAS" />
                 <Th k="margin" label="마진%" />
                 <Th k="product_count" label="상품 수" />
+                <Th k="max_item_count" label="등록가능수량" />
                 <Th k="collected_at" label="최종수집" left />
               </tr>
             </thead>
             <tbody className="divide-y divide-[#f0f0f0]">
               {rows.length === 0 ? (
-                <tr><td colSpan={13} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
+                <tr><td colSpan={14} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
               ) : (<>
                 <tr className="bg-[#eef5ff] font-bold text-[#222] border-b-2 border-[#cfe0f5]">
                   <td className={cell}></td>
@@ -263,6 +267,7 @@ export default function GmarketDashboard() {
                   <td className={`${cell} text-right`}>{sums.ad_spend ? (sums.revenue / sums.ad_spend).toFixed(1) : '-'}</td>
                   <td className={`${cell} text-right`}>{sums.revenue ? (sums.net_after_ad * 100 / sums.revenue).toFixed(1) : '0'}%</td>
                   <td className={`${cell} text-right`}>{fmt(sums.product_count)}</td>
+                  <td className={`${cell} text-right`}>{fmt(sums.max_item_count)}</td>
                   <td className={cell}></td>
                 </tr>
                 {rows.map(r => (
@@ -283,6 +288,9 @@ export default function GmarketDashboard() {
                   <td className={`${cell} text-right ${r.roas && r.roas < 100 ? 'text-red-500' : 'text-[#555]'}`}>{r.roas || '-'}</td>
                   <td className={`${cell} text-right ${r.margin && r.margin < 20 ? 'text-red-500 font-semibold' : 'text-[#555]'}`}>{r.margin}%</td>
                   <td className={`${cell} text-right font-semibold`}>{fmt(r.product_count)}</td>
+                  <td className={`${cell} text-right ${r.max_item_count && r.product_count >= r.max_item_count * 0.9 ? 'text-red-500 font-semibold' : 'text-[#555]'}`}>
+                    {r.max_item_count ? fmt(r.max_item_count) : '-'}
+                  </td>
                   <td className={`${cell} text-left text-[11px] text-[#999]`}>{r.collected_at ? r.collected_at.replace('T', ' ').slice(0, 16) : '-'}</td>
                 </tr>
                 ))}
@@ -291,6 +299,30 @@ export default function GmarketDashboard() {
           </table>
         </div>
         <p className="text-[11px] text-[#aaa]">※ CPC·AI매출업 = ESM 광고센터 '당일 소진액'을 기간 내 일별로 합산. 숫자를 클릭하면 일별 내역이 모달로 보입니다. (크롤이 안 된 날은 합산에서 빠집니다)</p>
+
+        {!!data?.excluded_rows?.length && (
+          <div className="bg-white border border-[#f0d9b5] rounded-lg overflow-auto">
+            <div className="px-3 py-1.5 text-[11px] text-[#a1650f] bg-[#fff8ec] border-b border-[#f0d9b5]">
+              테스트/타사 계정 — 위 합계에는 포함되지 않습니다
+            </div>
+            <table className="w-full text-[12px]">
+              <tbody className="divide-y divide-[#f0f0f0]">
+                {data.excluded_rows.map(r => (
+                  <tr key={r.login_id} className="hover:bg-[#fffaf0]">
+                    <td className={`${cell} w-[15%]`}><span className="font-mono">{r.login_id}</span> <span className="text-[#1e6fd9] text-[11px] font-semibold">{r.shop_name && r.shop_name !== r.login_id ? r.shop_name.slice(0, 4) : ''}</span></td>
+                    <td className={`${cell} text-right`}>잔액 {fmt(r.balance)}</td>
+                    <td className={`${cell} text-right text-[#e67700]`}>CPC {fmt(r.cpc_spend)}</td>
+                    <td className={`${cell} text-right text-[#9333ea]`}>AI {fmt(r.ai_spend)}</td>
+                    <td className={`${cell} text-right font-bold`}>광고비합계 {fmt(r.ad_spend)}</td>
+                    <td className={`${cell} text-right text-[#1e6fd9]`}>매출 {fmt(r.revenue)}</td>
+                    <td className={`${cell} text-right font-semibold text-[#7c3aed]`}>순수익 {fmt(r.net_after_ad)}</td>
+                    <td className={`${cell} text-right font-semibold`}>상품 {fmt(r.product_count)}개</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {costModal && <CostModal seller={costModal.seller} type={costModal.type} from={from} to={to} onClose={() => setCostModal(null)} />}

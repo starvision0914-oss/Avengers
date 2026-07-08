@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'apps.smartstore',
     'apps.naver_blog',
     'apps.coupang',
+    'apps.lotteon',
 ]
 
 MIDDLEWARE = [

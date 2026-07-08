@@ -157,10 +157,13 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
                         log_fn(f'[일반:{acct.login_id}] 로그인 실패 — 건너뜀')
                     continue
                 result = control_one(driver, acct.login_id, action, source, log_fn)
-                if result and not result.get('skipped'):
+                if result:
+                    # 스킵(이미 ON/OFF)이어도 현재 값으로 상태 테이블은 항상 갱신
+                    cur_on = result.get('after_on', result.get('before_on', 0))
+                    cur_off = result.get('after_off', result.get('before_off', 0))
                     GmarketCpcAdStatus.objects.update_or_create(
                         gmarket_id=acct.login_id,
-                        defaults={'cpc1_on': result.get('after_on', 0), 'cpc1_off': result.get('after_off', 0)}
+                        defaults={'cpc1_on': cur_on, 'cpc1_off': cur_off}
                     )
                 results.append(result)
                 CrawlerLog.objects.create(

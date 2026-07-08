@@ -2,24 +2,38 @@ import { useEffect, useState, useCallback } from 'react';
 import { Sun, Moon, RefreshCw, Search, ChevronLeft, ChevronRight, Package, Star, AlertCircle, X, Zap, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
-  fetchElevenMyProducts, fetchElevenMyAccounts, syncElevenMyProducts, fetchElevenMyProductDetail,
+  fetchElevenMyProducts, fetchElevenMyAccounts, syncElevenMyProducts,
   exportElevenMyProducts, triggerIntegratedSync, triggerProductRecrawl,
-  type ElevenMyProduct, type ElevenAccountSummary,
+  type ElevenAccountSummary,
 } from '../../api/elevenMy';
 import { fetchGmarketMyProducts, fetchGmarketMyAccounts, exportGmarketMyProducts } from '../../api/gmarketMy';
+import { fetchAllMyProducts, type MyProductAllItem } from '../../api/myProductsAll';
 import api from '../../api/client';
 import { useTheme } from '../../hooks/useTheme';
 import ElevenAccountSummaryCards from './ElevenAccountSummaryCards';
 
+const PLATFORM_BADGE: Record<string, { label: string; color: string }> = {
+  '11st': { label: '11번가', color: '#ff5a2e' },
+  gmarket: { label: '지마켓', color: '#16a34a' },
+  auction: { label: '옥션', color: '#db2777' },
+  coupang: { label: '쿠팡', color: '#ef4444' },
+  smartstore: { label: '스마트스토어', color: '#03c75a' },
+  lotteon: { label: '롯데ON', color: '#da291c' },
+};
+function platformKey(p: MyProductAllItem): string {
+  return p.platform === 'gmarket' && p.market === 'auction' ? 'auction' : p.platform;
+}
+// id는 11번가/지마켓 각각 별도 PK 시퀀스라 통합뷰에서는 충돌 가능 → 플랫폼+id 복합키 사용
+function compositeKey(p: MyProductAllItem): string {
+  return `${p.platform}:${p.id}`;
+}
+
 const PER_PAGE_OPTIONS = [50, 100, 200, 500, 1000];
 const MAX_SELECT = 3000;   // 한 번에 선택 가능한 최대 상품 수
 
-const STATUS_LABEL: Record<string, string> = {
-  '101': '판매대기', '102': '판매중', '103': '판매중지', '104': '품절',
-  '105': '판매종료', '106': '재고부족',
-};
 const STATUS_COLOR: Record<string, string> = {
-  '102': '#16a34a', '104': '#f59e0b', '105': '#dc2626', '103': '#6b7280',
+  '판매중': '#16a34a', '품절': '#f59e0b', '판매종료': '#dc2626',
+  '판매중지': '#6b7280', '판매금지': '#dc2626', '판매불가': '#dc2626', '재고부족': '#f59e0b',
 };
 
 function fmt(n: number | null | undefined): string {
@@ -39,21 +53,21 @@ export default function ElevenMyProductsPage() {
   const cardHover = dark ? 'hover:bg-[#2a2b35]' : 'hover:bg-gray-100';
 
   const [accounts, setAccounts] = useState<ElevenAccountSummary[]>([]);
-  const [items, setItems] = useState<ElevenMyProduct[]>([]);
+  const [items, setItems] = useState<MyProductAllItem[]>([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(0);
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(50);
   const [pageInput, setPageInput] = useState('');
-  const [platform, setPlatform] = useState<'11st' | 'gmarket'>('11st');   // 쇼핑몰 선택
+  const [platform, setPlatform] = useState<'all' | '11st' | 'gmarket'>('all');   // 쇼핑몰 선택
   const [accountId, setAccountId] = useState<number | undefined>(undefined);
   const [status, setStatus] = useState<string>('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [detailId, setDetailId] = useState<number | null>(null);
-  const [detail, setDetail] = useState<ElevenMyProduct | null>(null);
+  const [detailKey, setDetailKey] = useState<string | null>(null);
+  const [detail, setDetail] = useState<MyProductAllItem | null>(null);
   const [cardsOpen, setCardsOpen] = useState(true);
   const [integratedRunning, setIntegratedRunning] = useState(false);
   const [integratedModalOpen, setIntegratedModalOpen] = useState(false);
@@ -62,16 +76,18 @@ export default function ElevenMyProductsPage() {
   const [recrawlOpen, setRecrawlOpen] = useState(false);
   const [recrawlSel, setRecrawlSel] = useState<Set<string>>(new Set());
   const [recrawling, setRecrawling] = useState(false);
-  // 상품 선택(엑셀 다운로드용) — 페이지 넘어가도 유지 (id→상품)
-  const [selProd, setSelProd] = useState<Map<number, ElevenMyProduct>>(new Map());
+  // 상품 선택(엑셀 다운로드용) — 페이지 넘어가도 유지 (platform:id → 상품)
+  const [selProd, setSelProd] = useState<Map<string, MyProductAllItem>>(new Map());
   // 정렬
   const [sortKey, setSortKey] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [needsCheck, setNeedsCheck] = useState(false);          // 확인필요(역마진)만 보기
   const [needsCheckTotal, setNeedsCheckTotal] = useState(0);    // 확인필요 건수(배지)
   const [allAccounts, setAllAccounts] = useState(false);        // 전체 계정 보기(집중관리 외 비집중 포함)
+  const [dedup, setDedup] = useState(false);                    // 지마켓 중복(같은 판매자코드) 제외
 
   const loadAccounts = useCallback(async () => {
+    if (platform === 'all') { setAccounts([]); return; }
     try {
       if (platform === 'gmarket') {
         const accs = await fetchGmarketMyAccounts();
@@ -91,14 +107,24 @@ export default function ElevenMyProductsPage() {
   const loadProducts = useCallback(async () => {
     setLoading(true);
     try {
-      if (platform === 'gmarket') {
-        const r = await fetchGmarketMyProducts(page, perPage, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder);
-        setItems(r.items.map(p => ({ ...p, category_id: p.category_code, is_focused: false })) as any);
+      if (platform === 'all') {
+        const r = await fetchAllMyProducts(page, perPage, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, dedup);
+        setItems(r.items);
+        setTotal(r.total);
+        setTotalPages(r.total_pages);
+      } else if (platform === 'gmarket') {
+        const r = await fetchGmarketMyProducts(page, perPage, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup);
+        setItems(r.items.map(p => ({
+          ...p, platform: 'gmarket', category: p.category_code, is_focused: null,
+          status_label: p.status_type, purchase_cost: null, cost_diff: null,
+        })) as any);
         setTotal(r.total);
         setTotalPages(r.total_pages);
       } else {
         const r = await fetchElevenMyProducts(page, perPage, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck);
-        setItems(r.items);
+        setItems(r.items.map(p => ({
+          ...p, platform: '11st', category: p.category_id, market: null, status_label: p.status_type,
+        })) as any);
         setTotal(r.total);
         setTotalPages(r.total_pages);
         setNeedsCheckTotal(r.needs_check_total ?? 0);
@@ -108,7 +134,7 @@ export default function ElevenMyProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [platform, page, perPage, accountId, status, search, sortKey, sortOrder, needsCheck, allAccounts]);
+  }, [platform, page, perPage, accountId, status, search, sortKey, sortOrder, needsCheck, allAccounts, dedup]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -123,15 +149,9 @@ export default function ElevenMyProductsPage() {
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
-  useEffect(() => {
-    setDetail(null);                    // 새 상품 클릭 시 이전 상세를 즉시 비움 (로딩 중 다른 상품 표시 방지)
-    if (!detailId) return;
-    let cancelled = false;
-    fetchElevenMyProductDetail(detailId)
-      .then(d => { if (!cancelled) setDetail(d); })
-      .catch(() => { if (!cancelled) setDetail(null); });
-    return () => { cancelled = true; };   // 빠른 연속 클릭 시 이전 응답이 새 상세를 덮어쓰지 않게
-  }, [detailId]);
+  // 상세 모달 — 이미 로드된 행 데이터로 바로 표시(추가 fetch 불필요, 두 플랫폼 공통 필드로 충분)
+  const openDetail = (p: MyProductAllItem) => { setDetailKey(compositeKey(p)); setDetail(p); };
+  const closeDetail = () => { setDetailKey(null); setDetail(null); };
 
   const handleSync = async (singleAccountId?: number) => {
     setSyncing(true);
@@ -226,39 +246,52 @@ export default function ElevenMyProductsPage() {
     }
   };
 
-  const toggleProd = (p: ElevenMyProduct) => {
+  const toggleProd = (p: MyProductAllItem) => {
     setSelProd(prev => {
       const n = new Map(prev);
-      if (n.has(p.id)) n.delete(p.id); else n.set(p.id, p);
+      const k = compositeKey(p);
+      if (n.has(k)) n.delete(k); else n.set(k, p);
       return n;
     });
   };
   // 선택 상품 삭제 — 검증(dry-run)/실삭제. 플랫폼별(11번가/지마켓) 셀러오피스에서 판매중지→재조회→삭제.
+  // 통합뷰에서는 선택 항목이 두 플랫폼에 걸쳐있을 수 있어 플랫폼별로 그룹핑해 각각의 삭제 API를 호출한다.
   const deleteSelectedProducts = (real: boolean) => {
-    const sel = Array.from(selProd.values()) as any[];
+    const sel = Array.from(selProd.values());
     if (!sel.length) { toast.error('삭제할 상품을 선택하세요'); return; }
-    const byAcc: Record<string, string[]> = {};
-    sel.forEach(p => { const lid = p.login_id; if (lid) (byAcc[lid] = byAcc[lid] || []).push(String(p.product_no)); });
-    const accs = Object.keys(byAcc);
-    if (!accs.length) { toast.error('계정 정보 없음'); return; }
-    const mall = platform === 'gmarket' ? '지마켓' : '11번가';
-    const url = platform === 'gmarket' ? '/cpc/gmarket/loss-products/delete/' : '/cpc/eleven-loss-products/delete/';
+    const byPlatform: Record<string, Record<string, string[]>> = { '11st': {}, gmarket: {} };
+    sel.forEach(p => {
+      const lid = p.login_id;
+      if (!lid) return;
+      const grp = byPlatform[p.platform];
+      (grp[lid] = grp[lid] || []).push(String(p.product_no));
+    });
+    const groups = (['11st', 'gmarket'] as const)
+      .map(pf => ({ pf, byAcc: byPlatform[pf], accs: Object.keys(byPlatform[pf]) }))
+      .filter(g => g.accs.length > 0);
+    if (!groups.length) { toast.error('계정 정보 없음'); return; }
+    const totalAccs = groups.reduce((s, g) => s + g.accs.length, 0);
+    const mallNames = groups.map(g => (g.pf === 'gmarket' ? '지마켓' : '11번가')).join('+');
     if (real) {
-      if (!window.confirm(`⚠️ 위험: 선택 ${sel.length}개를 ${mall}에서 실제·영구 삭제합니다(되돌릴 수 없음).\n\n먼저 [🔎 선택 검증]으로 확인하셨나요?\n검증을 안 하셨다면 [취소]하고 검증부터 하세요.\n\n검증을 마쳤고, 실제 삭제를 진행하시겠습니까?`)) return;
-      if (!window.confirm(`최종 확인 ⚠️\n${sel.length}개(${accs.length}계정) 상품을 ${mall}에서 영구 삭제합니다.\n정말 진행하시겠습니까?`)) return;
+      if (!window.confirm(`⚠️ 위험: 선택 ${sel.length}개를 ${mallNames}에서 실제·영구 삭제합니다(되돌릴 수 없음).\n\n먼저 [🔎 선택 검증]으로 확인하셨나요?\n검증을 안 하셨다면 [취소]하고 검증부터 하세요.\n\n검증을 마쳤고, 실제 삭제를 진행하시겠습니까?`)) return;
+      if (!window.confirm(`최종 확인 ⚠️\n${sel.length}개(${totalAccs}계정) 상품을 ${mallNames}에서 영구 삭제합니다.\n정말 진행하시겠습니까?`)) return;
     } else {
-      if (!window.confirm(`🔎 선택 ${sel.length}개(${accs.length}계정) 삭제 검증(dry-run)\n셀러오피스 접속·상품번호 입력·조회·셀렉터를 확인합니다.\n실제 삭제는 하지 않습니다(안전). 진행할까요?`)) return;
+      if (!window.confirm(`🔎 선택 ${sel.length}개(${totalAccs}계정) 삭제 검증(dry-run)\n셀러오피스 접속·상품번호 입력·조회·셀렉터를 확인합니다.\n실제 삭제는 하지 않습니다(안전). 진행할까요?`)) return;
     }
-    Promise.all(accs.map(eid => api.post(url, { eid, product_nos: byAcc[eid], ...(real ? { real: 1 } : {}) })))
-      .then(() => toast.success(`${real ? '실삭제' : '검증(dry-run)'} 시작 — ${accs.length}계정. 진행상황은 텔레그램/로그로 확인하세요.`))
+    const calls = groups.flatMap(g => {
+      const url = g.pf === 'gmarket' ? '/cpc/gmarket/loss-products/delete/' : '/cpc/eleven-loss-products/delete/';
+      return g.accs.map(eid => api.post(url, { eid, product_nos: g.byAcc[eid], ...(real ? { real: 1 } : {}) }));
+    });
+    Promise.all(calls)
+      .then(() => toast.success(`${real ? '실삭제' : '검증(dry-run)'} 시작 — ${totalAccs}계정. 진행상황은 텔레그램/로그로 확인하세요.`))
       .catch((e: any) => toast.error(e?.response?.data?.message || e?.response?.data?.error || '시작 실패'));
   };
-  const pageAllSelected = items.length > 0 && items.every(p => selProd.has(p.id));
+  const pageAllSelected = items.length > 0 && items.every(p => selProd.has(compositeKey(p)));
   const togglePageAll = () => {
     setSelProd(prev => {
       const n = new Map(prev);
-      if (items.every(p => n.has(p.id))) items.forEach(p => n.delete(p.id));
-      else items.forEach(p => n.set(p.id, p));
+      if (items.every(p => n.has(compositeKey(p)))) items.forEach(p => n.delete(compositeKey(p)));
+      else items.forEach(p => n.set(compositeKey(p), p));
       return n;
     });
   };
@@ -270,21 +303,31 @@ export default function ElevenMyProductsPage() {
     setSelecting(true);
     const tid = toast.loading(`검색결과 상위 ${fmt(MAX_SELECT)}개 불러오는 중...`);
     try {
-      const resp = platform === 'gmarket'
-        ? await fetchGmarketMyProducts(1, MAX_SELECT, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder)
-        : await fetchElevenMyProducts(1, MAX_SELECT, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck);
-      const fetched = resp.items as ElevenMyProduct[];
+      let fetched: MyProductAllItem[];
+      let respTotal: number;
+      if (platform === 'all') {
+        const resp = await fetchAllMyProducts(1, MAX_SELECT, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, dedup);
+        fetched = resp.items; respTotal = resp.total;
+      } else if (platform === 'gmarket') {
+        const resp = await fetchGmarketMyProducts(1, MAX_SELECT, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup);
+        fetched = resp.items.map(p => ({ ...p, platform: 'gmarket' as const, category: p.category_code, is_focused: null, status_label: p.status_type, purchase_cost: null, cost_diff: null })) as any;
+        respTotal = resp.total;
+      } else {
+        const resp = await fetchElevenMyProducts(1, MAX_SELECT, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck);
+        fetched = resp.items.map(p => ({ ...p, platform: '11st' as const, category: p.category_id, market: null, status_label: p.status_type })) as any;
+        respTotal = resp.total;
+      }
       setSelProd(() => {
-        const n = new Map<number, ElevenMyProduct>();
+        const n = new Map<string, MyProductAllItem>();
         for (const p of fetched) {
           if (n.size >= MAX_SELECT) break;
-          n.set(p.id, p);
+          n.set(compositeKey(p), p);
         }
         return n;
       });
       const cnt = Math.min(fetched.length, MAX_SELECT);
       toast.success(
-        `${fmt(cnt)}개 선택됨${resp.total > MAX_SELECT ? ` (전체 ${fmt(resp.total)}건 중 상위 ${fmt(MAX_SELECT)}개)` : ''}`,
+        `${fmt(cnt)}개 선택됨${respTotal > MAX_SELECT ? ` (전체 ${fmt(respTotal)}건 중 상위 ${fmt(MAX_SELECT)}개)` : ''}`,
         { id: tid },
       );
     } catch {
@@ -295,9 +338,9 @@ export default function ElevenMyProductsPage() {
   };
   // 선택한 상품만 CSV로 다운로드 (이미 로드된 객체로 클라이언트에서 생성 — 선택 그대로 반영)
   const downloadSelectedExcel = () => {
-    const sel = Array.from(selProd.values()) as any[];
+    const sel = Array.from(selProd.values());
     if (!sel.length) { toast.error('선택된 상품이 없습니다'); return; }
-    const header = ['셀러', '로그인ID', '상품번호', '판매자상품코드', '상품명', '판매가', '재고', '판매상태', '카테고리', '마켓가', '차이'];
+    const header = ['플랫폼', '셀러', '로그인ID', '상품번호', '판매자상품코드', '상품명', '판매가', '재고', '판매상태', '카테고리', '마켓가', '차이'];
     const esc = (v: any) => {
       const s = v == null ? '' : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -305,34 +348,34 @@ export default function ElevenMyProductsPage() {
     const lines = [header.join(',')];
     for (const p of sel) {
       lines.push([
-        p.seller_name ?? '', p.login_id ?? '', p.product_no ?? '',
+        PLATFORM_BADGE[platformKey(p)]?.label ?? p.platform, p.seller_name ?? '', p.login_id ?? '', p.product_no ?? '',
         p.seller_product_code ?? '', p.product_name ?? '', p.sale_price ?? '',
-        p.stock_quantity ?? '', STATUS_LABEL[p.status_type] ?? p.status_type ?? '',
-        p.category_id ?? '', p.purchase_cost ?? '', p.cost_diff ?? '',
+        p.stock_quantity ?? '', p.status_label ?? p.status_type ?? '',
+        p.category ?? '', p.purchase_cost ?? '', p.cost_diff ?? '',
       ].map(esc).join(','));
     }
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `11번가_나의상품_선택_${sel.length}건_${new Date().toLocaleDateString('sv')}.csv`;
+    a.download = `나의상품_선택_${sel.length}건_${new Date().toLocaleDateString('sv')}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     toast.success(`선택 ${fmt(sel.length)}건 엑셀(CSV) 다운로드`);
   };
-  // 현재 필터(계정/상태/검색)에 맞는 '전체' 상품을 CSV로 다운로드 — 선택 불필요
+  // 현재 필터(계정/상태/검색)에 맞는 '전체' 상품을 CSV로 다운로드 — 선택 불필요 (플랫폼 단일 선택 시에만 가능)
   const downloadAllExcel = async () => {
-    if (downloading) return;
+    if (downloading || platform === 'all') return;
     setDownloading(true);
     const tid = toast.loading(`전체 상품 다운로드 중... (${fmt(total)}건)`);
     try {
       const blob = platform === 'gmarket'
-        ? await exportGmarketMyProducts(accountId, undefined, status || undefined, search || undefined)
+        ? await exportGmarketMyProducts(accountId, undefined, status || undefined, search || undefined, dedup)
         : await exportElevenMyProducts(accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `11번가_나의상품_전체_${new Date().toLocaleDateString('sv')}.csv`;
+      a.download = `나의상품_전체_${new Date().toLocaleDateString('sv')}.csv`;
       a.click();
       URL.revokeObjectURL(url);
       toast.success(`전체 ${fmt(total)}건 엑셀(CSV) 다운로드`, { id: tid });
@@ -356,18 +399,18 @@ export default function ElevenMyProductsPage() {
   }, null);
 
   const focusedAccountsWithKey = accounts.filter(a => a.has_api_key);
-  const noFocused = accounts.length === 0;
+  const noFocused = platform !== 'all' && accounts.length === 0;
 
   return (
     <div className={`min-h-screen ${bg}`}>
       <div className="max-w-[1600px] mx-auto px-4 md:px-6 py-4 space-y-3">
         <header className="flex items-center justify-between">
           <div>
-            <h1 className={`text-2xl font-bold ${text1}`}>11번가 나의 상품</h1>
+            <h1 className={`text-2xl font-bold ${text1}`}>나의 상품</h1>
             <p className={`text-xs ${text3} mt-0.5`}>
               총 {fmt(total)}개
-              {lastSyncOverall && ` · 마지막 동기화 ${new Date(lastSyncOverall).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
-              {' · 집중관리 셀러 '}{accounts.length}개 (API키 등록 {focusedAccountsWithKey.length})
+              {platform !== 'all' && lastSyncOverall && ` · 마지막 동기화 ${new Date(lastSyncOverall).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`}
+              {platform !== 'all' && (<>{' · 집중관리 셀러 '}{accounts.length}개 (API키 등록 {focusedAccountsWithKey.length})</>)}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -407,48 +450,55 @@ export default function ElevenMyProductsPage() {
         </div>
 
         <div className={`flex flex-wrap items-center gap-2 rounded-xl border ${card} p-2.5`}>
-          <button
-            onClick={openIntegratedSync}
-            disabled={integratedRunning || accounts.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white disabled:opacity-40 shadow-md"
-            title="등급+광고비+상품 통합 동기화"
-          >
-            <Zap size={13} className={integratedRunning ? 'animate-pulse' : ''} /> 통합 동기화 ({accounts.length})
-          </button>
+          {platform !== 'all' && (
+            <button
+              onClick={openIntegratedSync}
+              disabled={integratedRunning || accounts.length === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white disabled:opacity-40 shadow-md"
+              title="등급+광고비+상품 통합 동기화"
+            >
+              <Zap size={13} className={integratedRunning ? 'animate-pulse' : ''} /> 통합 동기화 ({accounts.length})
+            </button>
+          )}
 
-          <button
-            onClick={() => handleSync(undefined)}
-            disabled={syncing || focusedAccountsWithKey.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-40"
-            title={focusedAccountsWithKey.length === 0 ? 'API키 등록된 집중관리 계정 없음' : '상품만 동기화 (OpenAPI)'}
-          >
-            <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} /> 상품만 ({focusedAccountsWithKey.length})
-          </button>
+          {platform === '11st' && (
+            <button
+              onClick={() => handleSync(undefined)}
+              disabled={syncing || focusedAccountsWithKey.length === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-purple-600 hover:bg-purple-700 text-white disabled:opacity-40"
+              title={focusedAccountsWithKey.length === 0 ? 'API키 등록된 집중관리 계정 없음' : '상품만 동기화 (OpenAPI)'}
+            >
+              <RefreshCw size={13} className={syncing ? 'animate-spin' : ''} /> 상품만 ({focusedAccountsWithKey.length})
+            </button>
+          )}
 
           <select
             value={platform}
-            onChange={e => { setPlatform(e.target.value as '11st' | 'gmarket'); setAccountId(undefined); setPage(1); }}
+            onChange={e => { setPlatform(e.target.value as 'all' | '11st' | 'gmarket'); setAccountId(undefined); setPage(1); }}
             className={`px-2 py-2 rounded-lg border text-[12px] font-semibold ${inputBg}`}
             title="쇼핑몰 선택"
           >
+            <option value="all">🗂 전체</option>
             <option value="11st">🛒 11번가</option>
             <option value="gmarket">🛍 지마켓/옥션</option>
           </select>
 
-          <select
-            value={accountId ?? ''}
-            onChange={e => { setAccountId(e.target.value ? Number(e.target.value) : undefined); setPage(1); }}
-            className={`px-2 py-2 rounded-lg border text-[12px] ${inputBg}`}
-          >
-            <option value="">전체 계정</option>
-            {accounts.map(a => (
-              <option key={a.account_id} value={a.account_id}>
-                {a.login_id} ({a.seller_name || '-'}) · {a.product_count}개{a.has_api_key ? '' : ' [API키 미설정]'}
-              </option>
-            ))}
-          </select>
+          {platform !== 'all' && (
+            <select
+              value={accountId ?? ''}
+              onChange={e => { setAccountId(e.target.value ? Number(e.target.value) : undefined); setPage(1); }}
+              className={`px-2 py-2 rounded-lg border text-[12px] ${inputBg}`}
+            >
+              <option value="">전체 계정</option>
+              {accounts.map(a => (
+                <option key={a.account_id} value={a.account_id}>
+                  {a.login_id} ({a.seller_name || '-'}) · {a.product_count}개{a.has_api_key ? '' : ' [API키 미설정]'}
+                </option>
+              ))}
+            </select>
+          )}
 
-          {accountId && (
+          {platform === '11st' && accountId && (
             <button
               onClick={() => handleSync(accountId)}
               disabled={syncing}
@@ -467,7 +517,9 @@ export default function ElevenMyProductsPage() {
             <option value="판매중">판매중</option>
             <option value="판매중지">판매중지</option>
             <option value="품절">품절</option>
-            <option value="판매금지">판매금지</option>
+            {platform === '11st' && <option value="판매금지">판매금지</option>}
+            {platform !== '11st' && <option value="판매불가">판매불가</option>}
+            {platform !== '11st' && <option value="판매종료">판매종료</option>}
           </select>
 
           {platform === '11st' && (
@@ -484,28 +536,40 @@ export default function ElevenMyProductsPage() {
             </label>
           )}
 
-          {platform === '11st' && (
+          {(platform === '11st' || platform === 'all') && (
             <button
               onClick={() => { setNeedsCheck(v => !v); setPage(1); }}
-              title="구매원가가 판매가보다 높은(역마진) 상품 — 단위 불일치/원가 오류 등 확인 필요. 가장 심한 순으로 맨 위에 표시."
+              title="구매원가가 판매가보다 높은(역마진) 상품 — 11번가만 해당. 단위 불일치/원가 오류 등 확인 필요."
               className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[12px] font-semibold ${
                 needsCheck
                   ? 'bg-red-600 text-white border-red-600'
                   : `${inputBg} ${needsCheckTotal > 0 ? 'text-red-500 border-red-400' : ''}`
               }`}
             >
-              ⚠ 확인필요{needsCheckTotal > 0 ? ` (${fmt(needsCheckTotal)})` : ''}
+              ⚠ 확인필요{platform === '11st' && needsCheckTotal > 0 ? ` (${fmt(needsCheckTotal)})` : ''}
             </button>
           )}
 
-          <button
-            onClick={() => setRecrawlOpen(o => !o)}
-            disabled={accounts.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-40"
-            title="계정 선택 후 등록상품(대량엑셀) 새로 크롤링"
-          >
-            <Package size={13} /> 등록상품 재크롤{recrawlSel.size > 0 ? ` (${recrawlSel.size})` : ''}
-          </button>
+          {(platform === 'gmarket' || platform === 'all') && (
+            <label
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[12px] font-semibold cursor-pointer ${dedup ? 'bg-blue-600 border-blue-600 text-white' : inputBg}`}
+              title="같은 판매자코드(=같은 상품)가 여러 상품번호/마켓으로 등록된 지마켓/옥션 중복을 1개만 표시"
+            >
+              <input type="checkbox" checked={dedup} onChange={e => { setDedup(e.target.checked); setPage(1); }} />
+              중복제외(지마켓)
+            </label>
+          )}
+
+          {platform !== 'all' && (
+            <button
+              onClick={() => setRecrawlOpen(o => !o)}
+              disabled={accounts.length === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white disabled:opacity-40"
+              title="계정 선택 후 등록상품(대량엑셀) 새로 크롤링"
+            >
+              <Package size={13} /> 등록상품 재크롤{recrawlSel.size > 0 ? ` (${recrawlSel.size})` : ''}
+            </button>
+          )}
 
           <button
             onClick={selectUpToMax}
@@ -544,9 +608,9 @@ export default function ElevenMyProductsPage() {
 
           <button
             onClick={downloadAllExcel}
-            disabled={downloading}
+            disabled={downloading || platform === 'all'}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-40"
-            title="현재 필터(계정/상태/검색)에 맞는 전체 상품을 CSV로 다운로드 (선택 불필요)"
+            title={platform === 'all' ? '전체 다운로드는 플랫폼(11번가/지마켓)을 선택한 뒤 가능합니다' : '현재 필터(계정/상태/검색)에 맞는 전체 상품을 CSV로 다운로드 (선택 불필요)'}
           >
             <Download size={13} /> {downloading ? '다운로드 중…' : `전체 엑셀 다운로드 (${fmt(total)})`}
           </button>
@@ -566,7 +630,7 @@ export default function ElevenMyProductsPage() {
         </div>
 
         {/* 등록상품 재크롤 — 계정 선택 패널 */}
-        {recrawlOpen && (
+        {platform !== 'all' && recrawlOpen && (
           <div className={`rounded-xl border ${card} p-3 space-y-2.5`}>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-3">
@@ -622,7 +686,7 @@ export default function ElevenMyProductsPage() {
             <div className="p-12 text-center space-y-3">
               <Package size={32} className={`mx-auto ${text3}`} />
               <p className={`text-[12px] ${text2}`}>표시할 상품이 없습니다.</p>
-              <p className={`text-[11px] ${text3}`}>"일괄 동기화" 버튼을 눌러 11번가 API에서 상품을 가져오세요.</p>
+              {platform === '11st' && <p className={`text-[11px] ${text3}`}>"일괄 동기화" 버튼을 눌러 11번가 API에서 상품을 가져오세요.</p>}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -632,6 +696,7 @@ export default function ElevenMyProductsPage() {
                     <th className="px-2 py-2 text-center font-medium w-8">
                       <input type="checkbox" checked={pageAllSelected} onChange={togglePageAll} title="이 페이지 전체선택" />
                     </th>
+                    {platform === 'all' && <th className="px-3 py-2 text-left font-medium w-16">플랫폼</th>}
                     <th onClick={() => handleSort('seller_name')} className="px-3 py-2 text-left font-medium w-32 cursor-pointer select-none">셀러{sortArrow('seller_name')}</th>
                     <th className="px-3 py-2 text-left font-medium w-12">★</th>
                     <th className="px-3 py-2 text-left font-medium w-16">이미지</th>
@@ -641,21 +706,32 @@ export default function ElevenMyProductsPage() {
                     <th onClick={() => handleSort('stock_quantity')} className="px-3 py-2 text-right font-medium w-16 cursor-pointer select-none">재고{sortArrow('stock_quantity')}</th>
                     <th onClick={() => handleSort('status_type')} className="px-3 py-2 text-center font-medium w-20 cursor-pointer select-none">상태{sortArrow('status_type')}</th>
                     <th onClick={() => handleSort('seller_product_code')} className="px-3 py-2 text-left font-medium w-28 cursor-pointer select-none">셀러코드{sortArrow('seller_product_code')}</th>
-                    <th onClick={() => handleSort('category_id')} className="px-3 py-2 text-left font-medium w-24 cursor-pointer select-none">카테고리{sortArrow('category_id')}</th>
+                    <th className="px-3 py-2 text-left font-medium w-24">카테고리</th>
                     <th onClick={() => handleSort('synced_at')} className="px-3 py-2 text-right font-medium w-28 cursor-pointer select-none">동기화{sortArrow('synced_at')}</th>
-                    <th onClick={() => handleSort('purchase_cost')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="예비상품(오너클랜) 마켓가(마켓실제판매가) — 판매자코드 매칭">마켓가{sortArrow('purchase_cost')}</th>
-                    <th onClick={() => handleSort('cost_diff')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="판매가 - 마켓가">차이{sortArrow('cost_diff')}</th>
+                    {platform !== 'all' && <th className="px-3 py-2 text-right font-medium w-24" title="예비상품(오너클랜) 마켓가(마켓실제판매가) — 판매자코드 매칭">마켓가</th>}
+                    {platform !== 'all' && <th className="px-3 py-2 text-right font-medium w-24" title="판매가 - 마켓가">차이</th>}
                   </tr>
                 </thead>
                 <tbody className={`divide-y ${dark ? 'divide-[#2a2b35]' : 'divide-gray-100'}`}>
-                  {items.map(p => (
-                    <tr key={p.id} onClick={() => setDetailId(p.id)} className={`${dark ? 'hover:bg-[#1f2029]' : 'hover:bg-gray-50'} cursor-pointer ${
-                      selProd.has(p.id) ? (dark ? 'bg-teal-900/20' : 'bg-teal-50')
+                  {items.map(p => {
+                    const ck = compositeKey(p);
+                    const badge = PLATFORM_BADGE[platformKey(p)];
+                    return (
+                    <tr key={ck} onClick={() => openDetail(p)} className={`${dark ? 'hover:bg-[#1f2029]' : 'hover:bg-gray-50'} cursor-pointer ${
+                      selProd.has(ck) ? (dark ? 'bg-teal-900/20' : 'bg-teal-50')
                       : (p.cost_diff != null && p.cost_diff < 0) ? (dark ? 'bg-red-900/15' : 'bg-red-50') : ''
                     }`}>
                       <td className="px-2 py-1.5 text-center" onClick={e => e.stopPropagation()}>
-                        <input type="checkbox" checked={selProd.has(p.id)} onChange={() => toggleProd(p)} />
+                        <input type="checkbox" checked={selProd.has(ck)} onChange={() => toggleProd(p)} />
                       </td>
+                      {platform === 'all' && (
+                        <td className="px-3 py-1.5">
+                          <span className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold"
+                            style={{ backgroundColor: `${badge.color}20`, color: badge.color }}>
+                            {badge.label}
+                          </span>
+                        </td>
+                      )}
                       <td className={`px-3 py-1.5 ${text2} text-[11px]`}>
                         <div className="font-mono">{p.login_id}</div>
                         <div className={text3}>{p.seller_name || '-'}</div>
@@ -673,30 +749,34 @@ export default function ElevenMyProductsPage() {
                       <td className={`px-3 py-1.5 font-mono text-[11px] ${text2}`}>{p.product_no}</td>
                       <td className={`px-3 py-1.5 ${text1} max-w-md truncate`} title={p.product_name}>{p.product_name || '-'}</td>
                       <td className={`px-3 py-1.5 text-right ${text1} font-semibold`}>{fmt(p.sale_price)}</td>
-                      <td className={`px-3 py-1.5 text-right ${p.stock_quantity > 0 ? text2 : 'text-red-500 font-semibold'}`}>{fmt(p.stock_quantity)}</td>
+                      <td className={`px-3 py-1.5 text-right ${p.stock_quantity == null ? text3 : p.stock_quantity > 0 ? text2 : 'text-red-500 font-semibold'}`}>{fmt(p.stock_quantity)}</td>
                       <td className="px-3 py-1.5 text-center">
                         <span
                           className="inline-block px-2 py-0.5 rounded-full text-[10px] font-bold"
-                          style={{ backgroundColor: `${STATUS_COLOR[p.status_type] || '#94a3b8'}25`, color: STATUS_COLOR[p.status_type] || '#94a3b8' }}
+                          style={{ backgroundColor: `${STATUS_COLOR[p.status_label] || '#94a3b8'}25`, color: STATUS_COLOR[p.status_label] || '#94a3b8' }}
                         >
-                          {STATUS_LABEL[p.status_type] || p.status_type || '-'}
+                          {p.status_label || p.status_type || '-'}
                         </span>
                       </td>
                       <td className={`px-3 py-1.5 font-mono text-[10px] ${text3}`}>{p.seller_product_code || '-'}</td>
-                      <td className={`px-3 py-1.5 font-mono text-[10px] ${text3}`}>{p.category_id || '-'}</td>
+                      <td className={`px-3 py-1.5 font-mono text-[10px] ${text3}`}>{p.category || '-'}</td>
                       <td className={`px-3 py-1.5 text-right text-[10px] ${text3}`}>
                         {p.synced_at ? new Date(p.synced_at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}
                       </td>
-                      <td className={`px-3 py-1.5 text-right ${text2}`}>{p.purchase_cost != null ? fmt(p.purchase_cost) : '-'}</td>
-                      <td className="px-3 py-1.5 text-right font-semibold">
-                        {p.cost_diff != null ? (
-                          <span className={p.cost_diff >= 0 ? 'text-emerald-500' : 'text-red-500'}>
-                            {p.cost_diff > 0 ? '+' : ''}{fmt(p.cost_diff)}
-                          </span>
-                        ) : <span className={text3}>-</span>}
-                      </td>
+                      {platform !== 'all' && (
+                        <td className={`px-3 py-1.5 text-right ${text2}`}>{p.purchase_cost != null ? fmt(p.purchase_cost) : '-'}</td>
+                      )}
+                      {platform !== 'all' && (
+                        <td className="px-3 py-1.5 text-right font-semibold">
+                          {p.cost_diff != null ? (
+                            <span className={p.cost_diff >= 0 ? 'text-emerald-500' : 'text-red-500'}>
+                              {p.cost_diff > 0 ? '+' : ''}{fmt(p.cost_diff)}
+                            </span>
+                          ) : <span className={text3}>-</span>}
+                        </td>
+                      )}
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>
@@ -736,15 +816,15 @@ export default function ElevenMyProductsPage() {
         )}
       </div>
 
-      {detailId && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => setDetailId(null)}>
+      {detailKey && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4" onClick={closeDetail}>
           <div className={`relative w-full max-w-3xl rounded-2xl border ${card} shadow-2xl`} onClick={e => e.stopPropagation()}>
             <header className={`flex items-center justify-between px-5 py-3 border-b ${dark ? 'border-[#2a2b35]' : 'border-gray-200'}`}>
               <div className="flex items-center gap-3">
                 <span className={`font-mono text-[12px] ${text2}`}>{detail ? detail.product_no : '불러오는 중…'}</span>
                 <span className={`text-[11px] ${text3}`}>{detail?.login_id || ''}</span>
               </div>
-              <button onClick={() => setDetailId(null)} className={`p-1 rounded ${cardHover} ${text2}`}><X size={16} /></button>
+              <button onClick={closeDetail} className={`p-1 rounded ${cardHover} ${text2}`}><X size={16} /></button>
             </header>
             {!detail ? (
               <div className="p-12 text-center"><RefreshCw size={20} className="animate-spin mx-auto text-blue-500" /></div>
@@ -761,14 +841,19 @@ export default function ElevenMyProductsPage() {
               </div>
               <div className="md:col-span-2 space-y-2 text-[12px]">
                 <h3 className={`text-[12px] font-bold ${text1}`}>{detail.product_name}</h3>
+                <Row k="플랫폼" v={PLATFORM_BADGE[platformKey(detail)]?.label ?? detail.platform} dark={dark} />
                 <Row k="셀러" v={`${detail.login_id} (${detail.seller_name || '-'})`} dark={dark} />
                 <Row k="판매가" v={`${fmt(detail.sale_price)}원`} dark={dark} />
                 <Row k="재고" v={`${fmt(detail.stock_quantity)}개`} dark={dark} />
-                <Row k="상태" v={`${STATUS_LABEL[detail.status_type] || detail.status_type}`} dark={dark} />
+                <Row k="상태" v={`${detail.status_label || detail.status_type}`} dark={dark} />
                 <Row k="셀러상품코드" v={detail.seller_product_code || '-'} dark={dark} />
-                <Row k="마켓가" v={detail.purchase_cost != null ? `${fmt(detail.purchase_cost)}원` : '-'} dark={dark} />
-                <Row k="차이(판매가-마켓가)" v={detail.cost_diff != null ? `${detail.cost_diff > 0 ? '+' : ''}${fmt(detail.cost_diff)}원` : '-'} dark={dark} />
-                <Row k="카테고리" v={detail.category_id || '-'} dark={dark} />
+                {detail.platform === '11st' && (
+                  <>
+                    <Row k="마켓가" v={detail.purchase_cost != null ? `${fmt(detail.purchase_cost)}원` : '-'} dark={dark} />
+                    <Row k="차이(판매가-마켓가)" v={detail.cost_diff != null ? `${detail.cost_diff > 0 ? '+' : ''}${fmt(detail.cost_diff)}원` : '-'} dark={dark} />
+                  </>
+                )}
+                <Row k="카테고리" v={detail.category || '-'} dark={dark} />
                 <Row k="동기화" v={detail.synced_at ? new Date(detail.synced_at).toLocaleString('ko-KR') : '-'} dark={dark} />
               </div>
             </div>

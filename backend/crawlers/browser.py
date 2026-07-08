@@ -190,6 +190,14 @@ def create_driver(download_dir=None, kill_existing=True, user_data_dir=None, ena
                 opts.set_capability('goog:loggingPrefs', {'performance': 'ALL'})
 
             driver = webdriver.Chrome(options=opts)
+            # 크롬드라이버가 죽거나 응답불능 상태가 되면 Selenium 호출(HTTP)이 기본적으로
+            # 무한정 멈춤(타임아웃 없음) — rejoice987/rejoice911 부가세수집이 '로그인 시도 1/3'
+            # 단계에서 몇 분씩 조용히 멈춰있던 근본원인(2026-07-08). 120초로 상한을 둬서
+            # 이후 호출부의 재시도 로직이 실제로 작동하도록 함.
+            try:
+                driver.command_executor.set_timeout(120)
+            except Exception:
+                pass
             if enable_perf_log:
                 driver.execute_cdp_cmd('Network.enable', {})
             driver.implicitly_wait(10)

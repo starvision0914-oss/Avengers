@@ -80,3 +80,4 @@
 - [폰 무선adb(같은WiFi)](project_phone_wireless_adb_wifi.md) — USB탈피 시도. 네이트가 기본브라우저라 Tailscale구글로그인 막힘(크롬으로교체), 최종 같은WiFi+adb tcpip로 성공하나 불안정. 정식무선디버깅 토글 미완료. 크롬원격데스크톱 발견삭제(은행앱 원격탐지 차단원인)
 - [스마트스토어 공유로그인 대시보드버그](project_smartstore_dual_login_dashboard_bug.md) — 아이리스./아이리스홈스토어 같은로그인 공유로 매출이 한쪽에만 몰림(dict충돌). shop_name기반 재매칭으로 수정(2026-07-07)
 - [롯데온 로그인 성공](project_lotteon_login_success.md) — rejoice234 2FA 자동화 성공. WebSquare는 ActionChains클릭 필요(일반.click() 안먹음), 코드는 파일폴링 0.5초로 3분타임아웃 극복. scripts/_lotteon_login_otp.py 완성
+- [11번가 오피스 포인트 0원 버그](project_11st_office_point_zero_bug.md) — 셀러오피스 페이지개편으로 절대경로XPath 깨짐→포인트/상품수 조용히 0저장(tmxkql21 등 4계정). 라벨기반(li앵커) 탐색+핵심3항목 미검출시 예외로 수정(2026-07-08)

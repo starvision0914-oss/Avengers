@@ -69,10 +69,52 @@ def _click_gmarket_tab(driver, log):
         return False
 
 
-def _get_seller_ids(driver, login_id):
-    """복수 셀러ID 드롭다운 목록 반환. 없으면 [(login_id, login_id)]."""
+# 옥션 탭 id 후보 — ESM 내부 명명은 지마켓=Gmkt, 옥션=Auc 또는 Iac(구 Interpark Auction Corp)
+# 두 가지를 다 씀(예: GmktSellBalanceManagement vs IacSellBalanceManagement) — 후보를 순서대로 시도.
+_AUCTION_TAB_IDS = ['aucTab', 'iacTab', 'auctionTab', 'aucdTab']
+
+
+def _click_auction_tab(driver, log):
+    # 1차: 알려진 후보 id
+    for tab_id in _AUCTION_TAB_IDS:
+        try:
+            tab = WebDriverWait(driver, 3).until(
+                EC.element_to_be_clickable((By.XPATH, f'//*[@id="{tab_id}"]/a'))
+            )
+            driver.execute_script("arguments[0].click();", tab)
+            time.sleep(2)
+            log(f"옥션 탭 클릭 성공 (#{tab_id})")
+            return True
+        except Exception:
+            continue
+    # 2차: gmktTab의 형제 탭(li) 중 gmktTab이 아닌 것을 감지해 클릭 — 정확한 id를 몰라도 동작
     try:
-        select_el = driver.find_element(By.ID, "introSelectSellerId")
+        gmkt_tab = driver.find_element(By.ID, "gmktTab")
+        siblings = gmkt_tab.find_elements(
+            By.XPATH, "./following-sibling::li | ./preceding-sibling::li")
+        for sib in siblings:
+            sib_id = sib.get_attribute("id") or ""
+            if not sib_id or sib_id == "gmktTab":
+                continue
+            try:
+                link = sib.find_element(By.TAG_NAME, "a")
+            except NoSuchElementException:
+                continue
+            driver.execute_script("arguments[0].click();", link)
+            time.sleep(2)
+            log(f"옥션 탭 클릭 성공 (형제탭 감지: #{sib_id})")
+            return True
+    except Exception as e:
+        log(f"형제탭 탐색 실패: {e}")
+    log(f"옥션 탭을 찾지 못함 (시도: {_AUCTION_TAB_IDS} + 형제탭 탐색) — 옥션 수집 스킵")
+    return False
+
+
+def _get_seller_ids(driver, login_id, select_id="introSelectSellerId"):
+    """복수 셀러ID 드롭다운 목록 반환. 없으면 [(login_id, login_id)].
+    select_id: 지마켓 탭='introSelectSellerId', 옥션 탭='Account' (2026-07-08 실측)."""
+    try:
+        select_el = driver.find_element(By.ID, select_id)
         opts = [(o.get_attribute("value"), o.text.strip())
                 for o in select_el.find_elements(By.TAG_NAME, "option")
                 if o.get_attribute("value")]
@@ -81,38 +123,97 @@ def _get_seller_ids(driver, login_id):
         return [(login_id, login_id)]
 
 
-def _select_seller(driver, seller_id):
+def _select_seller(driver, seller_id, select_id="introSelectSellerId"):
     try:
-        Select(driver.find_element(By.ID, "introSelectSellerId")).select_by_value(seller_id)
+        Select(driver.find_element(By.ID, select_id)).select_by_value(seller_id)
         time.sleep(1)
         return True
     except Exception:
         return False
 
 
-def _set_period(driver, start_ym, end_ym, log):
-    """기간 select 설정. ESM VAT는 YYYYMM01 형식."""
-    def _sel(el_id, val):
+def _find_flexible(driver, exact_ids, contains_suffix, tag='*'):
+    """지마켓 탭은 'gmkt' 접두사, 옥션 탭은 'iac' 접두사를 쓰는 등 탭마다 element id가 달라서
+    (2026-07-08 실측: gmktTab ↔ iacTab) 정확한 id 후보들을 먼저 시도하고, 안되면 id에
+    suffix가 포함된 첫 element로 폴백."""
+    for eid in exact_ids:
         try:
-            sel = Select(driver.find_element(By.ID, el_id))
+            return driver.find_element(By.ID, eid)
+        except NoSuchElementException:
+            continue
+    els = driver.find_elements(By.XPATH, f'//{tag}[contains(@id, "{contains_suffix}")]')
+    for el in els:
+        if el.is_displayed():
+            return el
+    if els:
+        return els[0]
+    raise NoSuchElementException(f'no element for ids={exact_ids} / *{contains_suffix}*')
+
+
+# 탭별 element id·기간값 포맷이 다름 (2026-07-08 라이브 실측):
+#   지마켓 탭 — gmktSearchSDT/EDT, 값 형식 YYYYMM01 (예: 20260101)
+#   옥션 탭  — iacSearchSDTNew/EDTNew(활성) · iacSearchSDT/EDT(구버전, 2019년까지만 있어 미사용),
+#              값 형식 YYYY-MM (예: 2026-01). 셀러 선택도 'Account' select(옥션 전용 seller_id).
+_TAB_CONFIG = {
+    'gmarket': {
+        'sdt_ids': ['gmktSearchSDT'], 'edt_ids': ['gmktSearchEDT'],
+        'seller_select_id': 'introSelectSellerId',
+        'fmt': lambda ym: ym + '01',
+        'search_ids': ['btnSearch'],
+    },
+    'auction': {
+        'sdt_ids': ['iacSearchSDTNew', 'iacSearchSDT'], 'edt_ids': ['iacSearchEDTNew', 'iacSearchEDT'],
+        'seller_select_id': 'Account',
+        'fmt': lambda ym: f'{ym[:4]}-{ym[4:]}',
+        # 조회 버튼도 탭별로 따로 있음 — btnSearch는 지마켓 탭 전용(숨김 상태라 클릭이 씹힘),
+        # 옥션 탭은 btnSearchNew를 눌러야 실제 검색이 실행됨 (2026-07-08 실측, 사용자 직접 확인으로 발견).
+        'search_ids': ['btnSearchNew', 'btnSearch'],
+    },
+}
+
+
+def _set_period(driver, start_ym, end_ym, log, sdt_ids, edt_ids, fmt):
+    """기간 select 설정. fmt(ym)로 탭별 값 형식(YYYYMM01 vs YYYY-MM)을 변환.
+    옥션 탭(iacSearchSDTNew/EDTNew)의 <option>은 value 속성이 없어(텍스트가 곧 값) select_by_value가
+    항상 NoSuchElementException을 내므로(2026-07-08 실측) select_by_visible_text로 폴백한다."""
+    def _sel(exact_ids, suffix, val):
+        try:
+            el = _find_flexible(driver, exact_ids, suffix, tag='select')
+            sel = Select(el)
+            target = fmt(val)
             try:
-                sel.select_by_value(val + "01")
+                sel.select_by_value(target)
             except Exception:
-                sel.select_by_value(val)
+                try:
+                    sel.select_by_visible_text(target)
+                except Exception:
+                    sel.select_by_value(val)
             return True
         except Exception as e:
-            log(f"{el_id} 설정 실패: {e}")
+            log(f"{exact_ids} 설정 실패: {e}")
             return False
-    ok = _sel("gmktSearchSDT", start_ym)
-    ok = _sel("gmktSearchEDT", end_ym) and ok
+    ok = _sel(sdt_ids, 'SearchSDT', start_ym)
+    ok = _sel(edt_ids, 'SearchEDT', end_ym) and ok
     time.sleep(0.5)
     return ok
 
 
-def _search(driver, log):
+def _search(driver, log, search_ids=("btnSearch",)):
+    """조회 버튼 클릭. 탭마다 버튼이 따로 있어(지마켓=btnSearch, 옥션=btnSearchNew) 후보를 순서대로 시도."""
     try:
-        driver.execute_script("arguments[0].click();",
-                               driver.find_element(By.ID, "btnSearch"))
+        btn = None
+        for bid in search_ids:
+            try:
+                el = driver.find_element(By.ID, bid)
+                if el.is_displayed():
+                    btn = el
+                    break
+                btn = btn or el  # 안 보여도 마지막 후보로는 남겨둠(폴백)
+            except NoSuchElementException:
+                continue
+        if btn is None:
+            raise NoSuchElementException(f'no search button for {search_ids}')
+        driver.execute_script("arguments[0].click();", btn)
         time.sleep(6)
     except Exception as e:
         log(f"검색 버튼 오류: {e}")
@@ -158,16 +259,17 @@ def _parse_vat_table(driver, log):
     return rows
 
 
-def _save_rows(seller_id, seller_label, rows, log):
-    """TaxVatMonthly에 저장. total_sales → taxable_sales."""
+def _save_rows(seller_id, seller_label, rows, log, platform='gmarket'):
+    """TaxVatMonthly에 저장. total_sales → taxable_sales. platform='gmarket'|'auction'."""
     from apps.cpc.models import TaxVatMonthly, CrawlerAccount
     if not rows:
         return 0
-    acc = CrawlerAccount.objects.filter(platform='gmarket', login_id=seller_id).first()
+    acc = (CrawlerAccount.objects.filter(platform='gmarket', login_id=seller_id).first()
+           or CrawlerAccount.objects.filter(platform='gmarket', auction_seller_id=seller_id).first())
     seller_name = (acc.seller_name if acc else None) or seller_label or seller_id
     objs = [
         TaxVatMonthly(
-            platform='gmarket', login_id=seller_id, seller_name=seller_name,
+            platform=platform, login_id=seller_id, seller_name=seller_name,
             year=r['year'], month=r['month'],
             taxable_sales=r['total_sales'],
             credit_card=r['credit_card'],
@@ -179,11 +281,48 @@ def _save_rows(seller_id, seller_label, rows, log):
     ]
     yms = {(r['year'], r['month']) for r in rows}
     for y, mo in yms:
-        TaxVatMonthly.objects.filter(platform='gmarket', login_id=seller_id,
+        TaxVatMonthly.objects.filter(platform=platform, login_id=seller_id,
                                      year=y, month=mo).delete()
     TaxVatMonthly.objects.bulk_create(objs, batch_size=200)
-    log(f"[{seller_id}] {len(objs)}건 저장 (총매출합 {sum(r['total_sales'] for r in rows):,})")
+    log(f"[{platform}:{seller_id}] {len(objs)}건 저장 (총매출합 {sum(r['total_sales'] for r in rows):,})")
     return len(objs)
+
+
+def _collect_current_tab(driver, lid, start_ym, end_ym, log, save, platform):
+    """현재 활성화된 탭(지마켓/옥션)에서 셀러ID별 부가세 매출을 순회 수집."""
+    cfg = _TAB_CONFIG[platform]
+
+    default_id = lid
+    if platform == 'auction':
+        from apps.cpc.models import CrawlerAccount
+        acc = CrawlerAccount.objects.filter(platform='gmarket', login_id=lid).first()
+        default_id = (acc.auction_seller_id if acc else None) or lid
+
+    sellers = _get_seller_ids(driver, default_id, select_id=cfg['seller_select_id'])
+    log(f"[{platform}] 수집 대상 셀러: {[s[0] for s in sellers]}")
+
+    for seller_id, seller_label in sellers:
+        if len(sellers) > 1:
+            if not _select_seller(driver, seller_id, select_id=cfg['seller_select_id']):
+                log(f"[{platform}:{seller_id}] 셀러 선택 실패 — 스킵")
+                continue
+
+        if not _set_period(driver, start_ym, end_ym, log, cfg['sdt_ids'], cfg['edt_ids'], cfg['fmt']):
+            log(f"[{platform}:{seller_id}] 기간 설정 실패")
+            continue
+
+        if not _search(driver, log, search_ids=cfg['search_ids']):
+            log(f"[{platform}:{seller_id}] 조회 실패")
+            continue
+
+        rows = _parse_vat_table(driver, log)
+        log(f"[{platform}:{seller_id}] {len(rows)}개월 수집")
+
+        if save and rows:
+            _save_rows(seller_id, seller_label, rows, log, platform=platform)
+
+        if len(sellers) > 1:
+            time.sleep(random.uniform(2, 4))
 
 
 def crawl_one_vat(account, start_ym, end_ym, log_fn=None, save=True):
@@ -225,32 +364,11 @@ def crawl_one_vat(account, start_ym, end_ym, log_fn=None, save=True):
             return False
         if not _click_gmarket_tab(driver, log):
             return False
+        _collect_current_tab(driver, lid, start_ym, end_ym, log, save, platform='gmarket')
 
-        sellers = _get_seller_ids(driver, lid)
-        log(f"수집 대상 셀러: {[s[0] for s in sellers]}")
-
-        for seller_id, seller_label in sellers:
-            if len(sellers) > 1:
-                if not _select_seller(driver, seller_id):
-                    log(f"[{seller_id}] 셀러 선택 실패 — 스킵")
-                    continue
-
-            if not _set_period(driver, start_ym, end_ym, log):
-                log(f"[{seller_id}] 기간 설정 실패")
-                continue
-
-            if not _search(driver, log):
-                log(f"[{seller_id}] 조회 실패")
-                continue
-
-            rows = _parse_vat_table(driver, log)
-            log(f"[{seller_id}] {len(rows)}개월 수집")
-
-            if save and rows:
-                _save_rows(seller_id, seller_label, rows, log)
-
-            if len(sellers) > 1:
-                time.sleep(random.uniform(2, 4))
+        # 옥션 탭 — 같은 iframe 안에서 탭만 전환해 이어서 수집 (실패해도 지마켓 수집은 이미 완료된 상태 유지)
+        if _click_auction_tab(driver, log):
+            _collect_current_tab(driver, lid, start_ym, end_ym, log, save, platform='auction')
 
         return True
     finally:

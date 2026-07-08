@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, BarChart3, Users, ShoppingCart, CheckSquare, MessageCircle, Mail, Settings, LogOut, Bot, PieChart, MessageSquare, Sliders, Smartphone, Leaf, UserCog, Store, Package, BadgeCheck, Tags, Layers, Map, Receipt, TrendingUp, Wrench, Truck } from 'lucide-react';
+import { LayoutDashboard, BarChart3, Users, ShoppingCart, CheckSquare, MessageCircle, Mail, Settings, LogOut, Bot, MessageSquare, Sliders, Smartphone, Leaf, UserCog, Store, Package, BadgeCheck, Tags, Layers, Map, Receipt, TrendingUp, Wrench, Truck } from 'lucide-react';
 import { logout } from '../../api/auth';
 
 const navItems = [
@@ -10,9 +10,9 @@ const navItems = [
   { to: '/ownerclan', icon: Package, label: '예비상품' },
   { to: '/product-processing', icon: Wrench, label: '상품가공' },
   { to: '/myproduct', icon: BadgeCheck, label: '나의 상품' },
-  { to: '/gmarket-my', icon: Store, label: '지마켓 상품' },
   { to: '/gmarket-roas', icon: TrendingUp, label: '지마켓/옥션 ROAS' },
   { to: '/coupang', icon: Truck, label: '쿠팡' },
+  { to: '/lotteon', icon: ShoppingCart, label: '롯데ON' },
   { to: '/smartstore', icon: ShoppingCart, label: '스스' },
   { to: '/naver-roas', icon: TrendingUp, label: '네이버 ROAS' },
   { to: '/blog', icon: MessageSquare, label: '블로그' },
@@ -30,7 +30,6 @@ const navItems = [
   { to: '/email', icon: Mail, label: '이메일' },
   { to: '/crawler', icon: Bot, label: '크롤러' },
   { to: '/crawler-accounts', icon: UserCog, label: 'ID 관리' },
-  { to: '/analysis', icon: PieChart, label: '분석' },
   { to: '/telegram', icon: MessageSquare, label: '텔레그램' },
   { to: '/ad-settings', icon: Sliders, label: '광고 설정' },
   { to: '/settings', icon: Settings, label: '설정' },

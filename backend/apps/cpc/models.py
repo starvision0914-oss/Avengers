@@ -71,6 +71,7 @@ class CrawlerAccount(models.Model):
     connect_fail_count = models.IntegerField(default=0, help_text='연속 접속(로그인) 실패 횟수 - 3회 도달 시 실패 표시')
     last_otp_at = models.DateTimeField(null=True, blank=True, help_text='마지막 OTP 인증 완료 시각 (11번가 OTP는 24시간 유지)')
     hide_from_dashboard = models.BooleanField(default=False, help_text='지마켓/옥션 대시보드 계정목록에서 숨김(ROAS 등 리포트에는 계속 표시) — 타사 테스트 계정용')
+    is_test_account = models.BooleanField(default=False, help_text='테스트/타사 계정 — 조회·다운로드만 허용, 판매중지·삭제·광고on/off 등 실제 조치는 전부 차단')
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'crawler_accounts'
@@ -101,6 +102,17 @@ class CrawlerAccount(models.Model):
             changed = True
         if changed:
             self.save(update_fields=['connect_fail_count', 'crawling_status'])
+
+
+def protected_login_ids(platform='gmarket'):
+    """조치(판매중지·삭제·광고on/off 등) 차단 + 매출/세무 집계 제외 대상 계정의 login_id 집합.
+    is_test_account=True(타사 테스트 계정 등)로 표시된 계정 — 조회·다운로드는 그대로 허용,
+    실제 상태를 바꾸는 조치·집계만 이 목록으로 걸러서 차단한다. DB 조회이므로 계정마다 하드코딩할 필요 없음.
+    platform=None이면 전 플랫폼 통틀어(세무 통합처럼 여러 플랫폼을 한 번에 다루는 곳에서 사용)."""
+    qs = CrawlerAccount.objects.filter(is_test_account=True)
+    if platform:
+        qs = qs.filter(platform=platform)
+    return set(qs.values_list('login_id', flat=True))
 
 
 class CrawlerLog(models.Model):

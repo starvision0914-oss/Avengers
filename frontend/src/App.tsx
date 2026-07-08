@@ -5,7 +5,6 @@ import MainLayout from './components/Layout/MainLayout';
 import LoginPage from './pages/Auth/LoginPage';
 import DashboardPage from './pages/Dashboard/DashboardPage';
 import SpeedGoPage from './pages/SpeedGo/SpeedGoPage';
-import CPCDashboard from './pages/CPC/CPCDashboard';
 import AccountListPage from './pages/Accounts/AccountListPage';
 import SalesListPage from './pages/Sales/SalesListPage';
 import SalesDashboardPage from './pages/Sales/SalesDashboardPage';
@@ -19,7 +18,6 @@ import EmailPage from './pages/Email/EmailPage';
 import SettingsPage from './pages/Settings/SettingsPage';
 import CrawlerPage from './pages/Crawler/CrawlerPage';
 import TelegramPage from './pages/Telegram/TelegramPage';
-import AnalysisPage from './pages/Analysis/AnalysisPage';
 import AdSettingsPage from './pages/AdSettings/AdSettingsPage';
 import CrawlerAccountsPage from './pages/CrawlerAccounts/CrawlerAccountsPage';
 import St11Dashboard from './pages/St11/St11Dashboard';
@@ -29,11 +27,11 @@ import OwnerclanProductsPage from './pages/Ownerclan/OwnerclanProductsPage';
 import MyProductPage from './pages/MyProduct/MyProductPage';
 import KeywordProductsPage from './pages/Keyword/KeywordProductsPage';
 import ElevenMyProductsPage from './pages/ElevenMy/ElevenMyProductsPage';
-import GmarketMyProductsPage from './pages/GmarketMy/GmarketMyProductsPage';
 import GmarketDashboard from './pages/Gmarket/GmarketDashboard';
 import GmarketAdGroupPage from './pages/Gmarket/GmarketAdGroupPage';
 import GmarketRoasPage from './pages/Gmarket/GmarketRoasPage';
 import CoupangDashboard from './pages/Coupang/CoupangDashboard';
+import LotteonDashboard from './pages/Lotteon/LotteonDashboard';
 import LottoPage from './pages/Lotto/LottoPage';
 import OverviewDashboard from './pages/Overview/OverviewDashboard';
 import RoadmapPage from './pages/Roadmap/RoadmapPage';
@@ -67,13 +65,13 @@ export default function App() {
           <Route path="myproduct" element={<ElevenMyProductsPage />} />
           <Route path="myproduct-wholesale" element={<MyProductPage />} />
           <Route path="keyword" element={<Navigate to="/blog" replace />} />
-          <Route path="eleven-my" element={<ElevenMyProductsPage />} />
-          <Route path="gmarket-my" element={<GmarketMyProductsPage />} />
+          <Route path="eleven-my" element={<Navigate to="/myproduct" replace />} />
+          <Route path="gmarket-my" element={<Navigate to="/myproduct" replace />} />
           <Route path="gmarket" element={<GmarketDashboard />} />
           <Route path="coupang" element={<CoupangDashboard />} />
+          <Route path="lotteon" element={<LotteonDashboard />} />
           <Route path="gmarket-adgroup" element={<GmarketAdGroupPage />} />
           <Route path="gmarket-roas" element={<GmarketRoasPage />} />
-          <Route path="cpc" element={<CPCDashboard />} />
           <Route path="accounts" element={<AccountListPage />} />
           <Route path="sales" element={<SalesListPage />} />
           <Route path="sales-dashboard" element={<SalesDashboardPage />} />
@@ -87,7 +85,6 @@ export default function App() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="crawler" element={<CrawlerPage />} />
           <Route path="telegram" element={<TelegramPage />} />
-          <Route path="analysis" element={<AnalysisPage />} />
           <Route path="ad-settings" element={<AdSettingsPage />} />
           <Route path="crawler-accounts" element={<CrawlerAccountsPage />} />
           <Route path="st11" element={<St11Dashboard />} />

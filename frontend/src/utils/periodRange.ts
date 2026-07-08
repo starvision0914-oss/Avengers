@@ -1,4 +1,4 @@
-import { ymd, todayStr } from './format';
+import { ymd } from './format';
 
 // 4개 대시보드(Overview/Gmarket/SmartStore/St11) 공통 기간 프리셋.
 // 모든 페이지가 이 함수들로만 날짜를 계산해야 "같은 프리셋 = 같은 기간"이 보장된다.
@@ -10,12 +10,6 @@ export interface DateRange { from: string; to: string; }
 // KST 타임존 기준 오늘 날짜 (모든 대시보드가 일관되어야 함)
 function todayKST(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
-}
-
-function addDays(base: Date, n: number): Date {
-  const d = new Date(base);
-  d.setDate(d.getDate() + n);
-  return d;
 }
 
 // KST 기준 어제
