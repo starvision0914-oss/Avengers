@@ -50,6 +50,7 @@ export const getSt11StrategyAccounts = () => api.get('/cpc/eleven-ad-strategy/ac
 export const getSt11StrategyCampaigns = (eid: string) => api.get('/cpc/eleven-ad-strategy/campaigns/', { params: { eid } }).then(r => r.data);
 export const fetchSt11StrategyCampaigns = (eid: string) => api.post('/cpc/eleven-ad-strategy/campaigns/', { eid }).then(r => r.data);
 export const controlSt11Strategy = (data: any) => api.post('/cpc/eleven-ad-strategy/control/', data).then(r => r.data);
+export const stopSt11Strategy = () => api.post('/cpc/eleven-ad-strategy/stop/').then(r => r.data);
 export const getSt11StrategyLogs = (run_id?: string) => api.get('/cpc/eleven-ad-strategy/logs/', { params: run_id ? { run_id } : {} }).then(r => r.data);
 export const getSt11StrategyRuns = () => api.get('/cpc/eleven-ad-strategy/runs/').then(r => r.data);
 export const getSt11StrategySchedule = () => api.get('/cpc/eleven-ad-strategy/schedule/').then(r => r.data);

@@ -161,9 +161,35 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
         except:
             break
 
-    time.sleep(2)
-    _go_cpc2_tab(driver)
-    after_on, after_off = _count_on_off(driver)
+    # 대상 건수가 많을수록(예: 1,500개+) 사이트 자체 처리(선택 반영→저장)가 오래 걸려
+    # 고정 대기만으로는 부족 — 처리 중인 페이지에 재진입(get)이 겹치면
+    # 'aborted by navigation: Not attached to an active page'로 세션이 죽는다(2026-07-09 실측,
+    # rejoice666 1,505개에서 재현). 건수 비례 대기 + 재진입 실패 시 재시도로 완화.
+    target_n = before_off if action == 'on' else before_on
+    time.sleep(min(2 + target_n / 300.0, 10))
+    total_before = before_on + before_off
+    for _nav_try in range(2):
+        try:
+            _go_cpc2_tab(driver)
+            after_on, after_off = _count_on_off(driver)
+            # 대량 처리 직후 재진입 시 테이블이 아직 안 채워진 채로 렌더링되면 예외 없이
+            # 0행을 그대로 돌려줄 수 있다(2026-07-09 tmxkqlwus 1,449건에서 실측 — 재확인이
+            # 조용히 0/0으로 나와 DB에 잘못 저장됨). ON/OFF 전환만으로는 총건수가 변하지
+            # 않아야 하므로, 총건수가 어긋나면 렌더링 미완료로 보고 재시도/추정치 경로로 보낸다.
+            if after_on + after_off != total_before:
+                raise RuntimeError(
+                    f'재확인 건수 불일치(원래 {total_before}건인데 {after_on + after_off}건 감지 — 렌더링 미완료로 추정)')
+            break
+        except Exception as e:
+            if _nav_try == 0:
+                log(f'재진입 실패({e}) — 3초 대기 후 재시도')
+                time.sleep(3)
+            else:
+                # 재확인만 실패한 것 — 액션 자체(클릭+alert)는 이미 서버에 반영됐을 가능성이 높음.
+                # 다음 상태확인 크롤(crawl_gmarket_cpc_status)이 정확한 값으로 다시 채워줄 것이므로
+                # 여기선 목표대로 반영됐다고 가정한 추정치만 기록.
+                log(f'결과 재확인 실패({e}) — 액션은 반영됐을 수 있음, 다음 계정 계속')
+                after_on, after_off = (total_before, 0) if action == 'on' else (0, total_before)
     log(f'결과: ON={after_on} OFF={after_off}')
 
     return {
@@ -293,8 +319,30 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
             except Exception as e:
                 if log_fn: log_fn(f'[간편:{acct.login_id}] 실패: {e}')
                 CrawlerLog.objects.create(platform='gmarket', level='error', message=str(e)[:200], account_id=acct.login_id)
-                try: _dismiss_alert(driver)   # 잔여 알림 정리 → 다음 계정 보호(연쇄실패 방지)
-                except Exception: pass
+                # 세션이 죽었는지 확인(2026-07-09: rejoice666처럼 대량건 처리 중 네비게이션 충돌로
+                # 'not attached'/'invalid session' 발생 시 driver 재사용 불가 → 이후 전 계정 로그인
+                # 연쇄실패로 이어졌던 문제). 죽었으면 새 driver로 교체해서 나머지 계정은 계속 진행.
+                dead = any(s in str(e).lower() for s in
+                           ('invalid session', 'not attached', 'no such window',
+                            'chrome not reachable', 'disconnected'))
+                if not dead:
+                    try:
+                        _ = driver.current_url
+                    except Exception:
+                        dead = True
+                if dead:
+                    if log_fn: log_fn(f'[간편:{acct.login_id}] 브라우저 세션 손상 감지 — 재생성 후 계속')
+                    try: driver.quit()
+                    except Exception: pass
+                    driver = create_driver()
+                    try:
+                        driver.set_page_load_timeout(40)
+                        driver.implicitly_wait(3)
+                    except Exception:
+                        pass
+                else:
+                    try: _dismiss_alert(driver)   # 잔여 알림 정리 → 다음 계정 보호(연쇄실패 방지)
+                    except Exception: pass
     finally:
         if driver:
             try: driver.quit()

@@ -146,6 +146,21 @@ def run_all_accounts(log_fn=None, account_filter=None):
             except Exception as e:
                 failed += 1
                 CrawlerLog.objects.create(platform='gmarket', level='error', message=str(e), account_id=acct.login_id)
+                # 세션 손상 시 driver 재생성 후 계속(2026-07-09: 브라우저 죽으면 이후 전 계정이
+                # 같은 세션 접속불가 오류로 도미노 실패하던 문제 — 다른 크롤러들과 동일 원인/조치)
+                dead = any(s in str(e).lower() for s in
+                           ('invalid session', 'not attached', 'no such window',
+                            'chrome not reachable', 'disconnected', 'max retries exceeded'))
+                if not dead:
+                    try:
+                        _ = driver.current_url
+                    except Exception:
+                        dead = True
+                if dead:
+                    if log_fn: log_fn(f'[{acct.login_id}] 브라우저 세션 손상 감지 — 재생성 후 계속')
+                    try: driver.quit()
+                    except Exception: pass
+                    driver = create_driver()
     finally:
         if driver:
             try: driver.quit()

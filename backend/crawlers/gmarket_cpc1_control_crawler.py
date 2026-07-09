@@ -174,6 +174,20 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
                 if log_fn:
                     log_fn(f'[일반:{acct.login_id}] 실패: {e}')
                 CrawlerLog.objects.create(platform='gmarket', level='error', message=str(e), account_id=acct.login_id)
+                # 세션 손상 시 driver 재생성 후 계속(다른 지마켓 제어 크롤러와 동일 원인/조치)
+                dead = any(s in str(e).lower() for s in
+                           ('invalid session', 'not attached', 'no such window',
+                            'chrome not reachable', 'disconnected', 'max retries exceeded'))
+                if not dead:
+                    try:
+                        _ = driver.current_url
+                    except Exception:
+                        dead = True
+                if dead:
+                    if log_fn: log_fn(f'[일반:{acct.login_id}] 브라우저 세션 손상 감지 — 재생성 후 계속')
+                    try: driver.quit()
+                    except Exception: pass
+                    driver = create_driver()
     finally:
         if driver:
             try:

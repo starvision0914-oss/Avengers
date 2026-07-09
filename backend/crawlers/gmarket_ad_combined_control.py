@@ -155,6 +155,27 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
                 _log(log_fn, f'[{lid}] 오류: {e}')
                 CrawlerLog.objects.create(platform='gmarket', level='error',
                                           message=str(e), account_id=lid)
+                # 세션 손상 시 driver 재생성 후 계속(2026-07-09: 대량건 계정에서 네비게이션
+                # 충돌로 세션이 죽으면 나머지 전 계정이 로그인부터 연쇄실패하던 문제 방지)
+                dead = any(s in str(e).lower() for s in
+                           ('invalid session', 'not attached', 'no such window',
+                            'chrome not reachable', 'disconnected'))
+                if not dead:
+                    try:
+                        _ = driver.current_url
+                    except Exception:
+                        dead = True
+                if dead:
+                    _log(log_fn, f'[{lid}] 브라우저 세션 손상 감지 — 재생성 후 계속')
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = create_driver()
+                    try:
+                        driver.set_page_load_timeout(40); driver.implicitly_wait(3)
+                    except Exception:
+                        pass
     finally:
         if driver:
             try:

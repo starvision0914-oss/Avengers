@@ -1494,6 +1494,16 @@ class St11AdStrategyControlView(views.APIView):
                          'mode': '실제적용' if execute else '드라이런'})
 
 
+class St11AdStrategyStopView(views.APIView):
+    """11번가 전략설정(광고그룹 노출 스케줄) 강제 중지 — 중지플래그 설정.
+    실행 루프가 다음 계정/캠페인/그룹 전에 확인해 중단(현재 처리 중인 항목은 마무리)."""
+    def post(self, request):
+        from apps.cpc import eleven_block_guard as guard
+        guard.request_control_stop('st11strategy')
+        return Response({'status': 'stopping',
+                         'message': '강제중지 요청 — 진행 중인 계정 마무리 후 중단됩니다.'})
+
+
 class St11AdStrategyScheduleView(views.APIView):
     """11번가 전략설정 저장(예약). GET=조회, PUT/POST=저장(싱글톤 id=1).
     body: name, accounts[], campaigns[], on_start, on_end, weekdays[], enabled"""
@@ -1845,6 +1855,46 @@ class ElevenLossMarkDeletedView(views.APIView):
                 St11LossDeleted.objects.get_or_create(eleven_id=eid, product_no=str(p))
                 marked += 1
         return Response({'status': 'ok', 'marked': marked, 'message': f'{marked}개 삭제완료 처리됨 (비고 표시)'})
+
+
+class St11ProductStatusRefreshView(views.APIView):
+    """적자상품 모달 — 특정 계정 하나만 판매상태(비고)를 지금 즉시 재수집.
+    비고 출처(ElevenMyProduct.status_type)는 원래 새벽 야간배치(cron_11st_night.sh)로만 갱신되어
+    최대 하루 가까이 stale할 수 있음 → 계정별 수동 새로고침 버튼용.
+    GET ?eid= : 최신 synced_at 반환(폴링해 갱신완료 감지). POST {eid}: 백그라운드 재수집 시작."""
+    def get(self, request):
+        from apps.cpc.models import ElevenMyProduct, CrawlerAccount
+        from django.db.models import Max
+        eid = request.query_params.get('eid', '')
+        acct = CrawlerAccount.objects.filter(login_id=eid, platform='11st').first()
+        if not acct:
+            return Response({'error': '계정을 찾을 수 없습니다.'}, status=404)
+        m = ElevenMyProduct.objects.filter(account=acct).aggregate(m=Max('synced_at'))['m']
+        return Response({'eid': eid, 'synced_at': m})
+
+    def post(self, request):
+        import threading
+        from apps.cpc.models import CrawlerAccount
+        from apps.cpc import eleven_block_guard as guard
+        eid = request.data.get('eid', '')
+        if not eid:
+            return Response({'error': '계정을 지정하세요.'}, status=400)
+        if not CrawlerAccount.objects.filter(login_id=eid, platform='11st').exists():
+            return Response({'error': '계정을 찾을 수 없습니다.'}, status=404)
+
+        def run():
+            ok, reason = guard.preflight(f'11번가상태새로고침:{eid}', wait=True, wait_timeout=60, platform='11st')
+            if not ok:
+                CrawlerLog.objects.create(platform='11st', level='error',
+                    message=f'상태 새로고침 락 획득 실패 — {reason}', account_id=eid)
+                return
+            try:
+                from crawlers.eleven_product_crawler import run_all_accounts
+                run_all_accounts(account_filter=[eid], only_no_api_key=False, force=True)
+            finally:
+                guard.release_global_lock()
+        threading.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'message': '판매상태 재수집 시작 (약 30초~1분)'})
 
 
 class St11CostCrawlView(views.APIView):

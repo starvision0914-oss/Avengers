@@ -409,7 +409,12 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                         sub_res[f'{y}-{m:02d}'] = crawl_account(
                             driver, a.login_id, y, m, log_fn, seller_override=sub_lid)
                         time.sleep(2)
-                        # 셀러전환 후 저장된 sub_lid 상품이 마스터와 90%+ 겹치면 중복 → 삭제
+                        # 셀러전환 후 저장된 sub_lid 상품번호가 마스터와 90%+ 겹쳐도, 공유ESM은
+                        # 같은 카탈로그를 파는 게 정상이라 상품번호만으로는 '진짜 중복(셀러전환 실패로
+                        # 마스터 리포트를 서브 이름으로 재저장)'인지 '서브의 진짜 별도 광고비'인지 구분 못 함
+                        # (2026-07-09 실측: rejoice235/236 실데이터가 이 체크로 매일 삭제되고 있었음).
+                        # 광고비 합계까지 마스터와 거의 동일할 때만 '재수집 실패'로 보고 삭제한다.
+                        from django.db.models import Sum as _Sum2
                         master_pnos = set(_G.objects.filter(login_id=a.login_id, year=y, month=m)
                                           .values_list('product_no', flat=True))
                         sub_pnos = set(_G.objects.filter(login_id=sub_lid, year=y, month=m)
@@ -417,9 +422,15 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                         if sub_pnos and master_pnos:
                             overlap = len(sub_pnos & master_pnos) / len(sub_pnos)
                             if overlap >= 0.9:
-                                deleted = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
-                                _log(log_fn, f'  [{sub_lid}] 마스터와 {overlap:.0%} 겹침 → 중복 {deleted}건 삭제')
-                                sub_res[f'{y}-{m:02d}'] = {'dup_deleted': deleted}
+                                master_cost = _G.objects.filter(login_id=a.login_id, year=y, month=m).aggregate(s=_Sum2('cost'))['s'] or 0
+                                sub_cost = _G.objects.filter(login_id=sub_lid, year=y, month=m).aggregate(s=_Sum2('cost'))['s'] or 0
+                                cost_diff = abs(sub_cost - master_cost) / master_cost if master_cost else 0
+                                if cost_diff < 0.01:
+                                    deleted = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
+                                    _log(log_fn, f'  [{sub_lid}] 마스터와 상품 {overlap:.0%} 겹침+광고비도 동일 → 중복 {deleted}건 삭제')
+                                    sub_res[f'{y}-{m:02d}'] = {'dup_deleted': deleted}
+                                else:
+                                    _log(log_fn, f'  [{sub_lid}] 상품 {overlap:.0%} 겹치지만 광고비 다름(마스터 {master_cost:,}/서브 {sub_cost:,}) → 정상 유지')
                     summary[sub_lid] = sub_res
                 summary[a.login_id] = acct_res
             finally:
@@ -458,7 +469,10 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                             break
                         sub_res[f'{y}-{m:02d}'] = crawl_account(driver, sub_lid, y, m, log_fn)
                         time.sleep(2)
-                        # 폴백 독립로그인도 마스터와 90%+ 겹치면 중복 삭제
+                        # 폴백 독립로그인도 마스터와 상품번호 90%+ 겹칠 수 있지만(공유ESM 카탈로그라
+                        # 정상), 광고비 합계까지 마스터와 거의 동일할 때만 '재수집 실패'로 보고 삭제
+                        # (2026-07-09: 이 체크 때문에 rejoice224/235/236 실데이터가 매일 삭제되던 버그).
+                        from django.db.models import Sum as _Sum3
                         sub_acct2 = next((aa for aa in all_accts if aa.login_id == sub_lid), None)
                         if sub_acct2 and sub_acct2.gmarket_origin_id and sub_acct2.gmarket_origin_id != sub_lid:
                             master_lid2 = sub_acct2.gmarket_origin_id
@@ -469,8 +483,14 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                             if sub_pnos2 and master_pnos2:
                                 overlap2 = len(sub_pnos2 & master_pnos2) / len(sub_pnos2)
                                 if overlap2 >= 0.9:
-                                    deleted2 = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
-                                    _log(log_fn, f'  [{sub_lid}] 폴백: 마스터와 {overlap2:.0%} 겹침 → 중복 {deleted2}건 삭제')
+                                    master_cost2 = _G.objects.filter(login_id=master_lid2, year=y, month=m).aggregate(s=_Sum3('cost'))['s'] or 0
+                                    sub_cost2 = _G.objects.filter(login_id=sub_lid, year=y, month=m).aggregate(s=_Sum3('cost'))['s'] or 0
+                                    cost_diff2 = abs(sub_cost2 - master_cost2) / master_cost2 if master_cost2 else 0
+                                    if cost_diff2 < 0.01:
+                                        deleted2 = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
+                                        _log(log_fn, f'  [{sub_lid}] 폴백: 마스터와 상품 {overlap2:.0%} 겹침+광고비도 동일 → 중복 {deleted2}건 삭제')
+                                    else:
+                                        _log(log_fn, f'  [{sub_lid}] 폴백: 상품 {overlap2:.0%} 겹치지만 광고비 다름(마스터 {master_cost2:,}/서브 {sub_cost2:,}) → 정상 유지')
                     summary[sub_lid] = sub_res
                 except Exception as e:
                     _log(log_fn, f'[{sub_lid}] 독립 크롤 오류: {str(e)[:120]}')

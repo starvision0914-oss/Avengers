@@ -474,6 +474,8 @@ def run_account(driver, run_id, eid, campaigns, on_start, on_end, weekdays, exec
         name_to_idx.setdefault(nm, i)
 
     for camp in campaigns:
+        if guard.is_control_stop('st11strategy'):
+            _log(run_id, 'INFO', '🛑 강제중지 요청 — 종료', eid); return
         # 캠페인 재진입(목록 새로고침 후 이름으로 클릭)
         driver.get(ADOFFICE); time.sleep(3); close_all_popups(driver)
         click_focus_menu(driver); open_ad_management(driver); set_page_size_100(driver, run_id, eid)
@@ -509,8 +511,8 @@ def run_account(driver, run_id, eid, campaigns, on_start, on_end, weekdays, exec
         else:
             _log(run_id, 'INFO', f"'{target[0]}' 그룹 {len(groups)}개", eid, camp)
         for gname, gurl in groups:
-            if guard.is_stop_requested() if hasattr(guard, 'is_stop_requested') else False:
-                _log(run_id, 'INFO', '중지 요청 — 종료', eid, camp); return
+            if guard.is_control_stop('st11strategy'):
+                _log(run_id, 'INFO', '🛑 강제중지 요청 — 종료', eid, camp); return
             apply_strategy(driver, run_id, eid, camp, gname, gurl,
                            on_start, on_end, weekdays, execute)
 
@@ -610,8 +612,12 @@ def run_strategy(accounts, campaigns, on_start=8, on_end=16, weekdays=None,
         return run_id
 
     pw = {x.login_id: x.password_enc for x in CrawlerAccount.objects.filter(platform='11st')}
+    guard.clear_control_stop('st11strategy')   # 새 실행 — 묵은 중지플래그 제거
     try:
         for eid in accounts:
+            if guard.is_control_stop('st11strategy'):
+                _log(run_id, 'INFO', '🛑 강제중지 요청 — 중단')
+                break
             driver = None
             try:
                 driver = create_driver(kill_existing=False)
@@ -630,6 +636,7 @@ def run_strategy(accounts, campaigns, on_start=8, on_end=16, weekdays=None,
                     except Exception: pass
     finally:
         guard.release_global_lock()
+        guard.clear_control_stop('st11strategy')
         try: stop_display()
         except Exception: pass
     _log(run_id, 'DONE', f'완료 ({mode})')

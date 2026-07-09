@@ -211,6 +211,7 @@ export default function St11RoasPage() {
   const [lossTo, setLossTo] = useState(todayStr());
   const [lossEid, setLossEid] = useState('');        // '' = 전체계정, 값 = 특정계정
   const [lossName, setLossName] = useState('');      // 특정계정 이름(표시용)
+  const [statusRefreshing, setStatusRefreshing] = useState(false);   // 비고(판매상태) 계정별 즉시 새로고침 진행중
   const fetchLoss = (period: string, from: string, to: string, eid = '') => {
     setLossLoading(true); setLossData(null); setLossStatusFilter('');
     const r = modalRange(period, from, to);
@@ -301,6 +302,37 @@ export default function St11RoasPage() {
       .then(r => alert(r.data?.message || '실삭제 시작 — 진행상황은 텔레그램/로그로 확인하세요.'))
       .catch(e => alert(e?.response?.data?.error || '시작 실패 — 다른 크롤이 실행 중일 수 있습니다.'));
   };
+  // 비고(판매상태) 계정별 즉시 새로고침 — 원래 새벽 배치로만 갱신되어 하루 가까이 stale할 수 있어
+  // 계정 상세 적자모달에서 그 자리에서 재수집(약 30초~1분) 후 자동 반영.
+  const refreshStatusNow = async () => {
+    if (!lossEid) { alert('계정별 적자상품 모달에서만 사용할 수 있습니다.\n(계정 상세 → 적자상품으로 들어와 주세요)'); return; }
+    if (statusRefreshing) return;
+    if (!window.confirm(`'${lossName || lossEid}' 판매상태를 지금 다시 수집할까요? (약 30초~1분 소요)`)) return;
+    setStatusRefreshing(true);
+    try {
+      const before = await api.get('/cpc/eleven-loss-products/refresh-status/', { params: { eid: lossEid } });
+      await api.post('/cpc/eleven-loss-products/refresh-status/', { eid: lossEid });
+      const baseline = before.data?.synced_at;
+      let tries = 0;
+      const poll = setInterval(async () => {
+        tries++;
+        try {
+          const r = await api.get('/cpc/eleven-loss-products/refresh-status/', { params: { eid: lossEid } });
+          if (r.data?.synced_at && r.data.synced_at !== baseline) {
+            clearInterval(poll); setStatusRefreshing(false);
+            alert('판매상태 갱신 완료');
+            fetchLoss(lossPeriod, lossFrom, lossTo, lossEid);
+            return;
+          }
+        } catch { /* ignore, keep polling */ }
+        if (tries >= 40) { clearInterval(poll); setStatusRefreshing(false); alert('시간이 오래 걸리고 있습니다 — 잠시 후 다시 확인해 주세요.'); }
+      }, 3000);
+    } catch (e: any) {
+      setStatusRefreshing(false);
+      alert(e?.response?.data?.error || '시작 실패');
+    }
+  };
+
   const openLoss = () => {
     setLossOpen(true); setLossPeriod('year'); setLossEid(''); setLossName('');
     fetchLoss('year', lossFrom, lossTo, '');
@@ -771,6 +803,13 @@ export default function St11RoasPage() {
               <button onClick={copyLossProductNos} className="ml-auto px-2.5 py-1 text-[12px] font-semibold bg-[#1e6fd9] text-white rounded hover:bg-[#1857ad]">📋 판매자코드 복사</button>
               <button onClick={copyLossProdNos} title="적자상품 전체의 상품번호(숫자만)를 복사 — 11번가 상품관리 검색칸 붙여넣기용" className="px-2.5 py-1 text-[12px] font-semibold bg-[#0d9488] text-white rounded hover:bg-[#0f766e]">📋 상품번호코드 복사</button>
               <button onClick={allDlLoss} className="px-2.5 py-1 text-[12px] font-semibold bg-[#1d7a46] text-white rounded hover:bg-[#155c34]">⬇ 엑셀</button>
+              {lossEid && (
+                <button onClick={refreshStatusNow} disabled={statusRefreshing}
+                  title="비고(판매상태)는 원래 새벽 배치로만 갱신되어 최대 하루 가까이 예전 정보일 수 있습니다 — 이 계정만 지금 다시 수집"
+                  className="px-2.5 py-1 text-[12px] font-semibold bg-[#555] text-white rounded hover:bg-[#333] disabled:opacity-50">
+                  {statusRefreshing ? '⏳ 새로고침 중…' : '🔄 상태 지금 새로고침'}
+                </button>
+              )}
               <button onClick={markDeleted} title="11번가에서 직접 삭제 완료한 상품을 '삭제완료'로 표시" className="px-2.5 py-1 text-[12px] font-bold bg-[#dc2626] text-white rounded hover:bg-[#b91c1c]">✓ 삭제완료 처리</button>
               <button onClick={validateLossDelete} title="셀러오피스 접속·셀렉터를 1상품으로 검증(실제 삭제 안 함)" className="px-2.5 py-1 text-[12px] font-semibold bg-[#0369a1] text-white rounded hover:bg-[#075985]">🔎 삭제 검증</button>
               <button onClick={stopSaleLossProducts} title="판매중지만 처리(삭제 아님, 되돌리기 쉬움) — 판매중인 상품만 대상" className="px-2.5 py-1 text-[12px] font-bold bg-[#c2410c] text-white rounded hover:bg-[#9a3412]">🛑 판매중지</button>

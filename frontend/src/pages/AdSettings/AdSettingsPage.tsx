@@ -3,7 +3,7 @@ import {
   getCpc2Schedule, updateCpc2Schedule,
   getAiSchedule, updateAiSchedule, createAiSchedule,
   controlCpc2, getCpc2History, getGmarketMyAccounts, controlAi, getAiHistory, stopGmarketControl, getGmarketControlStatus,
-  getSt11StrategyAccounts, getSt11StrategyCampaigns, fetchSt11StrategyCampaigns, controlSt11Strategy, getSt11StrategyLogs, getSt11StrategyRuns,
+  getSt11StrategyAccounts, getSt11StrategyCampaigns, fetchSt11StrategyCampaigns, controlSt11Strategy, stopSt11Strategy, getSt11StrategyLogs, getSt11StrategyRuns,
   getSt11StrategySchedule, saveSt11StrategySchedule
 } from '../../api/crawler';
 import { Save, Play, Clock, Zap, Target, RefreshCw } from 'lucide-react';
@@ -226,6 +226,12 @@ export default function AdSettingsPage() {
     });
     setStratRunId(r.run_id); setStratRunning(true); setStratLogs([]);
     toast.success(`${r.mode} 시작 (${r.run_id})`);
+  };
+
+  const handleStopStrategy = async () => {
+    if (!confirm('실행 중인 11번가 전략설정을 강제 중지할까요?\n(진행 중인 계정 마무리 후 멈춥니다)')) return;
+    await stopSt11Strategy();
+    toast('🛑 강제중지 요청 — 곧 멈춥니다', { icon: '🛑' });
   };
 
   // 공통 시간대 저장 — 계정/캠페인과 무관하게 ON시각·요일만 공통 프리셋으로 보관.
@@ -579,6 +585,10 @@ export default function AdSettingsPage() {
                 <button onClick={() => runStrategy(true)} disabled={stratRunning}
                   className="flex items-center gap-1 px-5 py-2.5 bg-orange-600 text-white rounded-lg disabled:opacity-50">
                   <Play size={14} /> 실제 적용
+                </button>
+                <button onClick={handleStopStrategy} disabled={!stratRunning}
+                  className="flex items-center gap-1 px-5 py-2.5 bg-gray-800 text-white rounded-lg hover:bg-black disabled:opacity-50">
+                  🛑 강제 중지
                 </button>
                 {stratRunning && <span className="flex items-center gap-1 text-sm text-orange-600"><RefreshCw size={14} className="animate-spin" /> 실행 중…</span>}
               </div>

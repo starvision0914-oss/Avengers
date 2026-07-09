@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { RefreshCw, ShoppingBag, Wallet, Package, Receipt } from 'lucide-react';
+import { RefreshCw, ShoppingBag, Wallet, Package } from 'lucide-react';
 import api from '../../api/client';
 import DateNavigator from '../../components/cpc/DateNavigator';
 import DateRangePicker from '../../components/cpc/DateRangePicker';
@@ -16,12 +16,12 @@ interface Row {
   no: number; login_id: string; seller_name: string;
   has_api_key: boolean; is_rocket_growth: boolean;
   product_count: number; approved_count: number; rejected_count: number;
-  order_count: number; order_total: number; vat_total: number;
+  order_count: number; order_total: number;
   last_synced: string | null;
 }
 interface DashResp {
   date_from: string; date_to: string;
-  totals: { product_count: number; order_count: number; order_total: number; vat_total: number };
+  totals: { product_count: number; order_count: number; order_total: number };
   rows: Row[];
 }
 
@@ -77,9 +77,9 @@ export default function CoupangDashboard() {
   const t = data?.totals;
   const sums = (data?.rows || []).reduce((s, r) => {
     s.product_count += r.product_count || 0; s.order_count += r.order_count || 0;
-    s.order_total += r.order_total || 0; s.vat_total += r.vat_total || 0;
+    s.order_total += r.order_total || 0;
     return s;
-  }, { product_count: 0, order_count: 0, order_total: 0, vat_total: 0 });
+  }, { product_count: 0, order_count: 0, order_total: 0 });
   const cell = 'px-3 py-1.5';
 
   const Card = ({ icon, label, value, color }: any) => (
@@ -120,11 +120,6 @@ export default function CoupangDashboard() {
           <Card icon={<Wallet size={18} />} color={COUPANG_COLOR} label="주문금액(API, 수수료전)" value={`${fmt(t?.order_total || 0)}원`} />
         </div>
 
-        {/* 부가세신고매출 — 선택기간과 무관한 '연간' 집계라 별도 그룹으로 분리(기존엔 기간KPI와 섞여 헷갈렸음) */}
-        <div className="grid grid-cols-1 gap-2">
-          <Card icon={<Receipt size={18} />} color="#555" label={`부가세신고매출 (${to.slice(0, 4)}년 연간 누적, 선택기간과 무관)`} value={`${fmt(t?.vat_total || 0)}원`} />
-        </div>
-
         <div className="bg-white border border-[#e0e0e0] rounded-lg overflow-auto">
           <table className="w-full text-[12px]">
             <thead className="bg-[#f7f7f7] text-[#666]">
@@ -138,13 +133,12 @@ export default function CoupangDashboard() {
                 <th className={`${cell} text-right`}>승인/반려</th>
                 <th className={`${cell} text-right`}>주문건수</th>
                 <th className={`${cell} text-right`}>주문금액</th>
-                <th className={`${cell} text-right`}>부가세매출(연)</th>
                 <th className={`${cell} text-left`}>최근수집</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#f0f0f0]">
               {(!data?.rows || data.rows.length === 0) ? (
-                <tr><td colSpan={11} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
+                <tr><td colSpan={10} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
               ) : (<>
                 <tr className="bg-[#eef5ff] font-bold text-[#222] border-b-2 border-[#cfe0f5]">
                   <td className={cell}></td>
@@ -156,7 +150,6 @@ export default function CoupangDashboard() {
                   <td className={cell}></td>
                   <td className={`${cell} text-right`}>{fmt(sums.order_count)}</td>
                   <td className={`${cell} text-right`} style={{ color: COUPANG_COLOR }}>{fmt(sums.order_total)}</td>
-                  <td className={`${cell} text-right text-[#555]`}>{fmt(sums.vat_total)}</td>
                   <td className={cell}></td>
                 </tr>
                 {data.rows.map(r => (
@@ -173,7 +166,6 @@ export default function CoupangDashboard() {
                     </td>
                     <td className={`${cell} text-right`}>{fmt(r.order_count)}</td>
                     <td className={`${cell} text-right font-semibold`} style={{ color: COUPANG_COLOR }}>{fmt(r.order_total)}</td>
-                    <td className={`${cell} text-right text-[#555]`}>{fmt(r.vat_total)}</td>
                     <td className={`${cell} text-left text-[11px] text-[#999]`}>{r.last_synced ? r.last_synced.replace('T', ' ').slice(0, 16) : '-'}</td>
                   </tr>
                 ))}
@@ -181,7 +173,7 @@ export default function CoupangDashboard() {
             </tbody>
           </table>
         </div>
-        <p className="text-[11px] text-[#aaa]">※ 주문금액 = 오픈API 기준(수수료 차감 전 총액). 부가세매출은 선택기간과 무관하게 해당 연도 전체 누적입니다.</p>
+        <p className="text-[11px] text-[#aaa]">※ 주문금액 = 오픈API 기준(수수료 차감 전 총액). 부가세신고매출은 세무 &gt; 부가세 페이지에서 확인하세요.</p>
       </div>
     </div>
   );

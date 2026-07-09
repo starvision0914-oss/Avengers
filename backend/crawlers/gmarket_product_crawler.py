@@ -232,7 +232,9 @@ def run_all_accounts(log_fn=None, account_filter=None):
     from apps.cpc import eleven_block_guard as guard
     from crawlers.browser import create_driver, stop_display
 
-    ok, reason = guard.preflight('지마켓상품수집', platform='gmarket')
+    # 상품수집(www.esmplus.com/Home/v2)은 광고센터(ad.esmplus.com) 크롤들과 별도 세션/서브도메인이라
+    # 전용 락(gmarket_product)을 써서 서로 기다리지 않고 동시 진행 가능(2026-07-09).
+    ok, reason = guard.preflight('지마켓상품수집', platform='gmarket_product')
     if not ok:
         _log(log_fn, f'⏭️ 지마켓 상품수집 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}
@@ -248,7 +250,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
     driver = None
     try:
         for a in accounts:
-            blocked, _, _ = guard.is_blocked(platform='gmarket')
+            blocked, _, _ = guard.is_blocked(platform='gmarket_product')
             if blocked:
                 _log(log_fn, '⛔ 차단 감지 — 중단')
                 break
@@ -284,10 +286,24 @@ def run_all_accounts(log_fn=None, account_filter=None):
             except Exception as e:
                 _log(log_fn, f'[{a.login_id}] 오류: {str(e)[:140]}')
                 failed += 1
-                try:
-                    driver.switch_to.default_content()
-                except Exception:
-                    pass
+                # 세션 손상 시 driver 재생성 후 계속(2026-07-09 발견: 야간 상품수집이 특정 계정에서
+                # 브라우저 세션이 죽으면 그 뒤 계정 전부가 수집 안 되고 며칠씩 판매상태가 묵혀지는
+                # 문제가 있었음 — 다른 지마켓 크롤러들과 동일 원인/조치).
+                dead = any(s in str(e).lower() for s in
+                           ('invalid session', 'not attached', 'no such window',
+                            'chrome not reachable', 'disconnected', 'max retries exceeded'))
+                if not dead:
+                    try:
+                        driver.switch_to.default_content()
+                    except Exception:
+                        dead = True
+                if dead:
+                    _log(log_fn, f'[{a.login_id}] 브라우저 세션 손상 감지 — 재생성 후 계속')
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = None   # 다음 루프에서 create_driver() 재생성
             time.sleep(3)
     finally:
         try:
@@ -295,7 +311,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
                 driver.quit()
         except Exception:
             pass
-        guard.release_global_lock(platform='gmarket')
+        guard.release_global_lock(platform='gmarket_product')
         try:
             stop_display()
         except Exception:

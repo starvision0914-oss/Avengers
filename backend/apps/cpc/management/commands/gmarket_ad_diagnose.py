@@ -48,6 +48,8 @@ class Command(BaseCommand):
         for r in G.objects.filter(flt).values('product_no').annotate(c=Sum('cost'), cv=Sum('conv_amount'), ck=Sum('clicks')):
             ad[str(r['product_no'])] = [r['c'] or 0, r['cv'] or 0, r['ck'] or 0]
         pnos = list(ad.keys())
+        # 상품번호 → 광고계정(login_id). 실매출 매칭(_gmarket_realsales)에 필요(동일사업자 범위 한정).
+        pno_to_eid = dict(G.objects.filter(flt).values_list('product_no', 'login_id'))
         # 원가맵 + 판매가/코드/상태
         costmap = {}
         for r in ElevenMyProduct.objects.exclude(purchase_cost__isnull=True).exclude(purchase_cost=0).values('seller_product_code', 'purchase_cost'):
@@ -61,7 +63,8 @@ class Command(BaseCommand):
         B = 3000
         for i in range(0, len(pnos), B):
             chunk = pnos[i:i + B]
-            _c, real_by, _s, _o = _gmarket_realsales(d0, today, chunk)
+            chunk_map = {p: pno_to_eid.get(p) for p in chunk}
+            _c, real_by, _s, _o = _gmarket_realsales(d0, today, chunk_map)
             real.update(real_by)
 
         fee = o['fee']; dm = o['default_margin']; minck = o['min_click']
