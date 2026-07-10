@@ -12,7 +12,7 @@ from rest_framework.response import Response
 
 from .models import (SmartStoreAccount, SmartStoreSales, SmartStoreAdCost,
                      SmartStoreProduct, SmartStoreCrawlLog, NaverAdProductReport,
-                     SmartStoreCleanViolation)
+                     SmartStoreCleanViolation, NaverSearchTermReport)
 from apps.sales.models import SalesRecord
 
 _NAVER_STATUS_LABEL = {
@@ -634,6 +634,85 @@ class NaverProductRoasView(APIView):
             'products': len(rows),
         }
         return Response({'rows': rows, 'totals': totals})
+
+
+class NaverSearchTermView(APIView):
+    """네이버 검색어(expKeyword) 리포트 — 계정 단위 월 집계 조회.
+    상품별 매칭은 네이버 API 제약(expKeyword가 소재/상품 차원과 상호배타)상 불가 — 계정 단위만 제공."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        ym = request.query_params.get('ym') or ''
+        account_id = request.query_params.get('account_id') or ''
+        sort = request.query_params.get('sort', 'conv_amt')
+
+        qs = NaverSearchTermReport.objects.select_related('account')
+        if ym:
+            qs = qs.filter(ym=ym)
+        if account_id:
+            qs = qs.filter(account_id=account_id)
+
+        order_field = {'conv_amt': '-conv_amt', 'cost': '-cost', 'click': '-click'}.get(sort, '-conv_amt')
+        qs = qs.order_by(order_field)[:500]
+
+        rows = [{
+            'account_id': r.account_id,
+            'account_name': r.account.display_name or r.account.store_name,
+            'keyword': r.keyword,
+            'impression': r.impression,
+            'click': r.click,
+            'cost': r.cost,
+            'conv_cnt': r.conv_cnt,
+            'conv_amt': r.conv_amt,
+            'roas': round(r.conv_amt * 100.0 / r.cost, 1) if r.cost else 0,
+        } for r in qs]
+
+        avail_yms = list(NaverSearchTermReport.objects.values_list('ym', flat=True).distinct().order_by('-ym'))
+        return Response({'rows': rows, 'available_yms': avail_yms})
+
+
+class NaverSearchTermCrawlView(APIView):
+    """네이버 검색어 리포트 '수집' 버튼 — 백그라운드로 실행."""
+    def get(self, request):
+        from apps.cpc import eleven_block_guard as guard
+        lock_path = guard._lock_path('naver_search_term')
+        busy = False
+        if lock_path.exists():
+            try:
+                pid = int(lock_path.read_text(encoding='utf-8').split('|')[0])
+                busy = guard._pid_alive(pid)
+            except Exception:
+                busy = False
+        return Response({'busy': busy})
+
+    def post(self, request):
+        import subprocess
+        from datetime import date
+        from apps.cpc import eleven_block_guard as guard
+
+        ym = request.data.get('ym') or f'{date.today().year}-{date.today().month:02d}'
+        lock_path = guard._lock_path('naver_search_term')
+        if lock_path.exists():
+            try:
+                pid = int(lock_path.read_text(encoding='utf-8').split('|')[0])
+                if guard._pid_alive(pid):
+                    return Response({'status': 'busy', 'error': '이미 실행 중입니다.'}, status=409)
+            except Exception:
+                pass
+
+        cmd = (f'cd /home/rejoice888/Avengers/backend && '
+               f'python3 -c "from apps.cpc import eleven_block_guard as guard; '
+               f'guard.acquire_global_lock(\'네이버검색어수집\', platform=\'naver_search_term\')" && '
+               f'python3 manage.py crawl_naver_search_term --ym {ym} '
+               f'>> /tmp/naver_search_term_crawl.log 2>&1; '
+               f'python3 -c "from apps.cpc import eleven_block_guard as guard; '
+               f'guard.release_global_lock(platform=\'naver_search_term\')"')
+        try:
+            subprocess.Popen(['bash', '-c', cmd], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+        return Response({'status': 'started', 'ym': ym})
 
 
 # ──── 크롤 상태 ────

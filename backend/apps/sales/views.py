@@ -99,6 +99,19 @@ class SalesUploadView(views.APIView):
         if not file:
             return Response({'error': '파일을 선택해주세요.'}, status=400)
 
+        # 중복 제출 방지: 같은 파일명이 최근 3분 내 이미 성공 처리됐으면 재처리하지 않고 그 결과를 그대로 반환.
+        # (더블클릭/네트워크 재시도로 같은 파일이 거의 동시에 두 번 들어오면, 교체(delete-then-insert) 로직이
+        #  서로 겹쳐 실행되며 일부 행이 중복 저장되는 레이스 컨디션이 있었음 — 2026-07-11 확인)
+        from django.utils import timezone as _tz
+        recent_dup = SalesUploadLog.objects.filter(
+            file_name=file.name, uploaded_at__gte=_tz.now() - __import__('datetime').timedelta(minutes=3)
+        ).order_by('-uploaded_at').first()
+        if recent_dup:
+            resp = SalesUploadLogSerializer(recent_dup).data
+            resp['duplicate_submit'] = True
+            resp['message'] = f'같은 파일이 {recent_dup.uploaded_at.strftime("%H:%M:%S")}에 이미 처리되어 다시 처리하지 않았습니다.'
+            return Response(resp)
+
         default_seller = SellerAccount.objects.filter(id=seller_id).first() if seller_id else None
 
         # 셀러 매칭 맵 (셀러명/아이디 → 계정) — 한 파일에 여러 셀러 섞여도 행별 자동 매칭

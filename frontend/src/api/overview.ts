@@ -85,3 +85,26 @@ export async function getMallProfit(params?: { month?: string; date_from?: strin
   const { data } = await api.get('/cpc/all-mall-profit/', { params: params || {} });
   return data;
 }
+
+export interface MallProductRow {
+  product_code: string;
+  product_name: string;
+  revenue: number;
+  cost: number;
+  net_profit: number;
+  quantity: number;
+  orders: number;
+  margin: number;
+}
+export interface MallProductsResponse {
+  rows: MallProductRow[];
+  totals: { revenue: number; cost: number; net_profit: number; quantity: number; products: number };
+  mode: string;
+}
+
+export async function getMallProfitProducts(
+  params: { platform: string; date_from: string; date_to: string; mode: 'all' | 'loss' | 'high' }
+): Promise<MallProductsResponse> {
+  const { data } = await api.get('/cpc/mall-profit-products/', { params });
+  return data;
+}

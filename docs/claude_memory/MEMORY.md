@@ -82,3 +82,14 @@
 - [롯데온 로그인 성공](project_lotteon_login_success.md) — rejoice234 2FA 자동화 성공. WebSquare는 ActionChains클릭 필요(일반.click() 안먹음), 코드는 파일폴링 0.5초로 3분타임아웃 극복. scripts/_lotteon_login_otp.py 완성
 - [11번가 오피스 포인트 0원 버그](project_11st_office_point_zero_bug.md) — 셀러오피스 페이지개편으로 절대경로XPath 깨짐→포인트/상품수 조용히 0저장(tmxkql21 등 4계정). 라벨기반(li앵커) 탐색+핵심3항목 미검출시 예외로 수정(2026-07-08)
 - [롯데온 API 구현완료](project_lotteon_api_implementation.md) — apps/lotteon 완성(2026-07-08): 상품=soapi Bearer토큰, 광고비=ad.lotteon.com 세션쿠키, 공식오픈API 미사용. cron 미등록
+- [OsanApp 진행상황](project_osanapp_status.md) — 오산 이야기 앱 데이터 채움+커밋 완료(2026-07-10). 실기기 테스트는 방화벽+Expo Go SDK57 미지원으로 미해결
+- [sudo 비대화형 세션 한계](feedback_sudo_noninteractive.md) — Bash 도구에서 sudo 절대 실행 불가(터미널 없음), 비밀번호 받아도 무용. VNC/SSH서 직접 실행 요청할 것
+- [사용자 기술 배경지식 낮음](feedback_low_tech_literacy_guidance.md) — URL/스크린샷/터미널 개념부터 설명 필요, 한번에 한단계씩, AskUserQuestion으로 증상 좁히기 효과적
+- [오산 홈페이지 프로젝트](project_osan_homepage.md) — Avengers와 독립된 신규 워드프레스(오산 지역정보+커뮤니티+쇼핑몰+블로그 208개글). 이미지는 위키미디어커먼즈 라이선스만 사용, 도메인 미구매로 비공개 상태
+- [롯데온 부가세 크롤러](project_lotteon_vat_crawler.md) — 화면단위 세션토큰 스코프 함정(상품화면 토큰으로 부가세API 401). /tax 버튼 통합완료(2026-07-10)
+- [네이버 검색어 리포트](project_naver_search_term_report.md) — "키워드"차원은 빈값, "검색어"(expKeyword)만 유효. 상품/소재차원과 상호배타라 상품별매칭 API로 불가능(재확인 불필요)
+- [window.open+Bearer인증 실패패턴](feedback_window_open_bearer_auth.md) — 엑셀다운로드 등 백엔드API를 window.open직접호출시 토큰누락 401. 클라이언트 Blob CSV가 기본해법
+- [스마트스토어 상품동기화 12일 중단](project_smartstore_product_sync_outage.md) — cron --skip-products 방치(0628~0710), DB synced_at으로만 드러남. 점검시 로그뿐아니라 신선도 확인 필수
+- [Overview 대시보드 수정](project_overview_dashboard_fixes.md) — 쿠팡·롯데온이 OverviewView서 누락돼있던 버그 수정. 새플랫폼 추가시 하드코딩된 플랫폼목록 여러곳 grep 필요. 구매가+쇼핑몰클릭모달(적자/우수/엑셀) 추가
+- [매출업로드 중복 레이스컨디션](project_sales_upload_dedup_fix.md) — 같은파일 8초간격 재업로드로 90행 중복(594,308원). 3분 idempotency가드 추가. 진짜중복판별은 order_datetime+금액+수량까지 봐야함(order_date만은 오탐)
+- [쿠팡 계정명 지마켓매칭](project_coupang_seller_name_gmarket_match.md) — login_id기준 지마켓 seller_name 복사로 정정(999/666 라벨 뒤바뀜 등 발견). 신규계정도 이 관례 따를것

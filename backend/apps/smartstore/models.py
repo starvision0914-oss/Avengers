@@ -142,6 +142,33 @@ class NaverAdProductReport(models.Model):
         return f"{self.product_name or self.product_no} ({self.since_date}~{self.until_date})"
 
 
+class NaverSearchTermReport(models.Model):
+    """네이버 검색어(expKeyword) 리포트 — 계정 단위 월 집계.
+    쇼핑검색광고는 자동타겟팅이라 keyword(수동입찰) 차원은 항상 빈값("-")이고,
+    실사용 검색어는 expKeyword 차원으로만 조회됨. 네이버 API 제약상 expKeyword는
+    상품(소재ID) 차원과 동시 조회 불가(상호배타) — 상품별 매칭 불가, 계정 단위만 가능.
+    노이즈(노출만 있고 클릭 0인 검색어) 제외하고 클릭 또는 매출 있는 행만 저장."""
+    account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='search_term_reports')
+    ym = models.CharField(max_length=7, help_text='YYYY-MM')
+    keyword = models.CharField(max_length=200)
+    impression = models.IntegerField(default=0)
+    click = models.IntegerField(default=0)
+    cost = models.BigIntegerField(default=0)
+    conv_cnt = models.IntegerField(default=0)
+    conv_amt = models.BigIntegerField(default=0)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'naver_search_term_report'
+        unique_together = [('account', 'ym', 'keyword')]
+        indexes = [
+            models.Index(fields=['account', 'ym']),
+        ]
+
+    def __str__(self):
+        return f"{self.keyword} ({self.ym})"
+
+
 class SmartStoreCleanViolation(models.Model):
     """네이버 쇼핑파트너센터 클린위반 현황"""
     account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='clean_violations')

@@ -1,6 +1,6 @@
 #!/bin/bash
 # 세무 페이지 "크롤링" 버튼 — 플랫폼별 락 확인 후 부가세신고내역 크롤 실행.
-# 사용법: tax_vat_crawl.sh <11st|gmarket|smartstore|coupang> <start_yyyymm> <end_yyyymm>
+# 사용법: tax_vat_crawl.sh <11st|gmarket|smartstore|coupang|lotteon> <start_yyyymm> <end_yyyymm>
 PLATFORM="$1"
 START="$2"
 END="$3"

@@ -1062,15 +1062,45 @@ class OverviewView(views.APIView):
             'orders': ss_orders, 'last_collected': None,
         })
 
+        # ── 쿠팡·롯데온 집계 ── 광고비 데이터 없음(0), SalesRecord 기준(쇼핑몰별 손익 카드와 동일 소스 → 합계 일치).
+        from apps.sales.models import SalesRecord as _SR
+        from apps.coupang.models import CoupangAccount as _CPAccount
+        from apps.lotteon.models import LotteonAccount as _LTAccount
+
+        def _sr_totals(platform):
+            r = (_SR.objects.filter(platform=platform, order_date__gte=start_d, order_date__lte=end_d)
+                 .aggregate(sales=Sum('total_price'), profit=Sum('net_profit'), orders=Count('id')))
+            return r['sales'] or 0, r['profit'] or 0, r['orders'] or 0
+
+        cp_sales, cp_profit, cp_orders = _sr_totals('coupang')
+        lt_sales, lt_profit, lt_orders = _sr_totals('lotteon')
+        cp_accounts = _CPAccount.objects.filter(is_active=True).count()
+        lt_accounts = _LTAccount.objects.filter(is_active=True).count()
+
+        markets.append({
+            'key': 'coupang', 'label': '쿠팡', 'color': '#ef4444',
+            'ad_cost': 0, 'cpc': 0, 'ai': 0, 'balance': 0,
+            'accounts': cp_accounts, 'normal': cp_accounts, 'failed': 0,
+            'sales': cp_sales, 'profit': cp_profit, 'net_after_ad': cp_profit,
+            'orders': cp_orders, 'last_collected': None,
+        })
+        markets.append({
+            'key': 'lotteon', 'label': '롯데온', 'color': '#da291c',
+            'ad_cost': 0, 'cpc': 0, 'ai': 0, 'balance': 0,
+            'accounts': lt_accounts, 'normal': lt_accounts, 'failed': 0,
+            'sales': lt_sales, 'profit': lt_profit, 'net_after_ad': lt_profit,
+            'orders': lt_orders, 'last_collected': None,
+        })
+
         totals = {
             'ad_cost': g_ad + e_ad + ss_ad,
             'balance': g_bal + e_bal,
-            'accounts': g_total + e_total + ss_accounts,
-            'normal': g_normal + e_normal + ss_accounts,
+            'accounts': g_total + e_total + ss_accounts + cp_accounts + lt_accounts,
+            'normal': g_normal + e_normal + ss_accounts + cp_accounts + lt_accounts,
             'failed': g_failed + e_failed,
-            'sales': g_sales + e_sales + ss_settlement,
-            'profit': g_profit + e_profit + ss_settlement,
-            'net_after_ad': g_net + e_net + ss_net,
+            'sales': g_sales + e_sales + ss_settlement + cp_sales + lt_sales,
+            'profit': g_profit + e_profit + ss_settlement + cp_profit + lt_profit,
+            'net_after_ad': g_net + e_net + ss_net + cp_profit + lt_profit,
         }
 
         return Response({
@@ -4180,8 +4210,8 @@ def _tax_order_map():
             m[key] = a['display_order']
     return m
 
-_PLATFORM_LABELS = {'11st': '11번가', 'gmarket': '지마켓', 'auction': '옥션', 'smartstore': '스마트스토어', 'coupang': '쿠팡'}
-_PLATFORM_ORDER = {'gmarket': 0, 'auction': 1, '11st': 2, 'smartstore': 3, 'coupang': 4}
+_PLATFORM_LABELS = {'11st': '11번가', 'gmarket': '지마켓', 'auction': '옥션', 'smartstore': '스마트스토어', 'coupang': '쿠팡', 'lotteon': '롯데온'}
+_PLATFORM_ORDER = {'gmarket': 0, 'auction': 1, '11st': 2, 'smartstore': 3, 'coupang': 4, 'lotteon': 5}
 
 
 def _tax_natural_key(s):
@@ -4251,6 +4281,9 @@ class TaxVatSummaryView(views.APIView):
         elif platform == 'smartstore':
             from apps.smartstore.models import SmartStoreAccount
             target = SmartStoreAccount.objects.filter(is_active=True).exclude(login_pw='').count()
+        elif platform == 'lotteon':
+            from apps.lotteon.models import LotteonAccount
+            target = LotteonAccount.objects.filter(is_active=True).count()
         else:
             # 지마켓: 마스터계정 수 (서브 제외)
             target = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).filter(
@@ -4316,6 +4349,7 @@ class TaxVatSummaryView(views.APIView):
         from apps.cpc.models import TaxVatMonthly, CrawlerAccount
         from apps.smartstore.models import SmartStoreAccount
         from apps.coupang.models import CoupangVatSales, CoupangAccount
+        from apps.lotteon.models import LotteonAccount
 
         groups = {}
         monthly_totals = {}
@@ -4350,6 +4384,7 @@ class TaxVatSummaryView(views.APIView):
                 login_id__in=_tax_excluded_login_ids()).count()
             + SmartStoreAccount.objects.filter(is_active=True).exclude(login_pw='').count()
             + CoupangAccount.objects.filter(is_active=True).count()
+            + LotteonAccount.objects.filter(is_active=True).count()
         )
         collected = (
             TaxVatMonthly.objects.filter(year=year).exclude(login_id__in=_tax_excluded_login_ids()).values(
@@ -4380,8 +4415,8 @@ class TaxVatSummaryView(views.APIView):
 
 # 독립적으로 크롤 커맨드가 있는 플랫폼(락 단위). 옥션은 지마켓 크롤 안에서 탭만 전환해 같이 수집되므로
 # 별도 커맨드가 없다 — 'auction' 요청은 'gmarket' 실행에 매핑(_TAX_VAT_RUN_AS)한다.
-_TAX_VAT_PLATFORMS = ('11st', 'gmarket', 'smartstore', 'coupang')
-_TAX_VAT_VIEW_PLATFORMS = ('11st', 'gmarket', 'auction', 'smartstore', 'coupang')
+_TAX_VAT_PLATFORMS = ('11st', 'gmarket', 'smartstore', 'coupang', 'lotteon')
+_TAX_VAT_VIEW_PLATFORMS = ('11st', 'gmarket', 'auction', 'smartstore', 'coupang', 'lotteon')
 _TAX_VAT_RUN_AS = {'auction': 'gmarket'}
 
 
@@ -4723,6 +4758,71 @@ class AllMallProfitView(views.APIView):
         tot['gross_margin'] = round(tot['gross_profit'] / rev * 100, 1) if rev else 0
         return Response({'month': f'{y}-{m:02d}', 'date_from': str(ms), 'date_to': str(me),
                          'rows': rows, 'totals': tot})
+
+
+class MallProfitProductsView(views.APIView):
+    """쇼핑몰별 손익 카드 클릭 → 모달용 상품별 목록. ?platform=11st&date_from=&date_to=&mode=all|loss|high
+    적자=순익<0(낮은순), 우수=순익>0(높은순), 전체=매출 높은순. export=1이면 CSV 다운로드."""
+    def get(self, request):
+        import csv
+        from datetime import datetime as dt_dt
+        from django.http import HttpResponse
+        from apps.sales.models import SalesRecord
+
+        platform = request.query_params.get('platform') or ''
+        df = request.query_params.get('date_from')
+        dtp = request.query_params.get('date_to')
+        mode = request.query_params.get('mode') or 'all'
+        if not platform or not df or not dtp:
+            return Response({'error': 'platform, date_from, date_to 필수'}, status=400)
+        ms = dt_dt.strptime(df, '%Y-%m-%d').date()
+        me = dt_dt.strptime(dtp, '%Y-%m-%d').date()
+
+        qs = SalesRecord.objects.filter(platform=platform, order_date__gte=ms, order_date__lte=me)
+        agg = (qs.values('product_code', 'product_name')
+                 .annotate(revenue=Sum('total_price'), cost=Sum('cost'),
+                           net_profit=Sum('net_profit'), qty=Sum('quantity'), orders=Count('id')))
+
+        rows = []
+        for r in agg:
+            rev = r['revenue'] or 0
+            rows.append({
+                'product_code': r['product_code'] or '',
+                'product_name': r['product_name'] or '(상품명 없음)',
+                'revenue': rev,
+                'cost': r['cost'] or 0,
+                'net_profit': r['net_profit'] or 0,
+                'quantity': r['qty'] or 0,
+                'orders': r['orders'],
+                'margin': round((r['net_profit'] or 0) / rev * 100, 1) if rev else 0,
+            })
+
+        if mode == 'loss':
+            rows = [r for r in rows if r['net_profit'] < 0]
+            rows.sort(key=lambda x: x['net_profit'])
+        elif mode == 'high':
+            rows = [r for r in rows if r['net_profit'] > 0]
+            rows.sort(key=lambda x: -x['net_profit'])
+        else:
+            rows.sort(key=lambda x: -x['revenue'])
+
+        if request.query_params.get('export'):
+            resp = HttpResponse(content_type='text/csv; charset=utf-8')
+            resp['Content-Disposition'] = f'attachment; filename="{platform}_상품손익_{df}_{dtp}.csv"'
+            resp.write('﻿')
+            w = csv.writer(resp)
+            w.writerow(['상품코드', '상품명', '수량', '매출', '구매가', '순익', '마진율(%)', '주문수'])
+            for r in rows:
+                w.writerow([r['product_code'], r['product_name'], r['quantity'], r['revenue'],
+                            r['cost'], r['net_profit'], r['margin'], r['orders']])
+            return resp
+
+        totals = {
+            'revenue': sum(r['revenue'] for r in rows), 'cost': sum(r['cost'] for r in rows),
+            'net_profit': sum(r['net_profit'] for r in rows), 'quantity': sum(r['quantity'] for r in rows),
+            'products': len(rows),
+        }
+        return Response({'rows': rows[:1000], 'totals': totals, 'mode': mode})
 
 
 class ElevenAdKilllistView(views.APIView):

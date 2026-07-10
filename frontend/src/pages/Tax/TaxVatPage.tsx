@@ -14,6 +14,7 @@ const PLATFORMS = [
   { key: 'auction', label: '옥션' },
   { key: 'smartstore', label: '스마트스토어' },
   { key: 'coupang', label: '쿠팡' },
+  { key: 'lotteon', label: '롯데온' },
 ] as const;
 
 type PlatformKey = (typeof PLATFORMS)[number]['key'];
@@ -157,7 +158,7 @@ export default function TaxVatPage() {
               <div className="h-full bg-[#00a651]" style={{ width: `${pct}%` }} />
             </div>
             <div className="flex gap-6 mt-3 text-[12px]">
-              <span>총 {platform === 'gmarket' || platform === 'auction' || platform === 'coupang' ? '총매출' : '과세매출'} <b className="text-[#0369a1]">{formatKRW(data.grand_total)}</b></span>
+              <span>총 {platform === 'gmarket' || platform === 'auction' || platform === 'coupang' || platform === 'lotteon' ? '총매출' : '과세매출'} <b className="text-[#0369a1]">{formatKRW(data.grand_total)}</b></span>
               <span>매출세액(÷11) <b className="text-[#dc2626]">{formatKRW(data.vat_payable)}</b></span>
               <span>수집 계정 <b>{data.accounts.length}</b></span>
             </div>
@@ -217,6 +218,8 @@ export default function TaxVatPage() {
                       ? '수집된 데이터가 없습니다. crawl_smartstore_vat 를 먼저 실행해 주세요.'
                       : platform === 'coupang'
                       ? '수집된 데이터가 없습니다. crawl_coupang_vat 를 먼저 실행해 주세요.'
+                      : platform === 'lotteon'
+                      ? '수집된 데이터가 없습니다. crawl_lotteon_vat 를 먼저 실행해 주세요.'
                       : platform === 'all'
                       ? '수집된 데이터가 없습니다. 각 플랫폼 탭에서 먼저 수집을 진행해 주세요.'
                       : '수집된 데이터가 없습니다 (크롤 진행 중일 수 있습니다)'}
@@ -244,7 +247,7 @@ export default function TaxVatPage() {
 
         <p className="text-[12px] text-[#999] mt-2">
           {platform === 'all'
-            ? '※ 11번가·지마켓·옥션·스마트스토어·쿠팡 전체를 셀러명 앞 3글자 기준으로 교차 매칭해 합산한 통합 뷰입니다 (예: "스타드림"+"스타드림딜" → "스타드"). 30초마다 자동 갱신.'
+            ? '※ 11번가·지마켓·옥션·스마트스토어·쿠팡·롯데온 전체를 셀러명 앞 3글자 기준으로 교차 매칭해 합산한 통합 뷰입니다 (예: "스타드림"+"스타드림딜" → "스타드"). 30초마다 자동 갱신.'
             : platform === '11st'
             ? '※ 11번가 셀러오피스 부가세신고내역(공식 과세매출) 기준. 30초마다 자동 갱신.'
             : platform === 'gmarket'
@@ -253,6 +256,8 @@ export default function TaxVatPage() {
             ? '※ ESM Plus 부가세자료 중 옥션 탭(총매출) 기준. 지마켓 크롤 안에서 탭 전환으로 함께 수집됨(별도 명령 없음). 30초마다 자동 갱신.'
             : platform === 'coupang'
             ? '※ 쿠팡 Wing 부가세신고 매출자료(판매자윙+로켓그로스 합산) 기준. crawl_coupang_vat 명령으로 수집. 30초마다 자동 갱신.'
+            : platform === 'lotteon'
+            ? '※ 롯데온 판매자센터 정산관리 > 부가세신고자료조회(총매출) 기준. 과세/면세 구분 없음. crawl_lotteon_vat 명령으로 수집. 30초마다 자동 갱신.'
             : '※ 스마트스토어센터 정산관리 > 부가세신고내역(과세매출) 기준. crawl_smartstore_vat 명령으로 수집. 30초마다 자동 갱신.'}
         </p>
       </div>

@@ -27,7 +27,8 @@ from crawlers.eleven_crawler import _do_login, _save_cookies
 CHECK_URL = 'https://soffice.11st.co.kr/view/main'
 OTP_KEYWORDS = ('otpLoginForm', 'otp', 'auth_type_01')
 COOKIE_CHECK_TIMEOUT = 6
-OTP_SAFE_HOURS = 20   # 실제 OTP세션은 ~24h로 소진되므로, 그 전에 05시 조용한 시간대에 미리 갱신
+OTP_SAFE_HOURS = 24   # 실제 OTP세션 TTL과 동일 — 어제 종료시각 기준 24h 지나야 재인증 필요
+                       # (20h로 두면 매일 05시 크론 간격 자체가 ~24h라 거의 전 계정이 매번 걸림, 2026-07-10 수정)
 
 
 def _cookie_valid(account) -> bool:

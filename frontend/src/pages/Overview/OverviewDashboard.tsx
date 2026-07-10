@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
-import { getOverview, getMallProfit, type OverviewResponse, type MallProfitResponse, type OverviewParams } from '../../api/overview';
+import {
+  getOverview, getMallProfit, getMallProfitProducts,
+  type OverviewResponse, type MallProfitResponse, type OverviewParams, type MallProductRow,
+} from '../../api/overview';
 import { formatKRW } from '../../utils/format';
 
 function todayKST(): string {
@@ -93,6 +96,7 @@ export default function OverviewDashboard() {
   const [profit, setProfit] = useState<MallProfitResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [modalMall, setModalMall] = useState<{ platform: string; label: string } | null>(null);
 
   const ovParams = useMemo<OverviewParams>(
     () => periodToOverviewParam(period, cFrom, cTo),
@@ -223,7 +227,10 @@ export default function OverviewDashboard() {
               const mk = mallOf(r.platform);
               const barW = Math.round(Math.abs(r.net_profit) / maxNet * 100);
               return (
-                <div key={r.platform} className="ovh-card" style={{ ...CARD, overflow: 'hidden' }}>
+                <div key={r.platform} className="ovh-card"
+                  onClick={() => setModalMall({ platform: r.platform, label: r.label })}
+                  style={{ ...CARD, overflow: 'hidden', cursor: 'pointer' }}
+                  title="클릭하면 상품별 목록을 볼 수 있습니다">
                   <div style={{ height: 6, background: mk.grad }} />
                   <div style={{ padding: 16 }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -241,6 +248,7 @@ export default function OverviewDashboard() {
                     </div>
                     <div style={{ fontSize: 12.5, color: '#475569', lineHeight: 1.9 }}>
                       <Row k="매출" v={`${formatKRW(r.revenue)}원`} />
+                      <Row k="구매가" v={`${formatKRW(r.cost)}원`} vColor="#b45309" />
                       <Row k="매출이익" v={`${formatKRW(r.gross_profit)}원`} vColor="#0891b2" />
                       <Row k="광고비" v={r.has_ad_data ? `${formatKRW(r.ad_cost)}원${r.revenue > 0 ? ` · ${r.ad_ratio}%` : ''}` : '—'} vColor="#d97706" />
                       <Row k="주문" v={`${formatKRW(r.orders)}건`} vColor="#94a3b8" />
@@ -328,6 +336,137 @@ export default function OverviewDashboard() {
           </p>
         </>
       )}
+
+      {modalMall && profit && (
+        <MallProductModal
+          platform={modalMall.platform}
+          label={modalMall.label}
+          dateFrom={profit.date_from}
+          dateTo={profit.date_to}
+          onClose={() => setModalMall(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── 쇼핑몰 카드 클릭 → 상품별 목록 모달 (전체/적자/우수 + 엑셀다운) ──
+function MallProductModal({ platform, label, dateFrom, dateTo, onClose }:
+  { platform: string; label: string; dateFrom: string; dateTo: string; onClose: () => void }) {
+  const [mode, setMode] = useState<'all' | 'loss' | 'high'>('all');
+  const [rows, setRows] = useState<MallProductRow[]>([]);
+  const [totals, setTotals] = useState<{ revenue: number; cost: number; net_profit: number; quantity: number; products: number } | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    getMallProfitProducts({ platform, date_from: dateFrom, date_to: dateTo, mode })
+      .then(r => { setRows(r.rows); setTotals(r.totals); })
+      .finally(() => setLoading(false));
+  }, [platform, dateFrom, dateTo, mode]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const doExport = () => {
+    const header = ['상품코드', '상품명', '수량', '매출', '구매가', '순익', '마진율(%)', '주문수'].join(',');
+    const lines = [header, ...rows.map(r =>
+      [r.product_code, r.product_name, r.quantity, r.revenue, r.cost, r.net_profit, r.margin, r.orders]
+        .map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
+    )];
+    const csv = '﻿' + lines.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${label}_상품손익_${dateFrom}_${dateTo}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const MODES: { key: 'all' | 'loss' | 'high'; label: string; on: string; off: string }[] = [
+    { key: 'all', label: '전체', on: '#334155', off: '#f3f4f6' },
+    { key: 'loss', label: '적자', on: '#dc2626', off: '#fee2e2' },
+    { key: 'high', label: '우수', on: '#16a34a', off: '#dcfce7' },
+  ];
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 920, maxHeight: '85vh',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,.3)',
+      }}>
+        {/* 헤더 */}
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #eef0f3', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 17, fontWeight: 800 }}>{label} 상품별 손익</span>
+          <span style={{ fontSize: 12, color: '#9ca3af' }}>{dateFrom === dateTo ? dateFrom : `${dateFrom} ~ ${dateTo}`}</span>
+          <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
+            {MODES.map(m => (
+              <button key={m.key} onClick={() => setMode(m.key)}
+                style={{
+                  padding: '5px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 12.5, fontWeight: 700,
+                  border: 'none', color: mode === m.key ? '#fff' : m.on, background: mode === m.key ? m.on : m.off,
+                }}>{m.label}</button>
+            ))}
+          </div>
+          <button onClick={doExport}
+            style={{ padding: '5px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 12.5, fontWeight: 700, border: '1px solid #d1d5db', background: '#fff', color: '#374151' }}>
+            ⬇ 엑셀다운
+          </button>
+          <button onClick={onClose}
+            style={{ marginLeft: 'auto', width: 28, height: 28, borderRadius: 8, border: 'none', background: '#f3f4f6', cursor: 'pointer', fontSize: 15, color: '#6b7280' }}>
+            ✕
+          </button>
+        </div>
+
+        {/* 요약 */}
+        {totals && (
+          <div style={{ padding: '10px 20px', display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 12.5, background: '#f8fafc', borderBottom: '1px solid #eef0f3' }}>
+            <span style={{ color: '#6b7280' }}>상품 <b style={{ color: '#111' }}>{totals.products.toLocaleString()}</b>개</span>
+            <span style={{ color: '#6b7280' }}>매출 <b style={{ color: '#0891b2' }}>{formatKRW(totals.revenue)}원</b></span>
+            <span style={{ color: '#6b7280' }}>구매가 <b style={{ color: '#b45309' }}>{formatKRW(totals.cost)}원</b></span>
+            <span style={{ color: '#6b7280' }}>순익 <b style={{ color: totals.net_profit >= 0 ? '#16a34a' : '#dc2626' }}>{totals.net_profit >= 0 ? '+' : ''}{formatKRW(totals.net_profit)}원</b></span>
+          </div>
+        )}
+
+        {/* 테이블 */}
+        <div style={{ overflow: 'auto', flex: 1 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 1 }}>
+              <tr>
+                {['상품명', '수량', '매출', '구매가', '순익', '마진율'].map((h, i) => (
+                  <th key={h} style={{ padding: '9px 12px', textAlign: i === 0 ? 'left' : 'right', fontWeight: 700, color: '#6b7280', fontSize: 12, borderBottom: '1px solid #eef0f3', whiteSpace: 'nowrap' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr><td colSpan={6} style={{ textAlign: 'center', padding: 48, color: '#9ca3af' }}>{loading ? '불러오는 중...' : '데이터가 없습니다'}</td></tr>
+              )}
+              {rows.map((r, i) => (
+                <tr key={`${r.product_code}-${i}`} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                  <td style={{ padding: '8px 12px', maxWidth: 320 }}>
+                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.product_name}>{r.product_name}</div>
+                    {r.product_code && <div style={{ fontSize: 11, color: '#9ca3af' }}>{r.product_code}</div>}
+                  </td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#64748b' }}>{r.quantity.toLocaleString()}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#0891b2', fontWeight: 600 }}>{r.revenue.toLocaleString()}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: '#b45309' }}>{r.cost.toLocaleString()}</td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 700, color: r.net_profit >= 0 ? '#16a34a' : '#dc2626' }}>
+                    {r.net_profit >= 0 ? '+' : ''}{r.net_profit.toLocaleString()}
+                  </td>
+                  <td style={{ padding: '8px 12px', textAlign: 'right', color: r.margin >= 0 ? '#16a34a' : '#dc2626' }}>{r.margin}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
