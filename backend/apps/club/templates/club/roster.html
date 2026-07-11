@@ -1,0 +1,72 @@
+{% extends "club/base.html" %}
+{% block title %}로스터 - {{ team.name }}{% endblock %}
+{% block content %}
+<h1>로스터 ({{ players|length }}명)</h1>
+
+<form method="get" class="filter-row">
+  <input type="text" name="q" value="{{ query }}" placeholder="이름/별명 검색">
+  <select name="position">
+    <option value="">전체 포지션</option>
+    {% for value, label in position_choices %}
+    <option value="{{ value }}" {% if position_filter == value %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <select name="year">
+    <option value="">전체 연도</option>
+    {% for y in years %}
+    <option value="{{ y }}" {% if year_filter == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>
+    {% endfor %}
+  </select>
+  <input type="number" name="min_ovr" value="{{ min_ovr }}" placeholder="최소 OVR" style="width:90px">
+  <input type="hidden" name="grade" value="{{ grade_filter }}">
+  <button class="btn" type="submit">검색</button>
+  <a href="{% url 'roster' %}" class="btn">초기화</a>
+</form>
+
+<div class="filter-row">
+  <a href="?grade=" class="btn {% if not grade_filter %}btn-primary{% endif %}">전체등급</a>
+  {% for value, label in grade_choices %}
+    <a href="?grade={{ value }}" class="btn {% if grade_filter == value %}btn-primary{% endif %}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<form method="post" action="{% url 'bulk_release_players' %}" onsubmit="return confirm('선택한 선수를 정말 방출하시겠습니까?');">
+  {% csrf_token %}
+  <table class="player-table">
+    <thead>
+      <tr>
+        <th><input type="checkbox" onclick="document.querySelectorAll('.player-checkbox').forEach(function(c){c.checked = this.checked;}, this)"></th>
+        <th><a href="{{ sort_links.name }}">이름{% if sort == "name" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ sort_links.year }}">연도{% if sort == "year" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ sort_links.nickname }}">별명{% if sort == "nickname" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ sort_links.position }}">포지션{% if sort == "position" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ sort_links.grade }}">등급{% if sort == "grade" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ sort_links.age }}">나이{% if sort == "age" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ sort_links.overall }}">OVR{% if sort == "overall" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ sort_links.potential }}">잠재력{% if sort == "potential" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for player in players %}
+      <tr onclick="location.href='{% url 'player_detail' player.pk %}'">
+        <td onclick="event.stopPropagation()"><input class="player-checkbox" type="checkbox" name="player_ids" value="{{ player.pk }}"></td>
+        <td title="{{ player.card_label }}">{% if player.real_team %}<span class="muted">[{{ player.real_team_short }}]</span> {% endif %}{{ player.name }}</td>
+        <td>{% if player.year %}<span class="year-tag">{{ player.year }}</span>{% endif %}</td>
+        <td class="muted">{{ player.nickname }}</td>
+        <td>{{ player.get_position_display }}{% if player.position == "P" and player.pitcher_role %} <span class="muted">({{ player.get_pitcher_role_display }})</span>{% endif %}</td>
+        <td><span class="grade grade-{{ player.grade }}">{{ player.get_grade_display }}</span></td>
+        <td>{{ player.age }}</td>
+        <td>{{ player.overall }}</td>
+        <td>{{ player.potential }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="9">조건에 맞는 선수가 없습니다.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if players %}
+  <button class="btn btn-danger" type="submit">선택 방출</button>
+  {% endif %}
+</form>
+{% endblock %}

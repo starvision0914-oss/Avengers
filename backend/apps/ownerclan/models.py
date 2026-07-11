@@ -276,6 +276,31 @@ class MyProduct(models.Model):
         ]
 
 
+class OwnerclanApiAccount(models.Model):
+    """오너클랜 정식 API(GraphQL) 로그인 계정 — ownerclan.com 판매사 ID/PW와 동일."""
+    login_id = models.CharField(max_length=100, unique=True)
+    login_pw = models.CharField(max_length=200)
+    token = models.TextField(blank=True, default='')
+    token_expires_at = models.DateTimeField(null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
+    last_new_count = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    # 오너클랜 마이페이지(웹) 스크래핑 정보 — GraphQL API 범위 밖(계정 전용 UI 정보)
+    balance = models.CharField(max_length=50, blank=True, default='')            # 오너클랜머니
+    order_stats = models.JSONField(default=dict, blank=True)                     # 주문/배송조회 현황
+    subscription_info = models.JSONField(default=dict, blank=True)               # 구독서비스
+    lowest_price_quota = models.JSONField(default=dict, blank=True)              # 나만의 최저가 선점권
+    info_synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'ownerclan_api_account'
+
+    def __str__(self):
+        return self.login_id
+
+
 class OwnerclanTask(models.Model):
     task_type = models.CharField(max_length=30)
     status = models.CharField(max_length=10, default='pending')

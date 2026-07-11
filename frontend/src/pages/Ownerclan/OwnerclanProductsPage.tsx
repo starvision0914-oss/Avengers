@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import {
   fetchProducts, fetchStats,
   uploadExcel, uploadCsv, uploadSoldoutTxt, syncProducts,
-  downloadProductExcel, fetchWCodes,
+  downloadProductExcel, downloadDbCsv, fetchWCodes,
   deleteAllProducts, deleteProductsByIds, dedupeByName, setOwnerclanWorkspace,
   type OwnerclanProductItem, type ProductStats, type UploadTaskStart,
   type SortColumn, type SortOrder, type FilterableColumn,
@@ -271,6 +271,16 @@ export default function OwnerclanProductsPage({ workspace = 'reserve' }: { works
     }
   };
 
+  const handleDbDownload = async () => {
+    const tid = toast.loading('DB 전체 다운로드 중... (15만+건, 시간이 걸릴 수 있습니다)');
+    try {
+      await downloadDbCsv();
+      toast.success('다운로드 완료', { id: tid });
+    } catch (e: any) {
+      toast.error(`다운로드 실패: ${e.response?.data?.error || e.message}`, { id: tid });
+    }
+  };
+
   const handleWCodes = async () => {
     const tid = toast.loading('W코드 추출 중...');
     try {
@@ -335,6 +345,7 @@ export default function OwnerclanProductsPage({ workspace = 'reserve' }: { works
           onSoldoutUpload={handleSoldoutUpload}
           onSync={handleSync}
           onExcelDownload={handleExcelDownload}
+          onDbDownload={handleDbDownload}
           onWCodes={handleWCodes}
           onDeleteAll={() => setConfirmKind('all')}
           onDeleteSelected={() => setConfirmKind('selected')}

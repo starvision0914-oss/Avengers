@@ -1,0 +1,38 @@
+{% load static humanize %}
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}야구단 매니저{% endblock %}</title>
+<link rel="stylesheet" href="{% static 'club/style.css' %}">
+</head>
+<body>
+<header class="topbar">
+  <a href="{% url 'dashboard' %}" class="brand">⚾ {{ team.name|default:"야구단 매니저" }}</a>
+  <nav>
+    <a href="{% url 'dashboard' %}">대시보드</a>
+    <a href="{% url 'roster' %}">로스터</a>
+    <a href="{% url 'scout' %}">영입</a>
+    <a href="{% url 'match' %}">경기</a>
+    <a href="{% url 'lineup' %}">라인업</a>
+    <a href="{% url 'records' %}">기록</a>
+  </nav>
+  {% if team %}
+  <div class="league">🏆 {{ team.get_league_tier_display }} ({{ team.league_points }}/100) · {{ team.wins }}승 {{ team.losses }}패 · 시즌 {{ team.season_matches }}/100</div>
+  <div class="cash">💰 {{ team.cash|intcomma }}원</div>
+  {% endif %}
+</header>
+
+<main class="container {% block container_extra %}{% endblock %}">
+  {% if messages %}
+    <ul class="messages">
+      {% for message in messages %}
+        <li class="msg {{ message.tags }}">{{ message }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

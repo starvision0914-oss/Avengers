@@ -1,31 +1,27 @@
 import { useState, useRef, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
-  LayoutDashboard, Users, ShoppingCart, CheckSquare,
+  Users, ShoppingCart, CheckSquare,
   MessageCircle, Mail, Settings, LogOut, Bot, MessageSquare,
   Sliders, Smartphone, Leaf, UserCog, Store, Package, MoreHorizontal,
-  BadgeCheck, Tags, Dices, Layers, Map, Receipt, Truck,
+  BadgeCheck, Dices, Map, Receipt,
 } from 'lucide-react';
 import { logout } from '../../api/auth';
 
 const primary = [
-  { to: '/overview', icon: Layers, label: '통합현황' },
   { to: '/ownerclan', icon: Package, label: '예비상품' },
   { to: '/myproduct', icon: BadgeCheck, label: '나의 상품' },
   { to: '/st11', icon: Store, label: '11번가' },
   { to: '/gmarket', icon: Store, label: '지마켓' },
-  { to: '/smartstore', icon: ShoppingCart, label: '스스' },
-  { to: '/coupang', icon: Truck, label: '쿠팡' },
-  { to: '/lotteon', icon: ShoppingCart, label: '롯데ON' },
+  { to: '/smartstore', icon: ShoppingCart, label: '스스(+쿠팡·롯데ON)' },
   { to: '/sales', icon: ShoppingCart, label: '매출' },
   { to: '/tax', icon: Receipt, label: '세무' },
   { to: '/ad-settings', icon: Sliders, label: '광고설정' },
   { to: '/speedgo', icon: Leaf, label: '스피드고' },
-  { to: '/keyword', icon: Tags, label: '키워드추출기' },
+  { to: '/owner', icon: Package, label: '오너클랜' },
 ];
 
 const more = [
-  { to: '/dashboard', icon: LayoutDashboard, label: '대시보드' },
   { to: '/roadmap', icon: Map, label: '개발로드맵' },
   { to: '/accounts', icon: Users, label: '판매자 계정' },
   { to: '/crawler-accounts', icon: UserCog, label: 'ID 관리' },
@@ -65,7 +61,7 @@ export default function TopNav() {
   return (
     <header className="sticky top-0 z-40 bg-gray-900 border-b border-gray-800 shadow-lg">
       <div className="px-4 h-14 flex items-center gap-3">
-        <NavLink to="/dashboard" className="flex items-center gap-2 mr-2">
+        <NavLink to="/overview" className="flex items-center gap-2 mr-2">
           <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center font-bold text-white text-[12px]">A</div>
           <span className="text-white font-bold text-[12px] hidden sm:inline">Avengers</span>
         </NavLink>
@@ -90,21 +86,35 @@ export default function TopNav() {
             </button>
             {moreOpen && (
               <div className="absolute top-full right-0 mt-1 w-52 rounded-xl border border-gray-700 bg-gray-900 shadow-2xl py-1.5 z-50">
-                {more.map(({ to, icon: Icon, label }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    onClick={() => setMoreOpen(false)}
-                    className={({ isActive }) =>
-                      `flex items-center gap-2.5 px-3 py-2 text-[12px] ${
-                        isActive ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800'
-                      }`
-                    }
-                  >
-                    <Icon size={14} />
-                    {label}
-                  </NavLink>
-                ))}
+                {more.map(({ to, icon: Icon, label, external }) =>
+                  external ? (
+                    <a
+                      key={to}
+                      href={to}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => setMoreOpen(false)}
+                      className="flex items-center gap-2.5 px-3 py-2 text-[12px] text-gray-300 hover:bg-gray-800"
+                    >
+                      <Icon size={14} />
+                      {label}
+                    </a>
+                  ) : (
+                    <NavLink
+                      key={to}
+                      to={to}
+                      onClick={() => setMoreOpen(false)}
+                      className={({ isActive }) =>
+                        `flex items-center gap-2.5 px-3 py-2 text-[12px] ${
+                          isActive ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800'
+                        }`
+                      }
+                    >
+                      <Icon size={14} />
+                      {label}
+                    </NavLink>
+                  )
+                )}
               </div>
             )}
           </div>

@@ -1,0 +1,55 @@
+{% extends "club/base.html" %}
+{% load humanize %}
+{% block title %}대시보드 - {{ team.name }}{% endblock %}
+{% block content %}
+<h1>{{ team.name }}</h1>
+
+<section class="card-row">
+  <div class="stat-card">
+    <div class="stat-label">보유 캐시</div>
+    <div class="stat-value">{{ team.cash|intcomma }}원</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">보유 선수</div>
+    <div class="stat-value">{{ roster_count }}명</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">리그</div>
+    <div class="stat-value">{{ team.get_league_tier_display }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  {% if claimed_today %}
+    <button class="btn" disabled>오늘의 일일 캐시는 이미 받았습니다</button>
+  {% else %}
+    <form method="post" action="{% url 'claim_daily' %}">
+      {% csrf_token %}
+      <button class="btn btn-primary" type="submit">일일 캐시 {{ daily_allowance|intcomma }}원 받기</button>
+    </form>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>베스트 선수</h2>
+  <table class="player-table">
+    <thead>
+      <tr><th>이름</th><th>연도</th><th>별명</th><th>포지션</th><th>등급</th><th>OVR</th></tr>
+    </thead>
+    <tbody>
+      {% for player in best_players %}
+      <tr onclick="location.href='{% url 'player_detail' player.pk %}'">
+        <td>{% if player.real_team %}<span class="muted">[{{ player.real_team_short }}]</span> {% endif %}{{ player.name }}</td>
+        <td>{% if player.year %}<span class="year-tag">{{ player.year }}</span>{% endif %}</td>
+        <td class="muted">{{ player.nickname }}</td>
+        <td>{{ player.get_position_display }}</td>
+        <td><span class="grade grade-{{ player.grade }}">{{ player.get_grade_display }}</span></td>
+        <td>{{ player.overall }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="6">선수가 없습니다. 영입 페이지에서 선수를 뽑아보세요.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

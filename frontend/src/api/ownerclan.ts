@@ -218,6 +218,25 @@ function _buildExportParams(p: ExportParams): Record<string, string | number> {
   return params;
 }
 
+export async function downloadDbCsv(onProgress?: (pct: number) => void): Promise<void> {
+  const resp = await api.get(`${base}/db-export/`, {
+    params: { ...WS() },
+    responseType: 'blob',
+    onDownloadProgress: (e) => {
+      if (onProgress) {
+        if (e.total && e.total > 0) onProgress(Math.round((e.loaded / e.total) * 100));
+        else onProgress(-1);
+      }
+    },
+  });
+  const url = window.URL.createObjectURL(new Blob([resp.data]));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `ownerclan_db_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  window.URL.revokeObjectURL(url);
+}
+
 export async function downloadProductExcel(p: ExportParams, onProgress?: (pct: number) => void): Promise<void> {
   const resp = await api.get(`${base}/excel/`, {
     params: { ..._buildExportParams(p), ...WS() },

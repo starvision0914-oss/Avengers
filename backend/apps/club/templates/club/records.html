@@ -1,0 +1,141 @@
+{% extends "club/base.html" %}
+{% block title %}기록 - {{ team.name }}{% endblock %}
+{% block content %}
+<h1>기록</h1>
+
+<div class="filter-row">
+  <a href="?tab=team_rank" class="btn {% if tab == "team_rank" %}btn-primary{% endif %}">팀순위</a>
+  <a href="?tab=team_record" class="btn {% if tab == "team_record" %}btn-primary{% endif %}">팀기록</a>
+  <a href="?tab=batter" class="btn {% if tab == "batter" %}btn-primary{% endif %}">타자기록</a>
+  <a href="?tab=pitcher" class="btn {% if tab == "pitcher" %}btn-primary{% endif %}">투수기록</a>
+</div>
+
+{% if tab == "team_rank" %}
+<section class="panel">
+  <h2>팀순위 <span class="muted">(승률순, 우리팀 포함)</span></h2>
+  {% if my_rank %}<p>우리팀 현재 순위: <strong>{{ my_rank }}위</strong> / {{ team_rank_rows|length }}팀</p>{% endif %}
+  <table class="player-table">
+    <thead><tr><th>순위</th><th>팀</th><th>승</th><th>패</th><th>승률</th></tr></thead>
+    <tbody>
+      {% for row in team_rank_rows %}
+      <tr class="{% if row.mine %}row-mine{% endif %}">
+        <td>{{ forloop.counter }}</td>
+        <td>{{ row.opponent_name }}{% if row.mine %} <span class="muted">(우리팀)</span>{% endif %}</td>
+        <td>{{ row.match_wins }}</td>
+        <td>{{ row.match_losses }}</td>
+        <td>{{ row.win_rate }}%</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5">아직 경기 기록이 없습니다.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if tab == "team_record" %}
+<section class="panel">
+  <h2>팀기록</h2>
+  <p>리그: <strong>{{ team.get_league_tier_display }}</strong> ({{ team.league_points }}/100)</p>
+  <p>통산 {{ team.wins }}승 {{ team.losses }}패 · 승률 {{ win_rate }}%</p>
+</section>
+<section class="panel">
+  <h3>최근 경기</h3>
+  <table class="player-table">
+    <thead><tr><th>일시</th><th>상대</th><th>결과</th><th>스코어</th></tr></thead>
+    <tbody>
+      {% for log in recent_logs %}
+      <tr>
+        <td>{{ log.played_at|date:"m/d H:i" }}</td>
+        <td>{{ log.opponent_name }}</td>
+        <td>{% if log.win %}승{% else %}패{% endif %}</td>
+        <td>{{ log.your_score }} : {{ log.opp_score }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4">아직 경기 기록이 없습니다.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if tab == "batter" %}
+<section class="panel">
+  <h2>타자기록 <span class="muted">(전체 리그)</span></h2>
+  <table class="player-table">
+    <thead>
+      <tr>
+        <th>순위</th>
+        <th><a href="{{ batter_sort_links.name }}">선수{% if sort == "name" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ batter_sort_links.position }}">포지션{% if sort == "position" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ batter_sort_links.year }}">연도{% if sort == "year" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ batter_sort_links.hits }}">안타{% if sort == "hits" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ batter_sort_links.home_runs }}">홈런{% if sort == "home_runs" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ batter_sort_links.rbi }}">타점{% if sort == "rbi" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ batter_sort_links.stolen_bases }}">도루{% if sort == "stolen_bases" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in batters %}
+      <tr class="{% if p.team_id == team.id %}row-mine{% endif %}" onclick="location.href='{% url 'player_detail' p.pk %}'">
+        <td>{{ forloop.counter }}</td>
+        <td>{% if p.real_team %}<span class="muted">[{{ p.real_team_short }}]</span> {% endif %}{{ p.name }}{% if p.team_id == team.id %} <span class="muted">(우리팀)</span>{% endif %}</td>
+        <td>{{ p.get_position_display }}</td>
+        <td>{% if p.year %}<span class="year-tag">{{ p.year }}</span>{% endif %}</td>
+        <td>{{ p.hits }}</td>
+        <td>{{ p.home_runs }}</td>
+        <td>{{ p.rbi }}</td>
+        <td>{{ p.stolen_bases }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="8">아직 타격 기록이 없습니다.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if tab == "pitcher" %}
+<section class="panel">
+  <h2>투수기록 <span class="muted">(전체 리그)</span></h2>
+  <table class="player-table">
+    <thead>
+      <tr>
+        <th>순위</th>
+        <th><a href="{{ pitcher_sort_links.name }}">선수{% if sort == "name" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.pitcher_wins }}">승{% if sort == "pitcher_wins" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.pitcher_losses }}">패{% if sort == "pitcher_losses" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.era }}">평균자책{% if sort == "era" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.saves }}">세이브{% if sort == "saves" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.holds }}">홀드{% if sort == "holds" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.strikeouts }}">삼진{% if sort == "strikeouts" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.hits_allowed }}">피안타{% if sort == "hits_allowed" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.home_runs_allowed }}">피홈런{% if sort == "home_runs_allowed" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.walks }}">볼넷{% if sort == "walks" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+        <th><a href="{{ pitcher_sort_links.hit_by_pitch }}">사구{% if sort == "hit_by_pitch" %}{% if dir == "asc" %} ▲{% else %} ▼{% endif %}{% endif %}</a></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in pitchers %}
+      <tr class="{% if p.team_id == team.id %}row-mine{% endif %}" onclick="location.href='{% url 'player_detail' p.pk %}'">
+        <td>{{ forloop.counter }}</td>
+        <td>{% if p.real_team %}<span class="muted">[{{ p.real_team_short }}]</span> {% endif %}{{ p.name }}{% if p.team_id == team.id %} <span class="muted">(우리팀)</span>{% endif %}</td>
+        <td>{{ p.pitcher_wins }}</td>
+        <td>{{ p.pitcher_losses }}</td>
+        <td>{{ p.era }}</td>
+        <td>{{ p.saves }}</td>
+        <td>{{ p.holds }}</td>
+        <td>{{ p.strikeouts }}</td>
+        <td>{{ p.hits_allowed }}</td>
+        <td>{{ p.home_runs_allowed }}</td>
+        <td>{{ p.walks }}</td>
+        <td>{{ p.hit_by_pitch }}</td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="12">아직 투수 기록이 없습니다.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

@@ -363,60 +363,53 @@ class ProfitDashboardView(views.APIView):
         totals['eleven_month_net_profit'] = eleven_totals['month_net_profit']
         totals['eleven_count'] = eleven_totals['account_count']
 
-        # === 스마트스토어 데이터 ===
-        from apps.smartstore.models import (
-            SmartStoreSales as SSSales, SmartStoreAdCost as SSAdCost,
-            SmartStoreAccount as SSAccount, SmartStoreCrawlLog,
-        )
+        # === 스마트스토어 데이터 === SalesRecord 기준(/smartstore, /overview와 동일 소스 재사용) —
+        # 예전엔 SmartStoreSales/SmartStoreAdCost를 따로 집계해 /smartstore 페이지(SalesRecord 기준)와
+        # 매출이 달랐음(2026-07-11: 예 2,894,570원 vs 1,901,816원, 약 50% 부풀려짐). OverviewView처럼
+        # DashboardView를 재사용해 항상 일치하도록 통일.
+        from apps.smartstore.models import SmartStoreAccount as SSAccount, SmartStoreCrawlLog
+        from apps.smartstore.views import DashboardView as SSDashboardView
+
         ss_accounts_qs = SSAccount.objects.filter(is_active=True).order_by('display_order')
         ss_account_count = ss_accounts_qs.count()
+        ss_login_by_id = {a.id: a.login_id for a in ss_accounts_qs}
 
-        # 이번 달 판매통계 (계정별)
-        ss_sales_by_acc = {}
-        for r in SSSales.objects.filter(
-            date__gte=month_start, date__lte=today
-        ).values('account_id').annotate(
-            settlement=Sum('settlement_amount'),
-            orders=Sum('order_count'),
-            sales=Sum('sales_amount'),
-        ):
-            ss_sales_by_acc[r['account_id']] = r
-
-        # 이번 달 광고비 (계정별)
-        ss_ad_by_acc = {}
-        for r in SSAdCost.objects.filter(
-            date__gte=month_start, date__lte=today
-        ).values('account_id').annotate(cost=Sum('cost')):
-            ss_ad_by_acc[r['account_id']] = r['cost'] or 0
-
-        # 최근 크롤 시각 (계정별)
         ss_last_crawl = {}
         for r in SmartStoreCrawlLog.objects.filter(
             status='done'
         ).values('account_id').annotate(last=Max('ended_at')):
             ss_last_crawl[r['account_id']] = r['last']
 
+        # SSDashboardView 기본기간(전월1일~어제)이 아니라 이번달1일~오늘로 맞춰서 호출
+        from django.http import QueryDict as _QueryDict
+        _ssq = _QueryDict(mutable=True)
+        for k, v in request.query_params.items():
+            _ssq[k] = v
+        _ssq['start'] = month_start.isoformat()
+        _ssq['end'] = today.isoformat()
+        request._request.GET = _ssq
+        ss_resp = SSDashboardView().get(request).data
+        ss_summary = ss_resp.get('summary', {})
+
         ss_sellers = []
         ss_totals = {
             'month_sales': 0, 'month_settlement': 0,
             'month_ad': 0, 'month_net': 0, 'account_count': ss_account_count,
         }
-        for acc in ss_accounts_qs:
-            aid = acc.id
-            sr = ss_sales_by_acc.get(aid, {})
-            settlement = sr.get('settlement') or 0
-            sales = sr.get('sales') or 0
-            orders = sr.get('orders') or 0
-            ad = ss_ad_by_acc.get(aid, 0)
+        for row in ss_resp.get('by_account', []):
+            aid = row['account_id']
+            sales = row.get('sales') or 0
+            settlement = row.get('settlement') or 0
+            ad = row.get('ad_cost') or 0
             net = settlement - ad
             last = ss_last_crawl.get(aid)
             ss_sellers.append({
                 'id': aid,
-                'display_name': acc.display_name,
-                'login_id': acc.login_id,
+                'display_name': row.get('account_name'),
+                'login_id': ss_login_by_id.get(aid, ''),
                 'month_sales': sales,
                 'month_settlement': settlement,
-                'month_orders': orders,
+                'month_orders': row.get('orders') or 0,
                 'month_ad': ad,
                 'month_net': net,
                 'last_crawled': last.isoformat() if last else None,
@@ -430,6 +423,24 @@ class ProfitDashboardView(views.APIView):
         totals['ss_month_ad'] = ss_totals['month_ad']
         totals['ss_month_net'] = ss_totals['month_net']
         totals['ss_count'] = ss_account_count
+
+        # === 쿠팡·롯데온 === 광고비 데이터 없음(0), SalesRecord 기준([[MallProfitProductsView]]와 동일 소스)
+        from apps.coupang.models import CoupangAccount as _CPAccount
+        from apps.lotteon.models import LotteonAccount as _LTAccount
+
+        def _sr_month(platform):
+            r = (SalesRecord.objects.filter(platform=platform, order_date__gte=month_start, order_date__lte=today)
+                 .aggregate(sales=Sum('total_price'), profit=Sum('net_profit'), orders=Count('id')))
+            return r['sales'] or 0, r['profit'] or 0, r['orders'] or 0
+
+        cp_sales, cp_profit, cp_orders = _sr_month('coupang')
+        lt_sales, lt_profit, lt_orders = _sr_month('lotteon')
+        totals['coupang_month_sales'] = cp_sales
+        totals['coupang_month_net'] = cp_profit
+        totals['coupang_count'] = _CPAccount.objects.filter(is_active=True).count()
+        totals['lotteon_month_sales'] = lt_sales
+        totals['lotteon_month_net'] = lt_profit
+        totals['lotteon_count'] = _LTAccount.objects.filter(is_active=True).count()
 
         # 전체 광고비 합계 (지마켓 + 11번가) — 참고용
         totals['total_ad_all'] = totals['month_ad'] + eleven_totals['month_cost']

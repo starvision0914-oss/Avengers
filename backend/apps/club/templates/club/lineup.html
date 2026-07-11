@@ -1,0 +1,92 @@
+{% extends "club/base.html" %}
+{% block title %}라인업 - {{ team.name }}{% endblock %}
+{% block container_extra %}container-wide{% endblock %}
+{% block content %}
+<h1>라인업 설정</h1>
+<p class="subtitle">타자 포지션과 투수진을 한 화면에서 함께 조정하세요. 타자는 "자동(OVR 최고)"로 두면 그 포지션 최고 능력치 선수가 자동 배치됩니다. 투수는 역할(선발/중간계투/셋업/마무리)과 순번을 지정하면 그 순서대로 등판합니다 (순번 미지정 시 능력치 순 자동).</p>
+<p>레벨캡: <strong class="{% if level_total > level_cap %}danger-text{% endif %}">{{ level_total }} / {{ level_cap }}</strong> ({{ team.get_league_tier_display }} 리그 선발 9명 레벨 합계 상한){% if level_total > level_cap %} <span class="danger-text">⚠ 초과 상태 — 저장 시 조정 필요</span>{% endif %}</p>
+
+<form method="post">
+  {% csrf_token %}
+
+  <div class="lineup-columns">
+    <div class="lineup-column">
+      <section class="panel">
+        <h2>타자 라인업</h2>
+        <table class="player-table">
+          <thead>
+            <tr><th>포지션</th><th>선발 선수</th></tr>
+          </thead>
+          <tbody>
+            {% for slot in slots %}
+            <tr>
+              <td>{{ slot.label }}</td>
+              <td>
+                <select name="slot_{{ slot.position }}">
+                  <option value="">자동 (OVR 최고)</option>
+                  {% for p in slot.candidates %}
+                  <option value="{{ p.pk }}" {% if slot.current.pk == p.pk %}selected{% endif %}>
+                    {{ p.name }}{% if p.nickname %} '{{ p.nickname }}'{% endif %} — OVR {{ p.overall }} · Lv{{ p.card_level }}{% if p.year %} ({{ p.year }}){% endif %}
+                  </option>
+                  {% endfor %}
+                </select>
+                {% if not slot.candidates %}<span class="muted">해당 포지션 선수 없음</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </div>
+
+    <div class="lineup-column">
+      <section class="panel">
+        <h2>현재 투수진 구성</h2>
+        {% for group in staff %}
+        <p class="pitching-role-row">
+          <span class="pitching-role-label">{{ group.label }}</span>
+          {% for p in group.players %}{{ p.name }}({{ p.overall }}){% if not forloop.last %}, {% endif %}{% empty %}<span class="muted">없음</span>{% endfor %}
+        </p>
+        {% endfor %}
+      </section>
+
+      <section class="panel">
+        <h2>투수진 역할 배정</h2>
+        <p class="muted">역할을 정하고, 같은 역할 안에서 등판 순서를 숫자(1, 2, 3…)로 정하세요. 순번을 비워두면(0) 능력치 순으로 뒤에 배치됩니다.</p>
+        <table class="player-table">
+          <thead>
+            <tr><th>선수</th><th>연도</th><th>등급</th><th>OVR</th><th>역할</th><th>순번</th></tr>
+          </thead>
+          <tbody>
+            {% for p in pitchers %}
+            <tr>
+              <td>{% if p.real_team %}<span class="muted">[{{ p.real_team_short }}]</span> {% endif %}{{ p.name }}{% if p.nickname %} <span class="muted">'{{ p.nickname }}'</span>{% endif %}
+                {% if p.pk == rotation_starter.pk %}<span class="grade grade-legend">이번 등판</span>{% endif %}
+              </td>
+              <td>{% if p.year %}<span class="year-tag">{{ p.year }}</span>{% endif %}</td>
+              <td><span class="grade grade-{{ p.grade }}">{{ p.get_grade_display }}</span></td>
+              <td>{{ p.overall }}</td>
+              <td>
+                <select name="role_{{ p.pk }}">
+                  <option value="" {% if not p.pitcher_role %}selected{% endif %}>자동</option>
+                  {% for value, label in role_choices %}
+                  <option value="{{ value }}" {% if p.pitcher_role == value %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td>
+                <input type="number" min="0" max="9" style="width:56px" name="order_{{ p.pk }}" value="{{ p.role_order }}">
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6">보유한 투수가 없습니다.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </div>
+
+  <button class="btn btn-primary" type="submit">라인업 + 투수진 저장</button>
+</form>
+{% endblock %}

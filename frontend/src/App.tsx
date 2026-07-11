@@ -3,7 +3,6 @@ import { Toaster } from 'react-hot-toast';
 import { isAuthenticated } from './api/auth';
 import MainLayout from './components/Layout/MainLayout';
 import LoginPage from './pages/Auth/LoginPage';
-import DashboardPage from './pages/Dashboard/DashboardPage';
 import SpeedGoPage from './pages/SpeedGo/SpeedGoPage';
 import AccountListPage from './pages/Accounts/AccountListPage';
 import SalesListPage from './pages/Sales/SalesListPage';
@@ -30,8 +29,6 @@ import ElevenMyProductsPage from './pages/ElevenMy/ElevenMyProductsPage';
 import GmarketDashboard from './pages/Gmarket/GmarketDashboard';
 import GmarketAdGroupPage from './pages/Gmarket/GmarketAdGroupPage';
 import GmarketRoasPage from './pages/Gmarket/GmarketRoasPage';
-import CoupangDashboard from './pages/Coupang/CoupangDashboard';
-import LotteonDashboard from './pages/Lotteon/LotteonDashboard';
 import LottoPage from './pages/Lotto/LottoPage';
 import OverviewDashboard from './pages/Overview/OverviewDashboard';
 import RoadmapPage from './pages/Roadmap/RoadmapPage';
@@ -40,7 +37,7 @@ import TaxVatPage from './pages/Tax/TaxVatPage';
 import SmsWidget from './components/SmsWidget';
 import SmartStorePage from './pages/SmartStore/SmartStorePage';
 import NaverRoasPage from './pages/SmartStore/NaverRoasPage';
-import NaverBlogPage from './pages/NaverBlog/NaverBlogPage';
+import OwnerclanCrawlerPage from './pages/Ownerclan/OwnerclanCrawlerPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Navigate to="/login" replace />;
@@ -54,10 +51,10 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<ProtectedRoute><><MainLayout /><SmsWidget /></></ProtectedRoute>}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route index element={<Navigate to="/overview" replace />} />
           <Route path="overview" element={<OverviewDashboard />} />
           <Route path="roadmap" element={<RoadmapPage />} />
-          <Route path="dashboard" element={<DashboardPage />} />
+          <Route path="dashboard" element={<Navigate to="/overview" replace />} />
           <Route path="tax" element={<TaxVatPage />} />
           <Route path="speedgo" element={<SpeedGoPage />} />
           <Route path="ownerclan" element={<OwnerclanProductsPage workspace="reserve" />} />
@@ -68,8 +65,8 @@ export default function App() {
           <Route path="eleven-my" element={<Navigate to="/myproduct" replace />} />
           <Route path="gmarket-my" element={<Navigate to="/myproduct" replace />} />
           <Route path="gmarket" element={<GmarketDashboard />} />
-          <Route path="coupang" element={<CoupangDashboard />} />
-          <Route path="lotteon" element={<LotteonDashboard />} />
+          <Route path="coupang" element={<Navigate to="/smartstore" replace />} />
+          <Route path="lotteon" element={<Navigate to="/smartstore" replace />} />
           <Route path="gmarket-adgroup" element={<GmarketAdGroupPage />} />
           <Route path="gmarket-roas" element={<GmarketRoasPage />} />
           <Route path="accounts" element={<AccountListPage />} />
@@ -94,8 +91,9 @@ export default function App() {
           <Route path="lotto" element={<LottoPage />} />
           <Route path="smartstore" element={<SmartStorePage />} />
           <Route path="naver-roas" element={<NaverRoasPage />} />
-          <Route path="naver-blog" element={<Navigate to="/blog" replace />} />
-          <Route path="blog" element={<NaverBlogPage />} />
+          <Route path="naver-blog" element={<Navigate to="/owner" replace />} />
+          <Route path="blog" element={<Navigate to="/owner" replace />} />
+          <Route path="owner" element={<OwnerclanCrawlerPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

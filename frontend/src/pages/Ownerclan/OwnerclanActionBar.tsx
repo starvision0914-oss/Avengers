@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Upload, FileSpreadsheet, FileText, RefreshCw, Download, Hash, LayoutGrid, List, Trash2, CheckSquare, Layers, Copy, ListChecks, Tag } from 'lucide-react';
+import { Upload, FileSpreadsheet, FileText, RefreshCw, Download, Database, Hash, LayoutGrid, List, Trash2, CheckSquare, Layers, Copy, ListChecks, Tag } from 'lucide-react';
 import { themeStyles } from './constants';
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
   onSoldoutUpload: (file: File) => void;
   onSync: () => void;
   onExcelDownload: () => void;
+  onDbDownload: () => void;
   onWCodes: () => void;
   onDeleteAll: () => void;
   onDeleteSelected: () => void;
@@ -29,7 +30,7 @@ interface Props {
 
 export default function OwnerclanActionBar({
   dark, view, onViewChange,
-  onExcelUpload, onCsvUpload, onSoldoutUpload, onSync, onExcelDownload, onWCodes,
+  onExcelUpload, onCsvUpload, onSoldoutUpload, onSync, onExcelDownload, onDbDownload, onWCodes,
   onDeleteAll, onDeleteSelected, onDedupe, onCopyToMy, onCodeSearch, onElevenName, onElevenPrompt, onGmarketPrompt, onAuctionPrompt, codeSearchCount, selectedCount,
   busy, syncing,
 }: Props) {
@@ -92,6 +93,14 @@ export default function OwnerclanActionBar({
         className={`${btn} ${dark ? 'bg-[#2a2b35] hover:bg-[#353749] text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-900'}`}
       >
         <Download size={13} /> 엑셀 받기
+      </button>
+      <button
+        onClick={onDbDownload}
+        disabled={busy}
+        title="필터 없이 전체 DB를 CSV로 다운로드"
+        className={`${btn} ${dark ? 'bg-[#2a2b35] hover:bg-[#353749] text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-900'}`}
+      >
+        <Database size={13} /> DB 전체 다운로드
       </button>
       <button
         onClick={onWCodes}

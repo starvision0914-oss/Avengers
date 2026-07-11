@@ -21,6 +21,8 @@ import DateRangePicker from '../../components/cpc/DateRangePicker';
 import PeriodSelector from '../../components/cpc/PeriodSelector';
 import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
 import { resolveRange, yesterdayStr } from '../../utils/periodRange';
+import CoupangDashboard from '../Coupang/CoupangDashboard';
+import LotteonDashboard from '../Lotteon/LotteonDashboard';
 
 const SS = '#03C75A';
 const fmt = (n: number) => (n || 0).toLocaleString();
@@ -38,7 +40,31 @@ const ymd = (d: Date) => {
 const todayYmd = () => ymd(new Date());
 const monthStart = (d: Date) => ymd(new Date(d.getFullYear(), d.getMonth(), 1));
 
+const PLATFORM_TABS = [
+  { key: 'smartstore', label: '스마트스토어' },
+  { key: 'coupang', label: '쿠팡' },
+  { key: 'lotteon', label: '롯데ON' },
+] as const;
+type PlatformTab = (typeof PLATFORM_TABS)[number]['key'];
+
+function PlatformTabBar({ active, onChange }: { active: PlatformTab; onChange: (k: PlatformTab) => void }) {
+  return (
+    <div className="flex gap-1.5">
+      {PLATFORM_TABS.map(p => (
+        <button key={p.key} onClick={() => onChange(p.key)}
+          className="px-3 py-1 text-[13px] font-semibold rounded"
+          style={active === p.key
+            ? { background: SS, color: '#fff' }
+            : { background: '#f1f5f9', color: '#555' }}>
+          {p.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function SmartStorePage() {
+  const [platformTab, setPlatformTab] = useState<PlatformTab>('smartstore');
   const navigate = useNavigate();
   const [tab, setTab] = useState<'dashboard' | 'products'>('dashboard');
   const [accounts, setAccounts] = useState<SmartStoreAccount[]>([]);
@@ -156,6 +182,20 @@ export default function SmartStorePage() {
 
   const periodLabel = periodMode === 'range' ? `${start} ~ ${end}` : start !== end ? `${start} ~ ${end}` : start;
 
+  if (platformTab !== 'smartstore') {
+    return (
+      <div className="min-h-screen bg-[#f5f6fa]">
+        <div className="bg-white border-b border-[#e0e0e0] px-4 md:px-6 py-2 sticky top-0 z-30">
+          <div className="max-w-[1800px] mx-auto flex items-center gap-3">
+            <PlatformTabBar active={platformTab} onChange={setPlatformTab} />
+            <span className="text-[12px] text-[#999]">매출·계정 규모가 작아 스마트스토어 메뉴 안으로 통합됐습니다</span>
+          </div>
+        </div>
+        {platformTab === 'coupang' ? <CoupangDashboard /> : <LotteonDashboard />}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#f5f6fa]">
 
@@ -163,7 +203,8 @@ export default function SmartStorePage() {
       <div className="bg-white border-b border-[#e0e0e0] px-4 md:px-6 py-2 sticky top-0 z-30">
         <div className="max-w-[1800px] mx-auto flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-sm" style={{ background: SS }} />
+            <PlatformTabBar active={platformTab} onChange={setPlatformTab} />
+            <div className="w-3 h-3 rounded-sm ml-2" style={{ background: SS }} />
             <h1 className="text-[15px] font-bold text-[#222]">스마트스토어 대시보드</h1>
             {loading && <span className="text-[14px] text-[#999] animate-pulse">로딩중...</span>}
           </div>

@@ -1,0 +1,44 @@
+{% extends "club/base.html" %}
+{% load humanize %}
+{% block title %}FA 트레이드 - {{ team.name }}{% endblock %}
+{% block content %}
+<h1>FA 트레이드</h1>
+<p class="subtitle">
+  <strong>{{ source.name }}</strong>({{ source.get_position_display }}, OVR {{ source.overall }})을(를)
+  같은 포지션의 실제 KBO 자유계약 선수와 맞바꿉니다. 상대가 더 강하면 차액을 지불하고, 더 약하면 차액을 환급받습니다.
+</p>
+
+<table class="player-table">
+  <thead>
+    <tr><th>선수</th><th>연도</th><th>등급</th><th>OVR</th><th>비용/환급</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for c in candidates %}
+    <tr>
+      <td title="{{ c.card_label }}">{% if c.real_team %}<span class="muted">[{{ c.real_team_short }}]</span> {% endif %}{{ c.name }}{% if c.nickname %} <span class="muted">'{{ c.nickname }}'</span>{% endif %}</td>
+      <td>{% if c.year %}<span class="year-tag">{{ c.year }}</span>{% endif %}</td>
+      <td><span class="grade grade-{{ c.grade }}">{{ c.get_grade_display }}</span></td>
+      <td>{{ c.overall }}</td>
+      <td>
+        {% if c.trade_cost_value > 0 %}
+          <span class="danger-text">-{{ c.trade_cost_abs|intcomma }}원</span>
+        {% elif c.trade_cost_value < 0 %}
+          <span>+{{ c.trade_cost_abs|intcomma }}원 환급</span>
+        {% else %}
+          <span class="muted">동일가치</span>
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" onsubmit="return confirm('{{ source.name }} 선수를 {{ c.name }} 선수와 트레이드하시겠습니까?');">
+          {% csrf_token %}
+          <input type="hidden" name="target_id" value="{{ c.pk }}">
+          <button class="btn btn-primary" type="submit">트레이드</button>
+        </form>
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="6">같은 포지션({{ source.get_position_display }})의 트레이드 가능한 선수가 없습니다.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

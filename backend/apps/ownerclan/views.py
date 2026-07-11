@@ -243,6 +243,148 @@ class OwnerClanProductExcelExportView(_WorkspaceMixin, APIView):
         return response
 
 
+class OwnerClanProductDbExportView(_WorkspaceMixin, APIView):
+    """오너클랜 상품 DB 전체 다운로드(CSV) — 필터 없이 전 건수.
+    orig_*(원본대조용 내부컬럼)와 거대 HTML/공지 텍스트 필드는 파일이 열기 힘들 정도로 커져서 제외."""
+    permission_classes = [IsAuthenticated]
+
+    FIELDS = [
+        'product_code', 'sale_status', 'is_synced',
+        'seller_code1', 'seller_code2', 'category_code', 'category_name', 'market_category',
+        'product_name', 'market_product_name',
+        'ownerclan_price', 'consumer_price', 'market_price', 'shipping_fee', 'shipping_type',
+        'min_qty', 'max_qty', 'return_fee', 'return_possible',
+        'option1_name', 'option1_values', 'option2_name', 'option2_values',
+        'combined_option', 'combined_option_detail', 'independent_option',
+        'product_attribute', 'product_grade', 'tax_type', 'compliance', 'age_restriction',
+        'manufacturer', 'brand', 'model_name', 'origin', 'keywords',
+        'image_large', 'notice_code', 'notice_category',
+        'market_gmarket', 'market_auction', 'market_11st', 'market_coupang',
+        'market_smartstore', 'market_promo', 'market_gift',
+        'certification_type', 'certification_info',
+        'registered_at', 'modified_at', 'uploaded_at', 'synced_at',
+    ]
+    HEADERS = [
+        'W코드', '판매상태', '동기화',
+        '판매자코드1', '판매자코드2', '카테고리코드', '카테고리명', '마켓카테고리',
+        '상품명', '마켓상품명',
+        '오너클랜가', '소비자가', '마켓가', '배송비', '배송타입',
+        '최소수량', '최대수량', '반품비', '반품가능',
+        '옵션1명', '옵션1값', '옵션2명', '옵션2값',
+        '조합옵션', '조합옵션상세', '독립옵션',
+        '속성', '등급', '과세유형', '준수사항', '연령제한',
+        '제조사', '브랜드', '모델명', '원산지', '키워드',
+        '대표이미지', '고시코드', '고시분류',
+        '지마켓', '옥션', '11번가', '쿠팡', '스마트스토어', '프로모션', '사은품',
+        '인증유형', '인증정보',
+        '등록일', '수정일', '업로드일', '동기화일',
+    ]
+
+    def get(self, request):
+        import csv
+        from django.http import StreamingHttpResponse
+        from .models import OwnerclanProduct, ProcessingProduct
+
+        is_processing = services._t() == 'processing_product'
+        model = ProcessingProduct if is_processing else OwnerclanProduct
+
+        def _stream():
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(self.HEADERS)
+            yield ('﻿' + buf.getvalue()).encode('utf-8')
+            qs = model.objects.order_by('id').values_list(*self.FIELDS).iterator(chunk_size=2000)
+            for row in qs:
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow(['' if v is None else v for v in row])
+                yield buf.getvalue().encode('utf-8')
+
+        fname = f'ownerclan_db_{"processing" if is_processing else "reserve"}.csv'
+        response = StreamingHttpResponse(_stream(), content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="{fname}"'
+        return response
+
+
+class OwnerclanApiCrawlView(APIView):
+    """오너클랜 정식 API 신규상품 수집 — 백그라운드 실행 + 상태 폴링. /blog(오너클랜크롤러 메뉴) 페이지에서 사용."""
+    permission_classes = [IsAuthenticated]
+    LOG_FILE = '/tmp/ownerclan_api_crawl.log'
+
+    def get(self, request):
+        import os
+        from .models import OwnerclanApiAccount
+        task = OwnerclanTask.objects.filter(task_type='api_crawl').order_by('-created_at').first()
+        busy = False
+        if task and task.status == 'running' and task.pid:
+            try:
+                os.kill(task.pid, 0)
+                busy = True
+            except (ProcessLookupError, PermissionError):
+                task.status = 'done'
+                task.save(update_fields=['status'])
+
+        log_tail = ''
+        try:
+            with open(self.LOG_FILE, encoding='utf-8', errors='ignore') as f:
+                log_tail = ''.join(f.readlines()[-40:])
+        except FileNotFoundError:
+            pass
+
+        accounts = [{'login_id': a.login_id, 'last_synced_at': a.last_synced_at,
+                     'last_new_count': a.last_new_count,
+                     'balance': a.balance, 'order_stats': a.order_stats,
+                     'subscription_info': a.subscription_info,
+                     'lowest_price_quota': a.lowest_price_quota,
+                     'info_synced_at': a.info_synced_at}
+                    for a in OwnerclanApiAccount.objects.filter(is_active=True)]
+        return Response({'busy': busy, 'log': log_tail, 'accounts': accounts})
+
+    def post(self, request):
+        import subprocess
+        running = OwnerclanTask.objects.filter(task_type='api_crawl', status='running').first()
+        if running and running.pid:
+            import os
+            try:
+                os.kill(running.pid, 0)
+                return Response({'error': '이미 수집 중입니다.'}, status=409)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+        task = OwnerclanTask.objects.create(task_type='api_crawl', status='running')
+        cmd = (f'cd /home/rejoice888/Avengers/backend && '
+               f'python3 manage.py crawl_ownerclan_api > {self.LOG_FILE} 2>&1')
+        proc = subprocess.Popen(['bash', '-c', cmd], start_new_session=True)
+        task.pid = proc.pid
+        task.save(update_fields=['pid'])
+        return Response({'status': 'started', 'task_id': task.id})
+
+
+class OwnerclanAccountInfoCrawlView(APIView):
+    """오너클랜 마이페이지 계정정보(예치금/주문현황/구독서비스/최저가선점권) 새로고침 — 백그라운드 실행."""
+    permission_classes = [IsAuthenticated]
+    LOG_FILE = '/tmp/ownerclan_account_info_crawl.log'
+
+    def post(self, request):
+        import os
+        import subprocess
+        running = OwnerclanTask.objects.filter(task_type='account_info', status='running').first()
+        if running and running.pid:
+            try:
+                os.kill(running.pid, 0)
+                return Response({'error': '이미 수집 중입니다.'}, status=409)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+        task = OwnerclanTask.objects.create(task_type='account_info', status='running')
+        cmd = (f'cd /home/rejoice888/Avengers/backend && '
+               f'python3 manage.py crawl_ownerclan_account_info > {self.LOG_FILE} 2>&1')
+        proc = subprocess.Popen(['bash', '-c', cmd], start_new_session=True)
+        task.pid = proc.pid
+        task.save(update_fields=['pid'])
+        return Response({'status': 'started', 'task_id': task.id})
+
+
 class OwnerClanProductWCodesView(_WorkspaceMixin, APIView):
     permission_classes = [IsAuthenticated]
 

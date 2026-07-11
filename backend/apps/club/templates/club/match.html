@@ -1,0 +1,294 @@
+{% extends "club/base.html" %}
+{% load humanize %}
+{% block title %}경기 - {{ team.name }}{% endblock %}
+{% block content %}
+<h1>경기</h1>
+<p>현재 리그: <strong>{{ team.get_league_tier_display }}</strong> ({{ team.league_points }}/100 승급 포인트) · 전적 {{ team.wins }}승 {{ team.losses }}패</p>
+
+<form method="post">
+  {% csrf_token %}
+  <button class="btn btn-primary" type="submit">경기하기</button>
+</form>
+
+{% if result %}
+<section class="panel match-result {% if result.win %}match-win{% else %}match-lose{% endif %}">
+  <p>vs {{ result.opponent_name }} · 우리팀 종합력 {{ result.your_rating }} : 상대팀 종합력 {{ result.opp_rating }}</p>
+
+  <table class="player-table boxscore">
+    <thead>
+      <tr>
+        <th></th>
+        {% for i in result.boxscore.innings %}<th>{{ i }}</th>{% endfor %}
+        <th>R</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>상대</td>
+        {% for i in result.boxscore.innings %}<td id="away-inn-{{ i }}"></td>{% endfor %}
+        <td><strong id="away-total"></strong></td>
+      </tr>
+      <tr>
+        <td>우리팀</td>
+        {% for i in result.boxscore.innings %}<td id="home-inn-{{ i }}"></td>{% endfor %}
+        <td><strong id="home-total"></strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="field-wrap">
+    <div class="field-scorebug">
+      <span id="fd-inning">⚾ 경기 시작 전</span>
+      <span id="fd-score">{{ result.opponent_name }} 0 : {{ team.name }} 0</span>
+    </div>
+    <div class="field-diagram" id="field-diagram">
+      <svg viewBox="0 0 100 100" class="fd-svg" preserveAspectRatio="xMidYMid meet">
+        <path d="M2,94 Q50,-18 98,94 Z" class="fd-grass"></path>
+        <line x1="50" y1="92" x2="100" y2="38" class="fd-foulline"></line>
+        <line x1="50" y1="92" x2="0" y2="38" class="fd-foulline"></line>
+        <polygon points="50,92 88,50 50,8 12,50" class="fd-dirt"></polygon>
+        <polygon points="50,92 88,50 50,8 12,50" class="fd-basepath"></polygon>
+        <circle cx="50" cy="58" r="4.5" class="fd-mound-circle"></circle>
+        <rect x="48.5" y="56.5" width="3" height="3" class="fd-rubber"></rect>
+        <rect x="83.5" y="45.5" width="9" height="9" class="fd-base-marker" transform="rotate(45 88 50)"></rect>
+        <rect x="45.5" y="3.5" width="9" height="9" class="fd-base-marker" transform="rotate(45 50 8)"></rect>
+        <rect x="7.5" y="45.5" width="9" height="9" class="fd-base-marker" transform="rotate(45 12 50)"></rect>
+        <polygon points="45,88 55,88 55,92 50,96 45,92" class="fd-home-plate"></polygon>
+      </svg>
+      <div class="fd-runner" id="fd-runner" style="display:none;">🏃</div>
+      <div class="fd-flash" id="fd-flash"></div>
+      <div class="fd-label fd-label-pitcher" id="fd-pitcher-label">⚾ {% for slot in result.your_lineup %}{% if slot.position == "P" and slot.player %}{{ slot.player.name }}{% endif %}{% endfor %}</div>
+      <div class="fd-label fd-label-batter" id="fd-batter-label"></div>
+    </div>
+  </div>
+  <p class="muted fd-caption">(연출용 다이어그램 — 실제 주자 상태를 정확히 재현하지는 않습니다)</p>
+
+  <div id="play-log" class="play-log"></div>
+
+  <div id="match-final" style="display:none">
+    <h2>{% if result.win %}🎉 승리!{% else %}😢 패배{% endif %}</h2>
+    <p>{% if result.win %}획득{% else %}위로{% endif %} 캐시 +{{ result.cash|intcomma }}원 · 승급 포인트 +{{ result.points }}</p>
+    {% if result.promoted %}<p class="muted">🆙 리그 승급! {{ team.get_league_tier_display }}(으)로 올라갔습니다.</p>{% endif %}
+    {% if not result.season_end %}<p class="muted">시즌 진행: {{ result.season_matches }}/100 경기</p>{% endif %}
+    {% if result.post_game_level_ups %}
+    <p class="muted">🆙 경기 후 레벨업: {% for p in result.post_game_level_ups %}{{ p.name }}(Lv{{ p.level }}){% if not forloop.last %}, {% endif %}{% endfor %}</p>
+    {% endif %}
+
+    {% if result.season_end %}
+    <section class="panel season-end">
+      <h2>🏁 시즌이 끝났습니다! 새로운 시즌이 시작됩니다.</h2>
+      {% if result.season_end.rank %}
+      <p>이번 시즌 {{ team.get_league_tier_display }} 순위: {{ result.season_end.rank }}위</p>
+      {% endif %}
+      {% if result.season_end.relegated %}
+        <p class="muted">📉 리그 강등: {{ result.season_end.new_tier }}(으)로 강등되었습니다.</p>
+      {% elif result.season_end.rank %}
+        <p class="muted">✅ {{ team.get_league_tier_display }} 잔류에 성공했습니다.</p>
+      {% endif %}
+      {% if result.season_end.awards %}
+      <h3>시즌 시상</h3>
+      <ul>
+        {% for award in result.season_end.awards %}
+        <li>🏆 {{ award.label }}: {{ award.player.name }} ({{ award.value }}) — 캐시 +{{ award.cash|intcomma }}원</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    <div class="lineup-columns">
+      <div class="lineup-column">
+        <h3>우리팀</h3>
+        <table class="player-table lineup-table">
+          <thead><tr><th>포지션</th><th>선수</th><th>OVR</th><th>후보</th></tr></thead>
+          <tbody>
+            {% for slot in result.your_lineup %}
+            <tr>
+              <td>{{ slot.label }}</td>
+              <td>
+                {% if slot.player %}
+                  {% if slot.player.real_team %}<span class="muted">[{{ slot.player.real_team_short }}]</span> {% endif %}{{ slot.player.name }}{% if slot.player.nickname %} <span class="muted">'{{ slot.player.nickname }}'</span>{% endif %}
+                {% else %}<span class="muted">공석</span>{% endif %}
+              </td>
+              <td>{% if slot.player %}{{ slot.player.overall }}{% endif %}</td>
+              <td class="muted">
+                {% for b in slot.bench %}{{ b.name }}({{ b.overall }}){% if not forloop.last %}, {% endif %}{% endfor %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="lineup-column">
+        <h3>{{ result.opponent_name }}</h3>
+        <table class="player-table lineup-table">
+          <thead><tr><th>포지션</th><th>선수</th><th>OVR</th><th>후보</th></tr></thead>
+          <tbody>
+            {% for slot in result.opponent_lineup %}
+            <tr>
+              <td>{{ slot.label }}</td>
+              <td>
+                {% if slot.player %}
+                  {% if slot.player.real_team %}<span class="muted">[{{ slot.player.real_team_short }}]</span> {% endif %}{{ slot.player.name }}{% if slot.player.nickname %} <span class="muted">'{{ slot.player.nickname }}'</span>{% endif %}
+                {% else %}<span class="muted">공석</span>{% endif %}
+              </td>
+              <td>{% if slot.player %}{{ slot.player.overall }}{% endif %}</td>
+              <td class="muted">
+                {% for b in slot.bench %}{{ b.name }}({{ b.overall }}){% if not forloop.last %}, {% endif %}{% endfor %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <h3>투수진</h3>
+    <div class="lineup-columns">
+      <div class="lineup-column">
+        <h4 class="muted">우리팀</h4>
+        {% for group in result.your_staff %}
+        <p class="pitching-role-row">
+          <span class="pitching-role-label">{{ group.label }}</span>
+          {% for p in group.players %}{{ p.name }}({{ p.overall }}){% if not forloop.last %}, {% endif %}{% empty %}<span class="muted">없음</span>{% endfor %}
+        </p>
+        {% endfor %}
+      </div>
+      <div class="lineup-column">
+        <h4 class="muted">{{ result.opponent_name }}</h4>
+        {% for group in result.opponent_staff %}
+        <p class="pitching-role-row">
+          <span class="pitching-role-label">{{ group.label }}</span>
+          {% for p in group.players %}{{ p.name }}({{ p.overall }}){% if not forloop.last %}, {% endif %}{% empty %}<span class="muted">없음</span>{% endfor %}
+        </p>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</section>
+
+{{ result.boxscore|json_script:"boxscore-data" }}
+<script>
+(function () {
+  var box = JSON.parse(document.getElementById("boxscore-data").textContent);
+  var log = document.getElementById("play-log");
+  var homeTotal = 0, awayTotal = 0;
+  var i = 0;
+
+  var basePositions = {
+    home: { top: "92%", left: "50%" },
+    first: { top: "50%", left: "88%" },
+    second: { top: "8%", left: "50%" },
+    third: { top: "50%", left: "12%" }
+  };
+  var runnerEl = document.getElementById("fd-runner");
+  var flashEl = document.getElementById("fd-flash");
+  var pitcherLabel = document.getElementById("fd-pitcher-label");
+  var batterLabel = document.getElementById("fd-batter-label");
+  var inningLabel = document.getElementById("fd-inning");
+  var scoreLabel = document.getElementById("fd-score");
+
+  function setRunnerPos(key, visible, side) {
+    var pos = basePositions[key];
+    runnerEl.style.top = pos.top;
+    runnerEl.style.left = pos.left;
+    runnerEl.style.display = visible ? "" : "none";
+    runnerEl.classList.toggle("fd-runner-away", side === "away");
+  }
+
+  function showFlash(text, color) {
+    flashEl.textContent = text;
+    flashEl.style.color = color || "";
+    flashEl.style.opacity = "1";
+    setTimeout(function () { flashEl.style.opacity = "0"; }, 550);
+  }
+
+  function setBatterLabel(side, name) {
+    if (!name) return;
+    batterLabel.textContent = (side === "home" ? "🔵 " : "🔴 ") + name;
+    batterLabel.classList.toggle("fd-label-away", side === "away");
+    batterLabel.style.opacity = "1";
+    clearTimeout(batterLabel._hideTimer);
+    batterLabel._hideTimer = setTimeout(function () { batterLabel.style.opacity = "0"; }, 1500);
+  }
+
+  function animateEvent(ev) {
+    if (!ev) return;
+    if (ev.kind === "hit") {
+      setBatterLabel(ev.side, ev.player);
+      setRunnerPos("home", true, ev.side);
+      setTimeout(function () { setRunnerPos("first", true, ev.side); }, 50);
+      setTimeout(function () { runnerEl.style.display = "none"; }, 500);
+      showFlash(ev.side === "home" ? "안타!" : "실점...", ev.side === "home" ? "#4d8bf0" : "#e0555f");
+    } else if (ev.kind === "homerun") {
+      setBatterLabel(ev.side, ev.player);
+      setRunnerPos("home", true, ev.side);
+      setTimeout(function () { setRunnerPos("first", true, ev.side); }, 60);
+      setTimeout(function () { setRunnerPos("second", true, ev.side); }, 220);
+      setTimeout(function () { setRunnerPos("third", true, ev.side); }, 380);
+      setTimeout(function () { setRunnerPos("home", true, ev.side); }, 540);
+      setTimeout(function () { runnerEl.style.display = "none"; }, 650);
+      showFlash("HOME RUN!", "#e8b23d");
+    } else if (ev.kind === "steal_success") {
+      setBatterLabel(ev.side, ev.player);
+      setRunnerPos("first", true, ev.side);
+      setTimeout(function () { setRunnerPos("second", true, ev.side); }, 80);
+      setTimeout(function () { runnerEl.style.display = "none"; }, 480);
+      showFlash("도루 성공!", "#4d8bf0");
+    } else if (ev.kind === "steal_fail") {
+      setBatterLabel(ev.side, ev.player);
+      setRunnerPos("first", true, ev.side);
+      setTimeout(function () { setRunnerPos("second", true, ev.side); }, 80);
+      setTimeout(function () { showFlash("아웃!", "#e0555f"); }, 300);
+      setTimeout(function () { runnerEl.style.display = "none"; }, 550);
+    } else if (ev.kind === "pitch_change") {
+      if (ev.side === "home" && ev.player) {
+        pitcherLabel.textContent = "🔵 " + ev.player;
+        pitcherLabel.classList.remove("fd-label-away");
+      } else if (ev.side === "away" && ev.player) {
+        pitcherLabel.textContent = "🔴 " + ev.player;
+        pitcherLabel.classList.add("fd-label-away");
+      }
+      pitcherLabel.classList.add("fd-mound-flash");
+      setTimeout(function () { pitcherLabel.classList.remove("fd-mound-flash"); }, 400);
+    }
+  }
+
+  function step() {
+    if (i >= box.innings.length) {
+      document.getElementById("match-final").style.display = "";
+      return;
+    }
+    var inn = box.innings[i];
+    var h = box.home[i], a = box.away[i];
+    homeTotal += h; awayTotal += a;
+
+    document.getElementById("away-inn-" + inn).textContent = a;
+    document.getElementById("home-inn-" + inn).textContent = h;
+    document.getElementById("away-total").textContent = awayTotal;
+    document.getElementById("home-total").textContent = homeTotal;
+
+    inningLabel.textContent = inn + "회";
+    scoreLabel.textContent = "{{ result.opponent_name }} " + awayTotal + " : " + "{{ team.name }} " + homeTotal;
+
+    var line = document.createElement("div");
+    line.textContent = inn + "회 — 상대 " + a + "점, 우리팀 " + h + "점 (누적 " + awayTotal + ":" + homeTotal + ")";
+    log.appendChild(line);
+
+    var inningEvents = (box.events && box.events[i]) || [];
+    inningEvents.forEach(function (ev, idx) {
+      var line2 = document.createElement("div");
+      line2.textContent = "　↳ " + ev.text;
+      log.appendChild(line2);
+      setTimeout(function () { animateEvent(ev); }, idx * 200);
+    });
+    log.scrollTop = log.scrollHeight;
+
+    i += 1;
+    setTimeout(step, 700);
+  }
+  step();
+})();
+</script>
+{% endif %}
+{% endblock %}

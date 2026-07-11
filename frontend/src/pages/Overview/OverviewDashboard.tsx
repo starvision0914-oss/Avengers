@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
   getOverview, getMallProfit, getMallProfitProducts,
   type OverviewResponse, type MallProfitResponse, type OverviewParams, type MallProductRow,
 } from '../../api/overview';
 import { formatKRW } from '../../utils/format';
+import DashboardPage from '../Dashboard/DashboardPage';
 
 function todayKST(): string {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Seoul' });
@@ -97,6 +99,7 @@ export default function OverviewDashboard() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [modalMall, setModalMall] = useState<{ platform: string; label: string } | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
 
   const ovParams = useMemo<OverviewParams>(
     () => periodToOverviewParam(period, cFrom, cTo),
@@ -336,6 +339,24 @@ export default function OverviewDashboard() {
           </p>
         </>
       )}
+
+      {/* ===== 상세 운영현황 (계정별 표·크롤러상태·문자함) — 접어둠, 필요할 때만 펼침 ===== */}
+      <div style={{ marginTop: 24 }}>
+        <button onClick={() => setShowDetail(v => !v)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+            padding: '10px 16px', borderRadius: 10, border: '1px solid #e5e7eb',
+            background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 700, color: '#475569',
+          }}>
+          {showDetail ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          계정별 상세현황 (크롤러 상태·문자함·계정별 광고비표) {showDetail ? '접기' : '펼치기'}
+        </button>
+        {showDetail && (
+          <div style={{ marginTop: 12, border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
+            <DashboardPage />
+          </div>
+        )}
+      </div>
 
       {modalMall && profit && (
         <MallProductModal

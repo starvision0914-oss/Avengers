@@ -1,0 +1,31 @@
+{% extends "club/base.html" %}
+{% load humanize %}
+{% block title %}선수 영입 - {{ team.name }}{% endblock %}
+{% block content %}
+<h1>선수 영입</h1>
+<p>{{ cost|intcomma }}원을 사용해 새로운 선수를 영입합니다. (일반 70% · 희귀 22% · 영웅 6% · 전설 2%)</p>
+
+<form method="post">
+  {% csrf_token %}
+  <button class="btn btn-primary" type="submit">{{ cost|intcomma }}원으로 영입하기</button>
+</form>
+
+{% if result %}
+<section class="panel scout-result">
+  <h2>영입 결과</h2>
+  {% if result.is_real %}<p class="muted">⭐ 실존 KBO 선수 등장!</p>{% endif %}
+  <div class="player-card grade-{{ result.grade }}">
+    <div class="card-badge">{{ result.position }}</div>
+    <div>
+      <div class="card-name">
+        {% if result.real_team %}<span class="muted">[{{ result.real_team_short }}]</span> {% endif %}{{ result.name }}{% if result.nickname %} '{{ result.nickname }}'{% endif %}
+        <span class="grade grade-{{ result.grade }}">{{ result.get_grade_display }}</span>
+        {% if result.year %}<span class="year-tag">{{ result.year }}</span>{% endif %}
+      </div>
+      <div class="card-sub">{{ result.get_position_display }}{% if result.real_team %} · {{ result.real_team }}{% endif %} · {{ result.age }}세 · OVR {{ result.overall }} · 잠재력 {{ result.potential }}</div>
+    </div>
+  </div>
+  <a class="btn" href="{% url 'player_detail' result.pk %}">선수 상세보기</a>
+</section>
+{% endif %}
+{% endblock %}

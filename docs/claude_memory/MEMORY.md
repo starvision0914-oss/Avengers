@@ -93,3 +93,9 @@
 - [Overview 대시보드 수정](project_overview_dashboard_fixes.md) — 쿠팡·롯데온이 OverviewView서 누락돼있던 버그 수정. 새플랫폼 추가시 하드코딩된 플랫폼목록 여러곳 grep 필요. 구매가+쇼핑몰클릭모달(적자/우수/엑셀) 추가
 - [매출업로드 중복 레이스컨디션](project_sales_upload_dedup_fix.md) — 같은파일 8초간격 재업로드로 90행 중복(594,308원). 3분 idempotency가드 추가. 진짜중복판별은 order_datetime+금액+수량까지 봐야함(order_date만은 오탐)
 - [쿠팡 계정명 지마켓매칭](project_coupang_seller_name_gmarket_match.md) — login_id기준 지마켓 seller_name 복사로 정정(999/666 라벨 뒤바뀜 등 발견). 신규계정도 이 관례 따를것
+- [오산 코스피뉴스 시리즈](project_osan_kospi_news_series.md) — 경제뉴스 카테고리 138/200개 발행 후 사용자지시로 중단(2026-07-11). 재개시 남양유업부터, helper경로/재개전 확인필요 명시
+- [오산 블로그 208개 분량보강 진행상황](project_osan_blog_expansion_status.md) — 63/208 완료(1500자+), 145개 미달로 중단(2026-07-11). 병렬 서브에이전트가 세션한도 소진시킴→직접 순차처리로 전환. 재개시 문단길이 착각(예상보다 짧음) 주의
+- [토큰 대량소모 작업 전 확인](feedback_ask_before_token_heavy_work.md) — 반복 웹서치+생성형 대량작업(10회+)은 시작 전 진행여부 확인 필수(비용청구 우려, 사용자 직접 언급). "그만물어보고"류 지시보다 이게 우선
+- [오너클랜 API 발견·인증성공](project_ownerclan_api_discovery.md) — 정식 GraphQL API 확인(화면스크래핑 불필요), 인증·상품조회 테스트 성공(2026-07-11). 크롤러 자체(계정모델/서비스/커맨드/UI)는 미완성 — 중단 상태에서 이어가야 함
+- [사이드바 정리 2026-07-11](project_sidebar_reorg_2026-07-11.md) — dashboard→overview 흡수, 쿠팡·롯데온→스마트스토어 탭통합, /blog="오너클랜크롤러"로 재명명(예비상품과 이름충돌 주의)
+- [오너클랜 DB 다운로드](project_ownerclan_db_export.md) — 전체 15만행 CSV 스트리밍 다운로드 구축완료. orig_*/거대텍스트필드 제외. ProcessingProduct는 동적생성모델(grep 주의)
