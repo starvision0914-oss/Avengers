@@ -2292,9 +2292,11 @@ def _eleven_product_rows(eid, d_from, d_to, rmin, rmax, cmin, kmin):
 
 
 def _eleven_keyword_rows(eid, d_from, d_to, rmin, rmax):
-    """단일 계정 키워드 ROAS 행 (adoffice 광고전환매출 기준)."""
+    """단일 계정 키워드 ROAS 행 (adoffice 광고전환매출 기준).
+    실매출/실ROAS는 상품(판매자코드) 단위로만 계산 가능 — 같은 상품의 키워드 행마다 동일값 반복(참고용)."""
     from apps.cpc.models import St11KeywordDaily, ElevenMyProduct
-    from django.db.models import Sum
+    from apps.sales.models import SalesRecord
+    from django.db.models import Sum, Count
     import re as _re
     raw = St11KeywordDaily.objects.filter(eleven_id=eid, stat_date__gte=d_from, stat_date__lte=d_to) \
         .values('product_no', 'keyword').annotate(
@@ -2321,6 +2323,24 @@ def _eleven_keyword_rows(eid, d_from, d_to, rmin, rmax):
         for p in (ElevenMyProduct.objects.filter(product_no__in=pnos).exclude(seller_product_code='')
                   .values('product_no', 'seller_product_code')):
             smap.setdefault(str(p['product_no']), p['seller_product_code'] or '')
+    # 실매출은 판매자코드 기준 전역 매칭(광고계정≠매출계정인 경우가 흔함) — 상품 ROAS 페이지와 동일 원칙.
+    codes = set()
+    for sc in smap.values():
+        if sc:
+            codes.add(sc)
+            codes.add(_bare_seller_code(sc))
+    sales_by_code = {}
+    if codes:
+        for s in (SalesRecord.objects.filter(platform='11st', product_code__in=list(codes),
+                                             order_date__gte=d_from, order_date__lte=d_to)
+                  .values('product_code').annotate(s=Sum('total_price'))):
+            sales_by_code[s['product_code']] = s['s'] or 0
+    sales_by_pno = {}
+    for pno, sc in smap.items():
+        if not sc:
+            continue
+        raw_sales = sum(sales_by_code.get(x, 0) for x in {sc, _bare_seller_code(sc)})
+        sales_by_pno[pno] = abs(raw_sales)
     rows = []
     for (pno, kw), d in agg.items():
         c = d['cost']; a = d['conv_amount']
@@ -2329,9 +2349,12 @@ def _eleven_keyword_rows(eid, d_from, d_to, rmin, rmax):
             continue
         if rmax is not None and roas > rmax:
             continue
+        sales = sales_by_pno.get(pno, 0)
+        real_roas = round(sales / c * 100, 2) if c else 0
         rows.append({'eleven_id': eid, 'product_no': pno, 'seller_code': smap.get(pno, ''),
                      'keyword': kw, 'deleted': d['deleted'], 'cost': c, 'conv_amount': a,
-                     'roas_pct': roas, 'clicks': d['clicks'], 'conversions': d['conversions']})
+                     'roas_pct': roas, 'clicks': d['clicks'], 'conversions': d['conversions'],
+                     'sales': sales, 'real_roas_pct': real_roas})
     return rows
 
 
@@ -2442,10 +2465,12 @@ class ElevenKeywordRoasView(views.APIView):
             resp['Content-Disposition'] = f'attachment; filename="keyword_roas_{eid or "all"}_{d_from}_{d_to}.csv"'
             resp.write('﻿')
             w = _csv.writer(resp)
-            w.writerow(['아이디', '상품번호', '판매자코드', '키워드', '광고비', '전환매출', 'ROAS(%)', '클릭', '전환', '비고'])
+            w.writerow(['아이디', '상품번호', '판매자코드', '키워드', '광고비', '전환매출', 'ROAS(%)', '클릭', '전환',
+                        '실매출(참고)', '실ROAS(참고)', '비고'])
             for x in rows:
                 w.writerow([x['eleven_id'], x['product_no'], x['seller_code'], x['keyword'],
                             x['cost'], x['conv_amount'], x['roas_pct'], x['clicks'], x['conversions'],
+                            x.get('sales', 0), x.get('real_roas_pct', 0),
                             '삭제됨' if x.get('deleted') else ''])
             return resp
 

@@ -103,6 +103,8 @@ class Player(models.Model):
     walks = models.PositiveIntegerField(default=0)
     hit_by_pitch = models.PositiveIntegerField(default=0)
 
+    awaken_count = models.PositiveIntegerField(default=0, help_text="전설급 재고 소진 시 각성으로 재지급된 횟수")
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -176,3 +178,17 @@ class MatchLog(models.Model):
     def __str__(self):
         result = "승" if self.win else "패"
         return f"{self.played_at:%Y-%m-%d} vs {self.opponent_name} {result} ({self.your_score}:{self.opp_score})"
+
+
+class ChampionshipLog(models.Model):
+    """시즌 종료 포스트시즌(KBO식 승강제 브래킷) 우승 기록 - 팀 트로피 이력."""
+
+    team = models.ForeignKey(Team, related_name="championships", on_delete=models.CASCADE)
+    league_tier = models.CharField(max_length=10, choices=LEAGUE_TIER_CHOICES)
+    achieved_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-achieved_at"]
+
+    def __str__(self):
+        return f"{self.achieved_at:%Y-%m-%d} {self.get_league_tier_display()} 우승"

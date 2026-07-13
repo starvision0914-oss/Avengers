@@ -17,6 +17,10 @@
     <div class="stat-label">리그</div>
     <div class="stat-value">{{ team.get_league_tier_display }}</div>
   </div>
+  <div class="stat-card">
+    <div class="stat-label">🏆 우승 횟수</div>
+    <div class="stat-value">{{ championships|length }}회</div>
+  </div>
 </section>
 
 <section class="panel">
@@ -52,4 +56,15 @@
     </tbody>
   </table>
 </section>
+
+{% if championships %}
+<section class="panel">
+  <h2>🏆 우승 기록</h2>
+  <ul>
+    {% for log in championships %}
+    <li>{{ log.achieved_at|date:"Y-m-d" }} · {{ log.get_league_tier_display }} 포스트시즌 우승</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% endblock %}

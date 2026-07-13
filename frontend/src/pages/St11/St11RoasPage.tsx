@@ -767,6 +767,8 @@ export default function St11RoasPage() {
                     <th className="text-right px-2 py-1.5">전환매출</th>
                     <th className="text-right px-2 py-1.5">ROAS</th>
                     <th className="text-right px-2 py-1.5">클릭</th>
+                    <th className="text-right px-2 py-1.5">실매출</th>
+                    <th className="text-right px-2 py-1.5">실ROAS</th>
                   </tr></thead>
                   <tbody>
                     {(kwAllData.rows || []).map((r: any, i: number) => (
@@ -780,6 +782,8 @@ export default function St11RoasPage() {
                         <td className="px-2 py-1.5 text-right">{formatKRW(r.conv_amount || 0)}</td>
                         <td className="px-2 py-1.5 text-right font-semibold text-[#15803d]">{Number(r.roas_pct).toFixed(0)}%</td>
                         <td className="px-2 py-1.5 text-right">{(r.clicks || 0).toLocaleString()}</td>
+                        <td className="px-2 py-1.5 text-right text-[#0d9488]">{formatKRW(r.sales || 0)}</td>
+                        <td className="px-2 py-1.5 text-right font-semibold text-[#7c3aed]">{Number(r.real_roas_pct || 0).toFixed(0)}%</td>
                       </tr>
                     ))}
                   </tbody>
@@ -787,6 +791,9 @@ export default function St11RoasPage() {
               )}
               {kwAllData && (kwAllData.count || 0) > (kwAllData.rows || []).length && (
                 <div className="text-center text-[11px] text-[#999] py-2">표는 상위 {(kwAllData.rows || []).length}개만 표시 — 전체는 ⬇ 엑셀로 받으세요</div>
+              )}
+              {!kwAllLoading && kwAllData && (kwAllData.rows || []).length > 0 && (
+                <div className="text-center text-[11px] text-[#999] pt-1">실매출·실ROAS는 상품 단위(판매자코드 전역매칭) 참고값 — 같은 상품의 키워드 행마다 동일하게 표시됩니다</div>
               )}
             </div>
           </div>

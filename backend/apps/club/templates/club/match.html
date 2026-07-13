@@ -85,6 +85,39 @@
       {% elif result.season_end.rank %}
         <p class="muted">✅ {{ team.get_league_tier_display }} 잔류에 성공했습니다.</p>
       {% endif %}
+
+      {% if result.season_end.postseason %}
+      <h3>🏟️ 포스트시즌 (승강제 최종 우승 결정전)</h3>
+      <table class="player-table">
+        <thead><tr><th>라운드</th><th>대진</th><th>결과</th><th>승자</th></tr></thead>
+        <tbody>
+          {% for round in result.season_end.postseason.rounds %}
+          <tr>
+            <td>{{ round.name }} <span class="muted">({{ round.format }})</span></td>
+            <td>{{ round.a.name }}{% if round.a.is_you %} <span class="muted">(우리팀)</span>{% endif %} vs {{ round.b.name }}{% if round.b.is_you %} <span class="muted">(우리팀)</span>{% endif %}</td>
+            <td>{{ round.a_wins }} : {{ round.b_wins }}</td>
+            <td>{{ round.winner.name }}{% if round.winner.is_you %} <span class="muted">(우리팀)</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% if result.season_end.postseason.champion.is_you %}
+        <p>🏆 <strong>{{ team.get_league_tier_display }} 시즌 최종 우승!</strong> 한국시리즈를 제패했습니다.</p>
+        {% if result.season_end.champion_reward %}
+        <p class="muted">
+          우승 보상: 캐시 +{{ result.season_end.champion_reward.cash|intcomma }}원
+          {% if result.season_end.champion_reward.player %}
+            · 신규 영입: {{ result.season_end.champion_reward.player.name }} ({{ result.season_end.champion_reward.player.get_grade_display }})
+          {% elif result.season_end.champion_reward.awakened_player %}
+            · 전설급 재고 소진으로 각성: {{ result.season_end.champion_reward.awakened_player.name }} (각성 {{ result.season_end.champion_reward.awakened_player.awaken_count }}회, 잠재력 {{ result.season_end.champion_reward.awakened_player.potential }})
+          {% endif %}
+        </p>
+        {% endif %}
+      {% else %}
+        <p class="muted">이번 시즌 최종 우승팀: {{ result.season_end.postseason.champion.name }}</p>
+      {% endif %}
+      {% endif %}
+
       {% if result.season_end.awards %}
       <h3>시즌 시상</h3>
       <ul>

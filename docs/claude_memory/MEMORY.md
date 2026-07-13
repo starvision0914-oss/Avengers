@@ -105,3 +105,6 @@
 - [2026-07 지마켓/11번가 크롤 스케쥴 진단](project_gmarket_11st_july_schedule_audit.md) — 7월 전체 정상. IP프리즈 2회(7/3, 자동복구)·계정단위 3회스킵만 있었고 systemic 장애 없음. club앱 무관 AttributeError 잔존, 좀비프로세스 2개 경미
 - [지마켓 일별vs월별 저장구조 검토](project_gmarket_daily_vs_monthly_design.md) — 11번가처럼 일별저장 전환이 정합성상 더 견고하나 기술적으로 가능함만 확인, 실제 전환은 보류(2026-07-12)
 - [스킵보다 짧게라도 작성](feedback_no_skip_write_short.md) — 대량 콘텐츠 생성시 데이터 부족해도 건너뛰지 말고 짧게 작성. 스킵률 체감 30%+면 먼저 확인
+- [오산 블로그 작성 프롬프트](reference_osan_blog_prompt.md) — content_gen.py에 위치, 시스템프롬프트+요청프롬프트 하드코딩
+- [코스피 1000개 확장 20개+함정](project_osan_kospi_1000_expansion.md) — 600→1000 목표, 동시세션 병행중. 회사명 검색오염(삼천리↔자전거 등) 신규발견, 중복체크 전체텍스트+WP검색 이중화로 개선
+- [서버 재부팅 2026-07-13](project_server_reboot_2026-07-13.md) — 재부팅시 지마켓/11번가 크롤 강제종료(자동회복). PM2 systemd등록으로 자동재기동, USB/VNC는 수동확인 필요할수도

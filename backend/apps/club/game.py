@@ -150,6 +150,15 @@ PITCHER_WIN_EXP_BONUS = 15
 GRADE_PROGRESSION = ["common", "rare", "hero", "legend"]
 BREAKTHROUGH_COST = {"common": 3000, "rare": 8000, "hero": 20000}
 
+# 전설급 실제 선수 재고가 없을 때(이미 전원 보유) 대신 기존 전설급 선수를 각성시켜 재지급
+AWAKEN_POTENTIAL_GAIN = (5, 10)
+AWAKEN_STAT_GAIN = (2, 5)
+
+
+def win_probability(rating_a, rating_b):
+    diff = rating_a - rating_b
+    return max(0.1, min(0.9, 0.5 + diff / 100))
+
 
 def level_exp_threshold(level):
     return level * 100
@@ -258,18 +267,27 @@ SEASON_AWARD_CATEGORIES = [
     ("stolen_bases", "도루왕"),
 ]
 
+# 승강제 상위 3개 리그(월드/슈퍼/MLB) 포스트시즌 우승 보상 - 2026 KBO식 승강제 컨셉
+SEASON_CHAMPION_CASH = {"world": 15000, "super": 25000, "mlb": 45000}
+TIER_CHAMPION_REWARD_GRADE = {"world": "rare", "super": "hero", "mlb": "legend"}
 
-def evaluate_season(team):
+
+def generate_season_field(team):
+    """시즌 종료 시 가상 8팀 필드를 구성 (정규시즌 순위 판정 + 포스트시즌 대진에 공용으로 사용)."""
+    lo, hi = OPPONENT_RATING_RANGE[team.league_tier]
+    field = [{"rating": team_rating(team), "name": team.name, "is_you": True}]
+    field += [
+        {"rating": random.randint(lo, hi), "name": generate_cpu_team_name(), "is_you": False}
+        for _ in range(SEASON_FIELD_SIZE - 1)
+    ]
+    field.sort(key=lambda x: x["rating"], reverse=True)
+    return field
+
+
+def evaluate_season(team, field):
     """시즌 종료 시 상위리그(MLB/슈퍼/월드) 잔류 여부 판정. 강등되면 (True, rank)를 반환."""
     tier = team.league_tier
-    if tier not in RELEGATION_KEEP:
-        return False, None
-
-    lo, hi = OPPONENT_RATING_RANGE[tier]
-    rating = team_rating(team)
-    field = [rating] + [random.randint(lo, hi) for _ in range(SEASON_FIELD_SIZE - 1)]
-    field.sort(reverse=True)
-    rank = field.index(rating) + 1
+    rank = next(i for i, entry in enumerate(field) if entry["is_you"]) + 1
 
     keep_n = RELEGATION_KEEP[tier]
     if rank > keep_n:
@@ -278,6 +296,83 @@ def evaluate_season(team):
         team.league_points = 0
         return True, rank
     return False, rank
+
+
+def run_postseason(field):
+    """정규시즌 필드(1~8위)로 KBO 2026 승강제 포스트시즌 브래킷을 진행해 최종 우승팀을 가린다.
+    와일드카드 결정전(4위 vs 5위, 단판·4위 어드밴티지) → 준플레이오프(승자 vs 3위, 3전2선승)
+    → 플레이오프(승자 vs 2위, 3전2선승) → 한국시리즈(승자 vs 1위, 5전3선승)."""
+    seed = {i + 1: entry for i, entry in enumerate(field)}
+
+    def play_series(a, b, games_to_win, wc_advantage=False):
+        if wc_advantage:
+            # 정규시즌 상위팀(a)이 무승부여도 진출하는 효과를 승률 보정으로 반영
+            p = win_probability(a["rating"] + 3, b["rating"])
+            return (a, 1, 0) if random.random() < p else (b, 0, 1)
+        a_wins = b_wins = 0
+        while a_wins < games_to_win and b_wins < games_to_win:
+            if random.random() < win_probability(a["rating"], b["rating"]):
+                a_wins += 1
+            else:
+                b_wins += 1
+        return (a, a_wins, b_wins) if a_wins > b_wins else (b, a_wins, b_wins)
+
+    rounds = []
+    winner, aw, bw = play_series(seed[4], seed[5], 1, wc_advantage=True)
+    rounds.append({"name": "와일드카드 결정전", "format": "단판", "a": seed[4], "b": seed[5], "a_wins": aw, "b_wins": bw, "winner": winner})
+
+    challenger = winner
+    winner, aw, bw = play_series(challenger, seed[3], 2)
+    rounds.append({"name": "준플레이오프", "format": "3전2선승", "a": challenger, "b": seed[3], "a_wins": aw, "b_wins": bw, "winner": winner})
+
+    challenger = winner
+    winner, aw, bw = play_series(challenger, seed[2], 2)
+    rounds.append({"name": "플레이오프", "format": "3전2선승", "a": challenger, "b": seed[2], "a_wins": aw, "b_wins": bw, "winner": winner})
+
+    challenger = winner
+    winner, aw, bw = play_series(challenger, seed[1], 3)
+    rounds.append({"name": "한국시리즈", "format": "5전3선승", "a": challenger, "b": seed[1], "a_wins": aw, "b_wins": bw, "winner": winner})
+
+    return {"rounds": rounds, "champion": winner}
+
+
+def awaken_legend_player(team):
+    """전설급 실제 선수 재고가 소진됐을 때: 이미 보유한 전설급 선수 하나를 각성시켜 능력치를 재강화한다."""
+    legends = list(team.players.filter(grade="legend"))
+    if not legends:
+        return None
+    player = random.choice(legends)
+    player.awaken_count += 1
+    gain = random.randint(*AWAKEN_POTENTIAL_GAIN)
+    player.potential += gain
+    for stat_name in player.stat_fields:
+        current = getattr(player, stat_name)
+        setattr(player, stat_name, min(current + random.randint(*AWAKEN_STAT_GAIN), player.potential))
+    player.level = 1
+    player.exp = 0
+    player.save()
+    return player
+
+
+def award_champion(team, tier):
+    """포스트시즌 우승 보상: 캐시 + 등급별 실제 선수(재고 없으면 전설급은 각성으로 대체) + 우승 기록 저장."""
+    from .models import ChampionshipLog
+
+    cash = SEASON_CHAMPION_CASH.get(tier, 15000)
+    team.cash += cash
+
+    grade = TIER_CHAMPION_REWARD_GRADE.get(tier, "rare")
+    new_player = pick_real_player(grade=grade)
+    awakened_player = None
+    if new_player:
+        new_player.team = team
+        new_player.save()
+    elif grade == "legend":
+        awakened_player = awaken_legend_player(team)
+
+    ChampionshipLog.objects.create(team=team, league_tier=tier)
+
+    return {"cash": cash, "grade": grade, "player": new_player, "awakened_player": awakened_player}
 
 
 def award_season_leaders(team):
@@ -300,7 +395,19 @@ def process_season_end(team):
     if team.season_matches < SEASON_LENGTH:
         return None
 
-    relegated, rank = evaluate_season(team)
+    relegated = False
+    rank = None
+    postseason = None
+    champion_reward = None
+    tier_played = team.league_tier
+
+    if tier_played in RELEGATION_KEEP:
+        field = generate_season_field(team)
+        relegated, rank = evaluate_season(team, field)
+        postseason = run_postseason(field)
+        if postseason["champion"]["is_you"]:
+            champion_reward = award_champion(team, tier_played)
+
     awards = award_season_leaders(team)
     team.season_matches = 0
 
@@ -309,6 +416,8 @@ def process_season_end(team):
         "rank": rank,
         "awards": awards,
         "new_tier": team.get_league_tier_display(),
+        "postseason": postseason,
+        "champion_reward": champion_reward,
     }
 
 
@@ -724,8 +833,7 @@ def play_match(team):
     your_staff = team_pitching_staff(list(team.players.all()))
     opponent_staff = auto_pitching_staff([p for p in opponent_roster if p.position == "P"])
 
-    diff = your_rating - opp_rating
-    win_chance = max(0.1, min(0.9, 0.5 + diff / 100))
+    win_chance = win_probability(your_rating, opp_rating)
     win = random.random() < win_chance
     boxscore = generate_boxscore(win)
     boxscore["events"] = generate_play_events(
@@ -807,10 +915,13 @@ def play_match(team):
     }
 
 
-def pick_real_player():
+def pick_real_player(grade=None):
     from .models import Player
 
-    return Player.objects.filter(is_real=True, team__isnull=True).order_by("?").first()
+    qs = Player.objects.filter(is_real=True, team__isnull=True)
+    if grade:
+        qs = qs.filter(grade=grade)
+    return qs.order_by("?").first()
 
 
 def real_player_pool_available():

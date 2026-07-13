@@ -36,12 +36,14 @@ def dashboard(request):
     players = list(team.players.all())
     players.sort(key=lambda p: p.overall, reverse=True)
     claimed_today = team.last_daily_claim == timezone.localdate()
+    championships = list(team.championships.all())
     context = {
         "team": team,
         "roster_count": len(players),
         "best_players": players[:5],
         "claimed_today": claimed_today,
         "daily_allowance": game.DAILY_ALLOWANCE,
+        "championships": championships,
     }
     return render(request, "club/dashboard.html", context)
 
