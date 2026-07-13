@@ -288,6 +288,13 @@ export default function LottoPage() {
         </div>
       </div>
 
+      {/* 산출 방식 설명 */}
+      <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-lg" style={{ fontSize: '25px' }}>
+        <p className="text-purple-900">
+          전회차에 나온 각 번호(1~6번 공)가 과거에 등장한 직후 회차에서 가장 많이 나온 번호 TOP10을 포지션별로 뽑아 조합합니다.
+        </p>
+      </div>
+
       {/* 통계 카드 */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         <div className="bg-white rounded-lg shadow p-5 border border-gray-200">
