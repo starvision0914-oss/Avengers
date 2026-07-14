@@ -78,6 +78,7 @@ def _parse_subscription(text):
 def crawl_account_info(account, log_fn=None):
     """마이페이지 4개 정보를 스크래핑해 계정에 저장. 반환: 수집된 dict."""
     from selenium.webdriver.common.by import By
+    from selenium.common.exceptions import NoAlertPresentException
     from crawlers.browser import create_driver
 
     os.environ.setdefault('DISPLAY', ':99')
@@ -93,6 +94,14 @@ def crawl_account_info(account, log_fn=None):
             driver.find_element(By.ID, 'passwd').send_keys(account.login_pw)
             driver.find_element(By.CSS_SELECTOR, 'input[type=submit]').click()
             time.sleep(3)
+            try:
+                alert = driver.switch_to.alert
+                alert_text = alert.text
+                alert.accept()
+                _log(log_fn, f'[ownerclan-web:{account.login_id}] 로그인 실패(알림): {alert_text}')
+                return {'error': f'로그인 실패: {alert_text}'}
+            except NoAlertPresentException:
+                pass
             if 'loginform' in driver.current_url:
                 _log(log_fn, f'[ownerclan-web:{account.login_id}] 로그인 실패')
                 return {'error': '로그인 실패'}

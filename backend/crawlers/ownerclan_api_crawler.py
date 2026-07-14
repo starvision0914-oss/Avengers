@@ -123,10 +123,12 @@ def crawl_new_items(account, log_fn=None, max_pages=None):
     scanned = 0
     after = None
     page = 0
+    empty_streak = 0  # 연속으로 신규 0건인 페이지 수 (dateDesc 정렬이라 이 구간 이후는 이미 다 아는 상품)
     while True:
         page += 1
         result = _fetch_page(token, after)
         edges = result.get('edges', [])
+        new_in_page = 0
         for edge in edges:
             n = edge['node']
             scanned += 1
@@ -134,6 +136,7 @@ def crawl_new_items(account, log_fn=None, max_pages=None):
             if code in existing:
                 continue
             existing.add(code)
+            new_in_page += 1
             images = n.get('images') or []
             cat = n.get('category') or {}
             data = _empty_row(fields, INT_FIELDS, DATETIME_FIELDS)
@@ -151,6 +154,11 @@ def crawl_new_items(account, log_fn=None, max_pages=None):
             })
             new_rows.append((code, data, STATUS_MAP.get(n.get('status'), 1)))
         _log(log_fn, f'  {page}페이지 처리 — 누적 스캔 {scanned:,}건, 신규발견 {len(new_rows):,}건')
+
+        empty_streak = empty_streak + 1 if new_in_page == 0 else 0
+        if page > 1 and empty_streak >= 2:
+            _log(log_fn, f'  신규 0건 페이지 {empty_streak}회 연속 — dateDesc 정렬상 이후는 전부 기존 상품으로 판단해 조기 종료')
+            break
         if not result['pageInfo']['hasNextPage'] or (max_pages and page >= max_pages):
             break
         after = result['pageInfo']['endCursor']

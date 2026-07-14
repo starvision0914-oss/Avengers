@@ -94,7 +94,7 @@
 - [매출업로드 중복 레이스컨디션](project_sales_upload_dedup_fix.md) — 같은파일 8초간격 재업로드로 90행 중복(594,308원). 3분 idempotency가드 추가. 진짜중복판별은 order_datetime+금액+수량까지 봐야함(order_date만은 오탐)
 - [쿠팡 계정명 지마켓매칭](project_coupang_seller_name_gmarket_match.md) — login_id기준 지마켓 seller_name 복사로 정정(999/666 라벨 뒤바뀜 등 발견). 신규계정도 이 관례 따를것
 - [오산 코스피뉴스 시리즈](project_osan_kospi_news_series.md) — 200/200개 완성(2026-07-12). 배치8부터 제목 "키워드 중심"으로 전환, 상장폐지/데이터부족 기업은 유사업종 교체
-- [오산 블로그 208개 분량보강 진행상황](project_osan_blog_expansion_status.md) — 63/208 완료(1500자+), 145개 미달로 중단(2026-07-11). 병렬 서브에이전트가 세션한도 소진시킴→직접 순차처리로 전환. 재개시 문단길이 착각(예상보다 짧음) 주의
+- [오산 블로그 208개 분량보강](project_osan_blog_expansion_status.md) — 2026-07-13 전체 완료(208/208, 1500자+). API키 없이 직접작성 방식, 문단길이 항상 과소평가됨
 - [토큰 대량소모 작업 전 확인](feedback_ask_before_token_heavy_work.md) — 반복 웹서치+생성형 대량작업(10회+)은 시작 전 진행여부 확인 필수(비용청구 우려, 사용자 직접 언급). "그만물어보고"류 지시보다 이게 우선
 - [오너클랜 API 발견·인증성공](project_ownerclan_api_discovery.md) — 정식 GraphQL API 확인(화면스크래핑 불필요), 인증·상품조회 테스트 성공(2026-07-11). 크롤러 자체(계정모델/서비스/커맨드/UI)는 미완성 — 중단 상태에서 이어가야 함
 - [사이드바 정리 2026-07-11](project_sidebar_reorg_2026-07-11.md) — dashboard→overview 흡수, 쿠팡·롯데온→스마트스토어 탭통합, /blog="오너클랜크롤러"로 재명명(예비상품과 이름충돌 주의)
@@ -108,3 +108,5 @@
 - [오산 블로그 작성 프롬프트](reference_osan_blog_prompt.md) — content_gen.py에 위치, 시스템프롬프트+요청프롬프트 하드코딩
 - [코스피 1000개 확장 20개+함정](project_osan_kospi_1000_expansion.md) — 600→1000 목표, 동시세션 병행중. 회사명 검색오염(삼천리↔자전거 등) 신규발견, 중복체크 전체텍스트+WP검색 이중화로 개선
 - [서버 재부팅 2026-07-13](project_server_reboot_2026-07-13.md) — 재부팅시 지마켓/11번가 크롤 강제종료(자동회복). PM2 systemd등록으로 자동재기동, USB/VNC는 수동확인 필요할수도
+- [오산 생활정보 100키워드 확장](project_osan_life_100keywords.md) — 애드센스용 10카테고리 100키워드, 기존 5개카테고리 재사용(신규생성X). life_helper.php 발행도구, wp-load.php 이중require 버그 수정완료
+- [오너클랜 /owner 페이지 범위](project_ownerclan_owner_page_scope.md) — /ownerclan(예비상품)과 /owner(오너클랜크롤러) 혼동주의. /owner는 계정정보크롤링만 지시됨, 상품자동수집("새 상품 가져오기")은 아직 미지시·보류 상태(2026-07-14)

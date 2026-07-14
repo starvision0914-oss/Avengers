@@ -17,5 +17,8 @@ class Command(BaseCommand):
 
         for acct in qs:
             self.stdout.write(f'[{acct.login_id}] 시작')
-            result = crawl_account_info(acct, log_fn=lambda m: self.stdout.write(m))
-            self.stdout.write(self.style.SUCCESS(f'[{acct.login_id}] 완료: {result}'))
+            try:
+                result = crawl_account_info(acct, log_fn=lambda m: self.stdout.write(m))
+                self.stdout.write(self.style.SUCCESS(f'[{acct.login_id}] 완료: {result}'))
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f'[{acct.login_id}] 예외 발생, 다음 계정으로 진행: {e}'))

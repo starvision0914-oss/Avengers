@@ -89,6 +89,7 @@ def _try_cookie_login(driver, account):
                 pass
         driver.get(BALANCE_PAGE)
         time.sleep(2)
+        _dismiss_esm_popups(driver)
         url = driver.current_url.lower()
         return ('login' not in url and 'signin' not in url and 'logon' not in url)
     except Exception:
@@ -306,6 +307,7 @@ def _collect_account_months(driver, login_id, months, log_fn):
     ):
         driver.get(page_url)
         time.sleep(4)
+        _dismiss_esm_popups(driver)   # '고객 응대 연락처 인증' 등 소프트팝업이 정산페이지 진입 시에도 뜸(dlrmsgh012, 2026-07-14)
         save_id = auction_sid if market == 'auction' else login_id
         for sdt, edt in months:
             rows, ok = _fetch_month(driver, login_id, endpoint, str(sdt), str(edt), log_fn, norm)
@@ -353,6 +355,9 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
             try:
                 if driver is None:
                     driver = create_driver(kill_existing=False)
+                    # 페이지로드 무한대기 방지(기본 300s) — 계정 하나가 응답없음 상태면
+                    # 그대로 15~25분씩 멈춰 전체 배치를 막았음(dlrmsgh012, 2026-07-14).
+                    driver.set_page_load_timeout(25)
                 driver.delete_all_cookies()
                 if _try_cookie_login(driver, a):
                     _log(log_fn, f'[{a.login_id}] 쿠키 로그인')
