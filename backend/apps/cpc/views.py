@@ -3556,7 +3556,8 @@ class GmarketDashboardView(views.APIView):
         prod = {r['account__login_id']: r['n'] for r in (
             GmarketMyProduct.objects.values('account__login_id').annotate(n=Count('id')))}
         prod_mkt = {(r['account__login_id'], r['market']): r['n'] for r in (
-            GmarketMyProduct.objects.values('account__login_id', 'market').annotate(n=Count('id')))}
+            GmarketMyProduct.objects.filter(status_type__in=['판매중', '11', '21'])
+            .values('account__login_id', 'market').annotate(n=Count('id')))}
         # 등록가능수량(등급별 최대 상품등록수) — 최신 수집분만
         max_items = {}
         for g in (GmarketSellerGrade.objects.values('gmarket_id')

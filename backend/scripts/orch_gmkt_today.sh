@@ -17,7 +17,16 @@ run_one(){   # $1=account $2=timeout ; 성공=0 실패=1
   : > "$tmp"
   pkill -9 -f "user-data-dir=/tmp/gmkt_chrome" 2>/dev/null
   rm -rf /tmp/gmkt_chrome_* 2>/dev/null
-  rm -f /tmp/avengers_crawl_chrome_gmarket.lock
+  # 공유 지마켓 락은 다른 크롤이 실제로 쓰고 있을 수 있으므로 무조건 삭제하지 않는다.
+  # (2026-07-15: 여기서 조건 없이 rm -f 하다가 같은 20시에 도는 거래내역 크롤과 동시실행돼
+  #  IP차단 위험 발생 — 죽은 락(stale)일 때만 회수하도록 수정)
+  LOCKF=/tmp/avengers_crawl_chrome_gmarket.lock
+  if [ -f "$LOCKF" ]; then
+    LP=$(cut -d'|' -f1 "$LOCKF" 2>/dev/null)
+    if [ -z "$LP" ] || ! ps -p "$LP" >/dev/null 2>&1; then
+      rm -f "$LOCKF"
+    fi
+  fi
   sleep 2
   timeout "$to" /usr/bin/python3 -u -c "import crawlers.gmkt_today" "$a" >> "$tmp" 2>&1
   local rc=$?

@@ -83,7 +83,11 @@ export default function GmarketDashboard() {
       setData(data);
     } catch { /* noop */ } finally { setLoading(false); }
   }, [from, to, market]);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [load]);
 
   // 상품별광고비 수집 상태(실패 요약 + 재크롤)
   const [cstat, setCstat] = useState<any>(null);

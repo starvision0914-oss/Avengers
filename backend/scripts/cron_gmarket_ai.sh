@@ -1,7 +1,7 @@
 #!/bin/bash
 LOCKFILE="/tmp/avengers_crawl_chrome_gmarket.lock"
 if [ -f "$LOCKFILE" ]; then
-    PID=$(cat "$LOCKFILE")
+    PID=$(cut -d'|' -f1 "$LOCKFILE" 2>/dev/null)
     if kill -0 "$PID" 2>/dev/null; then exit 0; fi
 fi
 echo $$ > "$LOCKFILE"

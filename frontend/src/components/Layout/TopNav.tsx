@@ -52,7 +52,7 @@ export default function TopNav() {
   const handleLogout = () => { logout(); navigate('/login'); };
 
   const linkCls = ({ isActive }: { isActive: boolean }) =>
-    `inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap transition-all ${
+    `inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-[20px] font-semibold whitespace-nowrap transition-all ${
       isActive
         ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
         : 'text-gray-300 hover:bg-gray-800 hover:text-white'
@@ -60,16 +60,16 @@ export default function TopNav() {
 
   return (
     <header className="sticky top-0 z-40 bg-gray-900 border-b border-gray-800 shadow-lg">
-      <div className="px-4 h-14 flex items-center gap-3">
+      <div className="px-4 py-2 flex items-center gap-3">
         <NavLink to="/overview" className="flex items-center gap-2 mr-2">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center font-bold text-white text-[12px]">A</div>
-          <span className="text-white font-bold text-[12px] hidden sm:inline">Avengers</span>
+          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center font-bold text-white text-[20px]">A</div>
+          <span className="text-white font-bold text-[20px] hidden sm:inline">Avengers</span>
         </NavLink>
 
         <nav className="flex items-center gap-1 flex-1 overflow-x-auto scrollbar-hide">
           {primary.map(({ to, icon: Icon, label }) => (
             <NavLink key={to} to={to} className={linkCls}>
-              <Icon size={14} />
+              <Icon size={20} />
               <span>{label}</span>
             </NavLink>
           ))}
@@ -77,15 +77,15 @@ export default function TopNav() {
           <div className="relative" ref={moreRef}>
             <button
               onClick={() => setMoreOpen(o => !o)}
-              className={`inline-flex items-center gap-1 px-2 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap transition-all ${
+              className={`inline-flex items-center gap-1 px-2 py-2.5 rounded-lg text-[20px] font-semibold whitespace-nowrap transition-all ${
                 moreOpen ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
               }`}
             >
-              <MoreHorizontal size={14} />
+              <MoreHorizontal size={20} />
               <span>더보기</span>
             </button>
             {moreOpen && (
-              <div className="absolute top-full right-0 mt-1 w-52 rounded-xl border border-gray-700 bg-gray-900 shadow-2xl py-1.5 z-50">
+              <div className="absolute top-full right-0 mt-1 w-64 rounded-xl border border-gray-700 bg-gray-900 shadow-2xl py-1.5 z-50">
                 {more.map(({ to, icon: Icon, label, external }) =>
                   external ? (
                     <a
@@ -94,9 +94,9 @@ export default function TopNav() {
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={() => setMoreOpen(false)}
-                      className="flex items-center gap-2.5 px-3 py-2 text-[12px] text-gray-300 hover:bg-gray-800"
+                      className="flex items-center gap-2.5 px-3 py-2.5 text-[20px] text-gray-300 hover:bg-gray-800"
                     >
-                      <Icon size={14} />
+                      <Icon size={20} />
                       {label}
                     </a>
                   ) : (
@@ -105,12 +105,12 @@ export default function TopNav() {
                       to={to}
                       onClick={() => setMoreOpen(false)}
                       className={({ isActive }) =>
-                        `flex items-center gap-2.5 px-3 py-2 text-[12px] ${
+                        `flex items-center gap-2.5 px-3 py-2.5 text-[20px] ${
                           isActive ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-gray-800'
                         }`
                       }
                     >
-                      <Icon size={14} />
+                      <Icon size={20} />
                       {label}
                     </NavLink>
                   )
@@ -122,9 +122,9 @@ export default function TopNav() {
 
         <button
           onClick={handleLogout}
-          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-gray-400 hover:text-white hover:bg-gray-800 whitespace-nowrap"
+          className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-[20px] font-semibold text-gray-400 hover:text-white hover:bg-gray-800 whitespace-nowrap"
         >
-          <LogOut size={14} />
+          <LogOut size={20} />
           <span className="hidden sm:inline">로그아웃</span>
         </button>
       </div>

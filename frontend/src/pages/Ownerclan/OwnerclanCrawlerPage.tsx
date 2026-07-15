@@ -42,19 +42,6 @@ function parseNum(v?: string): number {
   return isNaN(n) ? 0 : n;
 }
 
-// 계정별 dict 배열을 키 등장 순서를 유지한 채 합산한다.
-function sumEntries(list: (Record<string, string> | undefined)[]): [string, string][] {
-  const totals: Record<string, number> = {};
-  const order: string[] = [];
-  for (const rec of list) {
-    for (const [k, v] of Object.entries(rec || {})) {
-      if (!(k in totals)) { totals[k] = 0; order.push(k); }
-      totals[k] += parseNum(v);
-    }
-  }
-  return order.map(k => [k, String(totals[k])]);
-}
-
 function Sep() {
   return <span className="text-[#ddd] hidden md:inline">|</span>;
 }
@@ -69,23 +56,32 @@ const LOWEST_PRICE_COLUMNS: { key: string; label: string }[] = [
   { key: '사용 가능 잔여 보유량', label: '잔여량' },
 ];
 
+// 라벨 글자수에 맞춰 기본 폭을 "생략 없이 전부 보이도록" 넉넉하게 잡는다. (15px 폰트 기준)
+const ORDER_STATS_WIDTH: Record<string, number> = {
+  '반품/교환 요청': 145, '반품/교환 진행': 145,
+};
+const LOWEST_PRICE_WIDTH: Record<string, number> = {
+  '누적 보유량': 140,
+};
+
 const COLUMNS = [
-  { key: 'idx', label: '#', width: 48, align: 'center' as const, color: '#aaa' },
-  { key: 'account', label: '계정', width: 150, align: 'left' as const, color: '#555' },
+  { key: 'idx', label: '#', width: 40, align: 'center' as const, color: '#aaa' },
+  { key: 'account', label: '계정', width: 120, align: 'left' as const, color: '#555' },
   { key: 'balance', label: '오너클랜머니', width: 140, align: 'right' as const, color: '#d97706' },
-  ...ORDER_STATS_KEYS.map(k => ({ key: `os_${k}`, label: k, width: 90, align: 'right' as const, color: '#2563eb' })),
-  ...LOWEST_PRICE_COLUMNS.map(c => ({ key: `lp_${c.key}`, label: c.label, width: 100, align: 'right' as const, color: '#dc2626' })),
-  { key: 'sub', label: '구독서비스', width: 190, align: 'left' as const, color: '#7c3aed' },
+  ...ORDER_STATS_KEYS.map(k => ({ key: `os_${k}`, label: k, width: ORDER_STATS_WIDTH[k] || 95, align: 'right' as const, color: '#2563eb' })),
+  ...LOWEST_PRICE_COLUMNS.map(c => ({ key: `lp_${c.key}`, label: c.label, width: LOWEST_PRICE_WIDTH[c.key] || 95, align: 'right' as const, color: '#dc2626' })),
+  { key: 'sub', label: '구독서비스', width: 150, align: 'left' as const, color: '#7c3aed' },
 ];
 
 function ResizableTh({ children, width, align, color, onResize }: {
   children: ReactNode; width: number; align: 'left' | 'right' | 'center'; color?: string;
-  onResize: (deltaX: number) => void;
+  onResize: (newWidth: number) => void;
 }) {
   const onMouseDown = (e: ReactMouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
-    const onMove = (ev: MouseEvent) => onResize(ev.clientX - startX);
+    const startWidth = width; // 드래그 시작 시점의 현재(이미 조절됐을 수 있는) 폭 — 계속 이어서 움직이도록 여기서 기준을 잡는다.
+    const onMove = (ev: MouseEvent) => onResize(Math.max(36, startWidth + (ev.clientX - startX)));
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -95,43 +91,18 @@ function ResizableTh({ children, width, align, color, onResize }: {
   };
   return (
     <th
-      className={`relative border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 font-semibold whitespace-nowrap ${
-        align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
-      }`}
+      className="relative border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 font-semibold overflow-hidden"
       style={{ width, color: color || '#555' }}
     >
-      {children}
+      <span className={`block truncate ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'}`}>
+        {children}
+      </span>
       <div
         onMouseDown={onMouseDown}
         className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-[#93c5fd] active:bg-[#60a5fa]"
         title="드래그해서 폭 조절"
       />
     </th>
-  );
-}
-
-function StatList({ entries, unit, layout = 'col' }: { entries: [string, string][]; unit: string; layout?: 'col' | 'row' }) {
-  if (entries.length === 0) return <span className="text-[#ccc]">-</span>;
-  if (layout === 'row') {
-    return (
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-[#333]">
-        {entries.map(([k, v]) => (
-          <span key={k} className="whitespace-nowrap">
-            <span className="text-[#888]">{k}</span> <span className="font-bold text-[#222]">{v}{unit}</span>
-          </span>
-        ))}
-      </div>
-    );
-  }
-  return (
-    <div className="text-[#333] space-y-1">
-      {entries.map(([k, v]) => (
-        <div key={k} className="flex items-baseline justify-between gap-2">
-          <span className="text-[#888] truncate">{k}</span>
-          <span className="font-bold text-[#222] shrink-0">{v}{unit}</span>
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -180,18 +151,14 @@ export default function OwnerclanCrawlerPage() {
 
   const exportExcel = () => {
     if (!accounts.length) { alert('내보낼 데이터가 없습니다.'); return; }
-    const orderKeys = filterOrderStats(sumEntries(accounts.map(a => a.order_stats))).map(([k]) => k);
-    const lowestKeys = mapLowestPriceLabel(sumEntries(accounts.map(a => a.lowest_price_quota))).map(([k]) => k);
-    const head = ['계정', '오너클랜머니', ...orderKeys, ...lowestKeys, '구독상태', '구독기간'];
+    const head = ['계정', '오너클랜머니', ...ORDER_STATS_KEYS, ...LOWEST_PRICE_COLUMNS.map(c => c.label), '구독상태', '구독기간'];
     const body = accounts.map(a => {
-      const os = Object.fromEntries(Object.entries(a.order_stats || {}));
-      const lp = Object.fromEntries(mapLowestPriceLabel(Object.entries(a.lowest_price_quota || {})));
       const sub = latestSubscription(a.subscription_info?.raw);
       return [
         a.login_id,
         a.balance || '',
-        ...orderKeys.map(k => os[k] ?? ''),
-        ...lowestKeys.map(k => lp[k] ?? ''),
+        ...ORDER_STATS_KEYS.map(k => a.order_stats?.[k] ?? ''),
+        ...LOWEST_PRICE_COLUMNS.map(c => a.lowest_price_quota?.[c.key] ?? ''),
         sub?.status || '',
         sub?.period || '',
       ];
@@ -217,19 +184,25 @@ export default function OwnerclanCrawlerPage() {
   const sortedAccounts = [...accounts].sort((a, b) => parseNum(b.balance) - parseNum(a.balance));
 
   const totalBalance = accounts.reduce((sum, a) => sum + parseNum(a.balance), 0);
-  const totalOrderStats = sumEntries(accounts.map(a => a.order_stats));
-  const totalLowestPrice = sumEntries(accounts.map(a => a.lowest_price_quota));
+  const orderTotals: Record<string, number> = {};
+  for (const k of ORDER_STATS_KEYS) {
+    orderTotals[k] = accounts.reduce((sum, a) => sum + parseNum(a.order_stats?.[k]), 0);
+  }
+  const lowestTotals: Record<string, number> = {};
+  for (const c of LOWEST_PRICE_COLUMNS) {
+    lowestTotals[c.key] = accounts.reduce((sum, a) => sum + parseNum(a.lowest_price_quota?.[c.key]), 0);
+  }
   const lastInfoSync = accounts.reduce<string | null>((latest, a) => {
     if (!a.info_synced_at) return latest;
     return !latest || a.info_synced_at > latest ? a.info_synced_at : latest;
   }, null);
 
   return (
-    <div className="min-h-screen bg-[#f5f6fa]">
+    <div className="min-h-screen bg-[#f5f6fa] min-w-0 w-full max-w-full overflow-x-hidden">
 
       {/* ── 상단 고정 바 ── */}
       <div className="bg-white border-b border-[#e0e0e0] px-4 md:px-6 py-2 sticky top-0 z-30">
-        <div className="max-w-[1600px] mx-auto flex items-center gap-2">
+        <div className="max-w-[1900px] mx-auto flex items-center gap-2">
           <Package size={16} className="text-[#2563eb]" />
           <h1 className="text-[15px] font-bold text-[#222]">오너클랜 대시보드</h1>
           {lastInfoSync && (
@@ -240,7 +213,7 @@ export default function OwnerclanCrawlerPage() {
         </div>
       </div>
 
-      <div className="max-w-[1600px] mx-auto px-4 md:px-6 py-3 space-y-3">
+      <div className="max-w-[1900px] mx-auto px-4 md:px-6 py-3 space-y-3 min-w-0">
 
         {/* ── 컨트롤 바 ── */}
         <div className="bg-white border border-[#e0e0e0] rounded px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[15px]">
@@ -278,17 +251,17 @@ export default function OwnerclanCrawlerPage() {
               <span className="font-bold text-[#d97706]">{totalBalance.toLocaleString()}원</span>
             </span>
             <Sep />
-            {filterOrderStats(totalOrderStats).map(([k, v]) => (
+            {ORDER_STATS_KEYS.map(k => (
               <span key={k}>
                 <span className="text-[#888] mr-1">{k}:</span>
-                <span className="font-bold text-[#2563eb]">{v}</span>
+                <span className="font-bold text-[#2563eb]">{orderTotals[k] ?? 0}</span>
               </span>
             ))}
             <Sep />
-            {mapLowestPriceLabel(totalLowestPrice).map(([k, v]) => (
-              <span key={k}>
-                <span className="text-[#888] mr-1">{k}:</span>
-                <span className="font-bold text-[#dc2626]">{v}개</span>
+            {LOWEST_PRICE_COLUMNS.map(c => (
+              <span key={c.key}>
+                <span className="text-[#888] mr-1">{c.label}:</span>
+                <span className="font-bold text-[#dc2626]">{lowestTotals[c.key] ?? 0}개</span>
               </span>
             ))}
           </div>
@@ -301,7 +274,7 @@ export default function OwnerclanCrawlerPage() {
             <span className="text-[15px] font-bold text-[#222]">계정별 현황</span>
           </div>
           <div className="overflow-x-auto">
-            <table className="border-collapse text-[17px]" style={{ tableLayout: 'fixed', width: colWidths.reduce((a, b) => a + b, 0) }}>
+            <table className="border-collapse text-[15px]" style={{ tableLayout: 'fixed', width: colWidths.reduce((a, b) => a + b, 0) }}>
               <colgroup>
                 {colWidths.map((w, i) => <col key={COLUMNS[i].key} style={{ width: w }} />)}
               </colgroup>
@@ -318,7 +291,7 @@ export default function OwnerclanCrawlerPage() {
               <tbody>
                 {sortedAccounts.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
+                    <td colSpan={COLUMNS.length} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
                       데이터 없음 — 계정정보 새로고침 후 표시됩니다
                     </td>
                   </tr>
@@ -328,14 +301,18 @@ export default function OwnerclanCrawlerPage() {
                     return (
                       <tr key={a.login_id} className={idx % 2 === 1 ? 'bg-[#fafbfc]' : 'bg-white'}>
                         <td className="border border-[#e5e7eb] px-3 py-2 text-center text-[#bbb] font-medium align-top">{idx + 1}</td>
-                        <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#333] align-top">{a.login_id}</td>
+                        <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#333] align-top truncate">{a.login_id}</td>
                         <td className="border border-[#e5e7eb] px-3 py-2 text-right font-bold text-[#222] align-top tabular-nums">{a.balance || '-'}</td>
-                        <td className="border border-[#e5e7eb] px-3 py-2 align-top">
-                          <StatList entries={filterOrderStats(Object.entries(a.order_stats || {}))} unit="" layout="row" />
-                        </td>
-                        <td className="border border-[#e5e7eb] px-3 py-2 align-top">
-                          <StatList entries={mapLowestPriceLabel(Object.entries(a.lowest_price_quota || {}))} unit="개" />
-                        </td>
+                        {ORDER_STATS_KEYS.map(k => (
+                          <td key={k} className="border border-[#e5e7eb] px-3 py-2 text-right align-top tabular-nums text-[#333]">
+                            {a.order_stats?.[k] ?? <span className="text-[#ccc]">-</span>}
+                          </td>
+                        ))}
+                        {LOWEST_PRICE_COLUMNS.map(c => (
+                          <td key={c.key} className="border border-[#e5e7eb] px-3 py-2 text-right align-top tabular-nums text-[#333]">
+                            {a.lowest_price_quota?.[c.key] ?? <span className="text-[#ccc]">-</span>}
+                          </td>
+                        ))}
                         <td className="border border-[#e5e7eb] px-3 py-2 align-top">
                           {sub ? (
                             <div>
@@ -357,12 +334,12 @@ export default function OwnerclanCrawlerPage() {
                     <td className="border border-[#e5e7eb] px-3 py-2"></td>
                     <td className="border border-[#e5e7eb] px-3 py-2">합계 ({sortedAccounts.length}개)</td>
                     <td className="border border-[#e5e7eb] px-3 py-2 text-right text-[#d97706] tabular-nums">{totalBalance.toLocaleString()}원</td>
-                    <td className="border border-[#e5e7eb] px-3 py-2">
-                      <StatList entries={filterOrderStats(totalOrderStats)} unit="" layout="row" />
-                    </td>
-                    <td className="border border-[#e5e7eb] px-3 py-2">
-                      <StatList entries={mapLowestPriceLabel(totalLowestPrice)} unit="개" />
-                    </td>
+                    {ORDER_STATS_KEYS.map(k => (
+                      <td key={k} className="border border-[#e5e7eb] px-3 py-2 text-right tabular-nums text-[#2563eb]">{orderTotals[k] ?? 0}</td>
+                    ))}
+                    {LOWEST_PRICE_COLUMNS.map(c => (
+                      <td key={c.key} className="border border-[#e5e7eb] px-3 py-2 text-right tabular-nums text-[#dc2626]">{lowestTotals[c.key] ?? 0}</td>
+                    ))}
                     <td className="border border-[#e5e7eb] px-3 py-2"></td>
                   </tr>
                 )}
