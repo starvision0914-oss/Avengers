@@ -32,7 +32,7 @@ export interface NaverBlogPost {
   title: string;
   keyword: string;
   account: string;
-  status: 'draft' | 'ready' | 'published' | 'failed';
+  status: 'draft' | 'ready' | 'naver_draft' | 'published' | 'failed';
   tags: string;
   content_length: number;
   published_url: string;
@@ -107,8 +107,10 @@ export const updatePost = (id: number, d: Partial<NaverBlogPostDetail>) =>
   api.patch(`/naver-blog/posts/${id}/`, d).then(r => r.data);
 export const deletePost = (id: number) =>
   api.delete(`/naver-blog/posts/${id}/`).then(r => r.data);
-export const publishPost = (id: number) =>
-  api.post(`/naver-blog/posts/${id}/publish/`).then(r => r.data);
+export const publishPost = (id: number, mode: 'publish' | 'draft' = 'publish') =>
+  api.post(`/naver-blog/posts/${id}/publish/`, { mode }).then(r => r.data);
+export const bulkDraftSave = (limit = 50) =>
+  api.post(`/naver-blog/posts/bulk-draft/`, { limit }).then(r => r.data);
 
 // 제미나이 글 생성 (multipart)
 export const generatePostGemini = (
@@ -127,6 +129,20 @@ export const generatePostGemini = (
     timeout: 90000,
   }).then(r => r.data);
 };
+
+// 포스트 이미지
+export interface PostImage { id: number; url: string; order: number; marker: string; }
+export const getPostImages = (postId: number) =>
+  api.get<PostImage[]>(`/naver-blog/posts/${postId}/images/`).then(r => r.data);
+export const uploadPostImage = (postId: number, file: File) => {
+  const form = new FormData();
+  form.append('image', file);
+  return api.post<PostImage>(`/naver-blog/posts/${postId}/images/`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then(r => r.data);
+};
+export const deletePostImage = (postId: number, imageId: number) =>
+  api.delete(`/naver-blog/posts/${postId}/images/${imageId}/`).then(r => r.data);
 
 // 수동 생성
 export const createManualPost = (d: {

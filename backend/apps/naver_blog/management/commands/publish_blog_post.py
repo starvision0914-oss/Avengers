@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from apps.naver_blog.models import NaverBlogPost
 from crawlers.browser import create_driver
-from crawlers.naver_blog_crawler import login_naver, write_and_publish
+from crawlers.naver_blog_crawler import ensure_login, write_and_publish
 
 LOCK_FILE = '/tmp/naver_blog_publish.lock'
 
@@ -41,6 +41,8 @@ class Command(BaseCommand):
         parser.add_argument('--post-id', type=int, help='특정 포스트 ID')
         parser.add_argument('--status', type=str, default='ready', help='발행 대상 상태 (기본: ready)')
         parser.add_argument('--limit', type=int, default=5, help='최대 발행 수')
+        parser.add_argument('--mode', type=str, default='publish', choices=['publish', 'draft'],
+                            help='publish=네이버에 실제 발행(공개), draft=네이버 자체 임시저장(비공개)')
 
     def handle(self, *args, **options):
         if not _acquire_lock():
@@ -65,7 +67,8 @@ class Command(BaseCommand):
             self.stdout.write('[publish] 발행할 포스팅 없음')
             return
 
-        self.stdout.write(f'[publish] 대상: {len(posts)}개')
+        mode = options['mode']
+        self.stdout.write(f'[publish] 대상: {len(posts)}개 (mode={mode})')
 
         # 계정별로 그룹핑하여 로그인 1회
         from collections import defaultdict
@@ -87,7 +90,7 @@ class Command(BaseCommand):
                 driver = create_driver()
                 log_fn = lambda msg: self.stdout.write('    ' + msg)
 
-                if not login_naver(driver, account.login_id, account.login_pw, log_fn):
+                if not ensure_login(driver, account, log_fn):
                     for p in acc_posts:
                         p.status = 'failed'
                         p.error_message = '로그인 실패'
@@ -97,27 +100,47 @@ class Command(BaseCommand):
                 blog_id = account.blog_id or account.login_id
 
                 for post in acc_posts:
-                    self.stdout.write(f'  [{account.display_name}] 발행: {post.title[:30]}')
-                    url = write_and_publish(
+                    action_label = '발행' if mode == 'publish' else '네이버 임시저장'
+                    image_paths = [
+                        img.image_path for img in post.images.order_by('order')
+                        if img.image_path
+                    ]
+                    # logNo 직접 URL 접근이 "삭제된 게시물" 오탐을 일으켜(2026-07-17 확인) 비활성화.
+                    # 저장은 계속 새 임시글로 생성됨 — 추후 클릭 기반 재개 방식으로 재구현 필요.
+                    existing_log_no = ''
+                    self.stdout.write(f'  [{account.display_name}] {action_label}: {post.title[:30]} (이미지 {len(image_paths)}개)'
+                                       + (f' [기존 임시저장 수정: logNo={existing_log_no}]' if existing_log_no else ''))
+                    result = write_and_publish(
                         driver,
                         blog_id=blog_id,
                         title=post.title,
                         content=post.content,
                         tags=post.tags,
+                        image_paths=image_paths,
                         log_fn=log_fn,
+                        publish=(mode == 'publish'),
+                        log_no=existing_log_no,
                     )
 
-                    if url and 'blog.naver.com' in url:
+                    if mode == 'draft':
+                        if result:
+                            post.status = 'naver_draft'
+                            if result != 'saved_draft':
+                                post.naver_log_no = result
+                        else:
+                            post.status = 'failed'
+                            post.error_message = '임시저장 실패'
+                    elif result and 'blog.naver.com' in result:
                         post.status = 'published'
-                        post.published_url = url
+                        post.published_url = result
                         post.published_at = timezone.now()
                     else:
                         post.status = 'failed'
-                        post.error_message = f'발행 후 URL 없음: {url}'
+                        post.error_message = f'발행 후 URL 없음: {result}'
                     post.save()
 
-                    import time
-                    time.sleep(30)  # 계정당 글 발행 간격
+                    import time, random
+                    time.sleep(random.randint(90, 210))  # 계정당 글 저장 간격(봇 패턴처럼 안 보이게 사람 간격에 가깝게)
 
             except Exception as e:
                 self.stdout.write(f'  [{account.display_name}] 오류: {e}')

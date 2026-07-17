@@ -4,7 +4,7 @@ import {
   Users, ShoppingCart, CheckSquare,
   MessageCircle, Mail, Settings, LogOut, Bot, MessageSquare,
   Sliders, Smartphone, Leaf, UserCog, Store, Package, MoreHorizontal,
-  BadgeCheck, Dices, Map, Receipt,
+  BadgeCheck, Dices, Map, Receipt, Newspaper,
 } from 'lucide-react';
 import { logout } from '../../api/auth';
 
@@ -19,6 +19,7 @@ const primary = [
   { to: '/ad-settings', icon: Sliders, label: '광고설정' },
   { to: '/speedgo', icon: Leaf, label: '스피드고' },
   { to: '/owner', icon: Package, label: '오너클랜' },
+  { to: '/naver-blog', icon: Newspaper, label: '블로그' },
 ];
 
 const more = [
@@ -52,7 +53,7 @@ export default function TopNav() {
   const handleLogout = () => { logout(); navigate('/login'); };
 
   const linkCls = ({ isActive }: { isActive: boolean }) =>
-    `inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-[20px] font-semibold whitespace-nowrap transition-all ${
+    `inline-flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-[18px] font-semibold whitespace-nowrap transition-all ${
       isActive
         ? 'bg-blue-600 text-white shadow-md shadow-blue-500/30'
         : 'text-gray-300 hover:bg-gray-800 hover:text-white'
@@ -77,7 +78,7 @@ export default function TopNav() {
           <div className="relative" ref={moreRef}>
             <button
               onClick={() => setMoreOpen(o => !o)}
-              className={`inline-flex items-center gap-1 px-2 py-2.5 rounded-lg text-[20px] font-semibold whitespace-nowrap transition-all ${
+              className={`inline-flex items-center gap-1 px-2 py-2.5 rounded-lg text-[18px] font-semibold whitespace-nowrap transition-all ${
                 moreOpen ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'
               }`}
             >

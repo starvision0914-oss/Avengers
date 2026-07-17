@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import VncViewer from '../../components/VncViewer';
 import {
   getBlogDashboard, getBlogSetting, saveBlogSetting,
   getKeywords, addKeywords, collectKeywords, deleteKeyword,
-  getPosts, getPostDetail, updatePost, publishPost, deletePost,
+  getPosts, getPostDetail, updatePost, publishPost, bulkDraftSave, deletePost,
   getBlogAccounts, createBlogAccount, updateBlogAccount, deleteBlogAccount,
   generatePostGemini, createManualPost,
+  getPostImages, uploadPostImage, deletePostImage, PostImage,
   NaverKeyword, NaverBlogPost, NaverBlogAccount, BlogDashboard, BlogSetting,
 } from '../../api/naverBlog';
 
@@ -15,10 +17,10 @@ const COMPETITION_COLOR: Record<string, string> = {
   low: '#22c55e', mid: '#f59e0b', high: '#ef4444', '': '#6b7280',
 };
 const STATUS_LABEL: Record<string, string> = {
-  draft: '초안', ready: '발행대기', published: '발행완료', failed: '실패',
+  draft: '초안', ready: '발행대기', naver_draft: '네이버 임시저장', published: '발행완료', failed: '실패',
 };
 const STATUS_COLOR: Record<string, string> = {
-  draft: '#6b7280', ready: '#3b82f6', published: '#22c55e', failed: '#ef4444',
+  draft: '#6b7280', ready: '#3b82f6', naver_draft: '#a855f7', published: '#22c55e', failed: '#ef4444',
 };
 
 type Tab = 'dashboard' | 'generate' | 'write' | 'posts' | 'keywords' | 'accounts' | 'settings';
@@ -45,6 +47,10 @@ export default function NaverBlogPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState('');
   const [msgType, setMsgType] = useState<'ok' | 'err'>('ok');
+  const [vncFor, setVncFor] = useState<string | null>(null);
+  const [postImages, setPostImages] = useState<PostImage[]>([]);
+  const [imgUploading, setImgUploading] = useState(false);
+  const imgInputRef2 = useRef<HTMLInputElement>(null);
 
   // 제미나이 글 생성 폼
   const [genKw, setGenKw] = useState('');
@@ -133,6 +139,7 @@ export default function NaverBlogPage() {
   // ── 수동 편집기 ──
   const openNewEditor = (keyword = '') => {
     setEditor({ ...EMPTY_EDITOR, keyword });
+    setPostImages([]);
     setTab('write');
   };
 
@@ -147,7 +154,26 @@ export default function NaverBlogPage() {
       keyword: detail.keyword,
       account_id: detail.account?.id ?? '',
     });
+    setPostImages(await getPostImages(id).catch(() => []));
     setTab('write');
+  };
+
+  const handleImageUpload = async (file: File) => {
+    if (!editor?.id) { flash('먼저 초안 저장을 눌러 글을 저장한 뒤 이미지를 추가하세요', 'err'); return; }
+    setImgUploading(true);
+    try {
+      await uploadPostImage(editor.id, file);
+      setPostImages(await getPostImages(editor.id));
+    } catch {
+      flash('이미지 업로드 실패', 'err');
+    }
+    setImgUploading(false);
+  };
+
+  const handleImageDelete = async (imageId: number) => {
+    if (!editor?.id) return;
+    await deletePostImage(editor.id, imageId).catch(() => null);
+    setPostImages(await getPostImages(editor.id).catch(() => []));
   };
 
   const handleEditorSave = async (status: 'draft' | 'ready') => {
@@ -178,10 +204,18 @@ export default function NaverBlogPage() {
     setEditorSaving(false);
   };
 
-  const handlePublish = async (id: number) => {
+  const handleBulkDraftSave = async () => {
     setLoading(true);
-    await publishPost(id).catch(console.error);
-    flash(`발행 시작 (#${id})`);
+    const res = await bulkDraftSave().catch(() => null);
+    flash(res?.message || '실행 실패', res?.ok ? 'ok' : 'err');
+    setLoading(false);
+    setTimeout(loadAll, 5000);
+  };
+
+  const handlePublish = async (id: number, mode: 'publish' | 'draft' = 'publish') => {
+    setLoading(true);
+    await publishPost(id, mode).catch(console.error);
+    flash(mode === 'publish' ? `발행 시작 (#${id})` : `네이버 임시저장 시작 (#${id})`);
     setLoading(false);
     setTimeout(loadPosts, 5000);
   };
@@ -306,6 +340,31 @@ export default function NaverBlogPage() {
             rows={25}
             style={{ width: '100%', padding: '12px 14px', border: '1px solid #d1d5db', borderRadius: 6,
               fontSize: 14, lineHeight: 1.7, fontFamily: 'inherit', boxSizing: 'border-box', resize: 'vertical' }} />
+          <div style={{ marginTop: 4, fontSize: 11, color: '#9ca3af' }}>
+            줄 맨앞에 <code>{'> '}</code>를 붙이면 네이버 발행/임시저장 시 인용구 블록으로 들어갑니다. 아래에서 이미지를 올리면 생기는 <code>[이미지1]</code> 같은 표시를 본문 원하는 위치에 단독 줄로 넣으면 그 자리에 사진이 삽입됩니다.
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ fontSize: 12, color: '#6b7280', display: 'block', marginBottom: 4 }}>
+            첨부 이미지 {!editor?.id && <span style={{ color: '#f59e0b' }}>(초안 저장 후 추가 가능)</span>}
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+            {postImages.map((img, i) => (
+              <div key={img.id} style={{ position: 'relative', width: 90 }}>
+                <img src={img.url} alt="" style={{ width: 90, height: 90, objectFit: 'cover', borderRadius: 6, border: '1px solid #e5e7eb' }} />
+                <div style={{ fontSize: 10, textAlign: 'center', marginTop: 2, color: '#6b7280' }}>[이미지{i + 1}]</div>
+                <button onClick={() => handleImageDelete(img.id)}
+                  style={{ position: 'absolute', top: -6, right: -6, width: 20, height: 20, borderRadius: '50%', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 11, lineHeight: '20px' }}>×</button>
+              </div>
+            ))}
+            <button onClick={() => imgInputRef2.current?.click()} disabled={imgUploading || !editor?.id}
+              style={{ width: 90, height: 90, border: '1px dashed #d1d5db', borderRadius: 6, background: '#f9fafb', cursor: editor?.id ? 'pointer' : 'not-allowed', fontSize: 12, color: '#6b7280' }}>
+              {imgUploading ? '업로드중...' : '+ 사진 추가'}
+            </button>
+            <input ref={imgInputRef2} type="file" accept="image/*" style={{ display: 'none' }}
+              onChange={ev => { const f = ev.target.files?.[0]; if (f) handleImageUpload(f); ev.target.value = ''; }} />
+          </div>
         </div>
 
         <div style={{ marginBottom: 16 }}>
@@ -669,6 +728,13 @@ export default function NaverBlogPage() {
                 {l}
               </button>
             ))}
+            <div style={{ width: 1, height: 20, background: '#e5e7eb', margin: '0 4px' }} />
+            <button onClick={handleBulkDraftSave} disabled={loading || !(dashboard?.post_status?.['draft'])}
+              title="상태=초안인 글 전체를 계정당 1.5~3.5분 간격을 두고 순서대로 네이버 임시저장에 반영합니다"
+              style={{ padding: '4px 12px', background: '#f3e8ff', border: '1px solid #d8b4fe', borderRadius: 6,
+                cursor: 'pointer', fontSize: 13, color: '#6d28d9', fontWeight: 600 }}>
+              초안 {dashboard?.post_status?.['draft'] ?? 0}건 → 네이버 임시저장 일괄 실행
+            </button>
           </div>
 
           <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
@@ -714,8 +780,12 @@ export default function NaverBlogPage() {
                           <button onClick={() => openEditEditor(p.id)}
                             style={{ padding: '2px 8px', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>수정</button>
                         )}
-                        {['draft', 'ready', 'failed'].includes(p.status) && (
-                          <button onClick={() => handlePublish(p.id)}
+                        {['draft', 'ready', 'naver_draft', 'failed'].includes(p.status) && (
+                          <button onClick={() => handlePublish(p.id, 'draft')}
+                            style={{ padding: '2px 8px', background: '#f3e8ff', border: '1px solid #d8b4fe', borderRadius: 4, cursor: 'pointer', fontSize: 11, color: '#7e22ce' }}>네이버 임시저장</button>
+                        )}
+                        {['draft', 'ready', 'naver_draft', 'failed'].includes(p.status) && (
+                          <button onClick={() => handlePublish(p.id, 'publish')}
                             style={{ padding: '2px 8px', background: '#dcfce7', border: '1px solid #86efac', borderRadius: 4, cursor: 'pointer', fontSize: 11, color: '#166534' }}>발행</button>
                         )}
                         <button onClick={async () => { if (!confirm('삭제?')) return; await deletePost(p.id); loadPosts(); }}
@@ -854,7 +924,7 @@ export default function NaverBlogPage() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f9fafb', borderBottom: '2px solid #e5e7eb' }}>
-                  {['표시이름', '아이디', '블로그ID', '비밀번호', ''].map(h => (
+                  {['표시이름', '아이디', '블로그ID', '비밀번호', '화면', ''].map(h => (
                     <th key={h} style={{ padding: '8px 10px', textAlign: 'left', color: '#6b7280', fontWeight: 500 }}>{h}</th>
                   ))}
                 </tr>
@@ -879,19 +949,29 @@ export default function NaverBlogPage() {
                       )}
                     </td>
                     <td style={{ padding: '8px 10px' }}>
+                      <button onClick={() => setVncFor(a.display_name || a.login_id)}
+                        style={{ padding: '2px 8px', background: '#ede9fe', border: '1px solid #c4b5fd', borderRadius: 4, cursor: 'pointer', fontSize: 11, color: '#6d28d9' }}>
+                        화면 보기
+                      </button>
+                    </td>
+                    <td style={{ padding: '8px 10px' }}>
                       <button onClick={async () => { if (!confirm('삭제?')) return; await deleteBlogAccount(a.id); loadAll(); }}
                         style={{ padding: '2px 8px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 4, cursor: 'pointer', fontSize: 11, color: '#991b1b' }}>삭제</button>
                     </td>
                   </tr>
                 ))}
                 {accounts.length === 0 && (
-                  <tr><td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>계정이 없습니다.</td></tr>
+                  <tr><td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>계정이 없습니다.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#9ca3af' }}>
+            "화면 보기"는 실제 크롤러가 로그인/발행 작업을 하는 화면 하나를 그대로 보여줍니다. 계정마다 화면이 따로 있는 게 아니라 공용 화면이라, 캡차·추가인증이 뜰 때만 열어서 직접 처리해주세요.
+          </div>
         </div>
       )}
+      {vncFor && <VncViewer title={vncFor} onClose={() => setVncFor(null)} />}
 
       {/* ── 설정 탭 ── */}
       {tab === 'settings' && (

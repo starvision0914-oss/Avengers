@@ -14,4 +14,7 @@ urlpatterns = [
     path('posts/generate/', views.GeneratePostView.as_view()),
     path('posts/<int:pk>/', views.PostDetailView.as_view()),
     path('posts/<int:pk>/publish/', views.PostPublishView.as_view()),
+    path('posts/bulk-draft/', views.PostBulkDraftSaveView.as_view()),
+    path('posts/<int:pk>/images/', views.PostImageListView.as_view()),
+    path('posts/<int:pk>/images/<int:image_id>/', views.PostImageDetailView.as_view()),
 ]

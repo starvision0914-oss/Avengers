@@ -58,5 +58,13 @@ module.exports = {
       autorestart: true,
       restart_delay: 3000,
     },
+    {
+      name: 'avengers-vnc-ws',
+      script: '/usr/bin/websockify',
+      args: '127.0.0.1:6905 127.0.0.1:5905',
+      interpreter: 'none',
+      autorestart: true,
+      restart_delay: 3000,
+    },
   ],
 };

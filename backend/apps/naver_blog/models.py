@@ -25,6 +25,8 @@ class NaverBlogAccount(models.Model):
     memo = models.TextField(blank=True, default='')
     is_active = models.BooleanField(default=True)
     display_order = models.IntegerField(default=99)
+    cookie_data = models.TextField(blank=True, default='')
+    cookie_saved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -71,6 +73,7 @@ class NaverBlogPost(models.Model):
     STATUS_CHOICES = [
         ('draft', '초안'),
         ('ready', '발행대기'),
+        ('naver_draft', '네이버 임시저장'),
         ('published', '발행완료'),
         ('failed', '발행실패'),
     ]
@@ -82,6 +85,7 @@ class NaverBlogPost(models.Model):
     content_html = models.TextField(blank=True, default='')
     tags = models.CharField(max_length=500, blank=True, default='')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
+    naver_log_no = models.CharField(max_length=50, blank=True, default='')
     published_url = models.CharField(max_length=500, blank=True, default='')
     published_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True, default='')

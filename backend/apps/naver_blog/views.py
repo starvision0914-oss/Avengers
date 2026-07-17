@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-from .models import NaverBlogAccount, NaverKeyword, NaverBlogPost, NaverBlogSetting
+from .models import NaverBlogAccount, NaverKeyword, NaverBlogPost, NaverBlogSetting, NaverBlogPostImage
 
 
 # ──── 계정 ────
@@ -260,19 +260,40 @@ class PostManualCreateView(APIView):
 
 
 class PostPublishView(APIView):
-    """특정 포스트 즉시 발행"""
+    """특정 포스트 즉시 발행/임시저장"""
     def post(self, request, pk):
         try:
             NaverBlogPost.objects.get(pk=pk)
         except NaverBlogPost.DoesNotExist:
             return Response({'error': 'not found'}, status=404)
 
+        mode = request.data.get('mode', 'publish')
+        if mode not in ('publish', 'draft'):
+            mode = 'publish'
+
         subprocess.Popen(
-            ['python3', 'manage.py', 'publish_blog_post', '--post-id', str(pk)],
+            ['python3', 'manage.py', 'publish_blog_post', '--post-id', str(pk), '--mode', mode],
             cwd='/home/rejoice888/Avengers/backend',
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        return Response({'ok': True, 'message': '발행 시작'})
+        return Response({'ok': True, 'message': '발행 시작' if mode == 'publish' else '네이버 임시저장 시작'})
+
+
+class PostBulkDraftSaveView(APIView):
+    """상태=draft(우리 DB 초안)인 글들을 한 번에 네이버 임시저장으로 순차 실행 (계정당 1.5~3.5분 간격, 봇처럼 안 보이게)"""
+    def post(self, request):
+        limit = int(request.data.get('limit', 50))
+        pending = NaverBlogPost.objects.filter(status='draft').count()
+        if pending == 0:
+            return Response({'ok': False, 'message': '초안 상태인 글이 없습니다'})
+
+        subprocess.Popen(
+            ['python3', 'manage.py', 'publish_blog_post', '--status', 'draft',
+             '--mode', 'draft', '--limit', str(limit)],
+            cwd='/home/rejoice888/Avengers/backend',
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return Response({'ok': True, 'message': f'{min(pending, limit)}건 네이버 임시저장 순차 실행 시작 (간격 두고 진행)'})
 
 
 # ──── 설정 ────
@@ -364,6 +385,70 @@ class GeneratePostView(APIView):
             'tags': post.tags,
             'status': post.status,
         }, status=201)
+
+
+# ──── 포스트 이미지 ────
+
+PERSIST_IMG_DIR = os.path.join(settings.MEDIA_ROOT, 'naver_blog_images')
+
+
+class PostImageListView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get(self, request, pk):
+        images = NaverBlogPostImage.objects.filter(post_id=pk).order_by('order')
+        return Response([{
+            'id': img.id,
+            'url': settings.MEDIA_URL + 'naver_blog_images/' + os.path.basename(img.image_path),
+            'order': img.order,
+            'marker': f'[이미지{i + 1}]',
+        } for i, img in enumerate(images)])
+
+    def post(self, request, pk):
+        try:
+            post = NaverBlogPost.objects.get(pk=pk)
+        except NaverBlogPost.DoesNotExist:
+            return Response({'error': 'not found'}, status=404)
+
+        f = request.FILES.get('image')
+        if not f:
+            return Response({'error': 'image 필수'}, status=400)
+
+        os.makedirs(PERSIST_IMG_DIR, exist_ok=True)
+        ext = f.name.rsplit('.', 1)[-1].lower() if '.' in f.name else 'jpg'
+        fname = f'post{pk}_{int(__import__("time").time() * 1000)}.{ext}'
+        fpath = os.path.join(PERSIST_IMG_DIR, fname)
+        with open(fpath, 'wb') as out:
+            for chunk in f.chunks():
+                out.write(chunk)
+
+        next_order = (NaverBlogPostImage.objects.filter(post=post).count())
+        img = NaverBlogPostImage.objects.create(post=post, image_path=fpath, order=next_order)
+        return Response({
+            'id': img.id,
+            'url': settings.MEDIA_URL + 'naver_blog_images/' + fname,
+            'order': img.order,
+            'marker': f'[이미지{next_order + 1}]',
+        }, status=201)
+
+
+class PostImageDetailView(APIView):
+    def delete(self, request, pk, image_id):
+        img = NaverBlogPostImage.objects.filter(pk=image_id, post_id=pk).first()
+        if not img:
+            return Response({'error': 'not found'}, status=404)
+        try:
+            os.remove(img.image_path)
+        except OSError:
+            pass
+        img.delete()
+        # 남은 이미지 순번 재정렬 ([이미지N] 마커가 어긋나지 않도록)
+        remaining = NaverBlogPostImage.objects.filter(post_id=pk).order_by('order')
+        for i, im in enumerate(remaining):
+            if im.order != i:
+                im.order = i
+                im.save(update_fields=['order'])
+        return Response({'ok': True})
 
 
 # ──── 대시보드 통계 ────

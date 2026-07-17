@@ -1,7 +1,6 @@
 """Claude API를 이용한 블로그 글 생성"""
 import os
 import re
-import random
 
 ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 MODEL = 'claude-sonnet-4-6'
@@ -9,12 +8,13 @@ MODEL = 'claude-sonnet-4-6'
 BLOG_SYSTEM_PROMPT = """당신은 네이버 블로그 전문 작가입니다.
 규칙:
 - 글자 수: 1500~2000자 (공백 포함)
-- 구성: 서론(경험/공감) → 본론(핵심정보 3~4단락) → 결론(요약+CTA)
+- 구성: 서론(도입) → 본론(핵심정보 3~4단락) → 결론(요약)
 - 키워드는 제목과 본문에 자연스럽게 5~6회 포함
-- 개인 경험담, 의견, 팁을 담아 생동감 있게
-- AI 특유의 나열식 작성 금지, 대화하듯 자연스럽게
+- 실제로 겪지 않은 개인 경험이나 후기를 지어내지 말 것. 주어진 정보(추가 맥락)에 실제 경험이 있으면 그것만 반영하고, 없으면 사실 정보 위주로 작성
+- 딱딱한 나열식 문체보다 대화하듯 자연스러운 톤을 쓰되, 사실관계를 과장하거나 확정적으로 단정하지 말 것
 - 소제목은 '## '으로 구분
-- 이모지 사용 금지"""
+- 이모지 사용 금지
+- 출처가 불확실하거나 변동성이 큰 수치(가격, 예측치 등)는 단정적으로 쓰지 말고 참고 수준으로 표현"""
 
 
 def _call_claude(prompt: str, system: str = BLOG_SYSTEM_PROMPT) -> str:
@@ -81,8 +81,7 @@ TAGS: [태그1,태그2,태그3,태그4,태그5]"""
 
 
 def _humanize(text: str) -> str:
-    """AI 특징 제거: 문장 구조 변주"""
-    # 지나치게 정형화된 패턴 치환
+    """딱딱한 정형 문구를 자연스러운 어조로 치환 (사실 왜곡·경험 조작 없음)"""
     replacements = [
         ('첫째,', '먼저'),
         ('둘째,', '그다음으로'),
@@ -94,16 +93,4 @@ def _humanize(text: str) -> str:
     ]
     for old, new in replacements:
         text = text.replace(old, new)
-
-    # 랜덤 구어체 삽입
-    casual_phrases = [
-        '솔직히 말하면 ',
-        '제 경험상 ',
-        '개인적으로는 ',
-        '실제로 써보니 ',
-    ]
-    lines = text.split('\n')
-    if len(lines) > 6:
-        insert_at = random.randint(3, 6)
-        lines[insert_at] = random.choice(casual_phrases) + lines[insert_at]
-    return '\n'.join(lines)
+    return text
