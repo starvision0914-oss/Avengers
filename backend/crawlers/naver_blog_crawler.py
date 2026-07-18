@@ -359,12 +359,24 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
 
         time.sleep(0.5)
 
-        # ── 태그 입력 ──
+        # ── 태그 입력 ── 태그 입력칸은 상단 '발행' 버튼을 눌러야 열리는 설정 패널 안에만 있음(확인됨 2026-07-18).
+        # 임시저장이어도 태그를 넣으려면 이 패널을 먼저 열어야 함.
+        if tags or publish:
+            try:
+                open_btn = WebDriverWait(driver, 10).until(EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, 'button[data-click-area="tpb.publish"]')
+                ))
+                driver.execute_script("arguments[0].click();", open_btn)
+                time.sleep(1.5)
+                log('발행 설정 패널 열림')
+            except TimeoutException:
+                log('발행 설정 패널 버튼을 찾지 못함')
+
         if tags:
             try:
-                tag_input = driver.find_element(
-                    By.CSS_SELECTOR, '.tag_input, input[placeholder*="태그"], .se-tag-input'
-                )
+                tag_input = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(
+                    (By.CSS_SELECTOR, '#tag-input')
+                ))
                 tag_input.click()
                 for tag in tags.split(',')[:10]:
                     tag = tag.strip()
@@ -373,18 +385,19 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
                         _xkey('Return', disp, driver)
                         time.sleep(0.2)
                 log(f'태그 입력: {tags[:50]}')
-            except NoSuchElementException:
+            except TimeoutException:
                 log('태그 입력창 없음 (스킵)')
 
         time.sleep(0.5)
 
         if not publish:
             # ── 네이버 자체 임시저장 ── 상단 툴바 '저장' 버튼 (data-click-area="tpb.save", 확인됨 2026-07-17)
+            # 발행 설정 패널이 열려있어도 이 버튼은 그대로 사용 가능(임시저장, 실제 발행 아님)
             try:
                 save_btn = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((
                     By.CSS_SELECTOR, 'button[data-click-area="tpb.save"]'
                 )))
-                save_btn.click()
+                driver.execute_script("arguments[0].click();", save_btn)
                 time.sleep(2)
                 log('임시저장 버튼 클릭')
             except TimeoutException:
@@ -405,11 +418,10 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
 
             return 'saved_draft'
 
-        # ── 발행 버튼 ── 상단 툴바 '발행' 버튼 (data-click-area="tpb.publish", 확인됨 2026-07-17)
-        # 클릭 시 카테고리/공개설정 패널이 열리고 그 안에 최종 확인 버튼이 있을 수 있음(미검증)
+        # ── 발행 확정 ── 설정 패널 안의 최종 확인 버튼 (data-testid="seOnePublishBtn", 확인됨 2026-07-18)
         try:
             publish_btn = wait.until(EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, 'button[data-click-area="tpb.publish"]')
+                (By.CSS_SELECTOR, '[data-testid="seOnePublishBtn"]')
             ))
             publish_btn.click()
             time.sleep(2)
@@ -417,16 +429,6 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
         except TimeoutException:
             log('발행 버튼 없음')
             return ''
-
-        # 발행 확인 팝업 처리 (카테고리/공개설정 패널의 최종 발행 버튼, 셀렉터 미검증)
-        try:
-            confirm_btn = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(
-                (By.XPATH, "//*[self::button][contains(normalize-space(.), '발행')]")
-            ))
-            confirm_btn.click()
-            time.sleep(2)
-        except TimeoutException:
-            pass  # 팝업 없으면 바로 발행
 
         # 발행 후 URL 획득
         time.sleep(2)
