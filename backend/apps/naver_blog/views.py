@@ -197,6 +197,30 @@ class PostListView(APIView):
         return Response({'ok': True, 'message': f'글 생성 시작: {keyword}'})
 
 
+class GenerateFromLinkView(APIView):
+    """쇼핑 링크 하나로 리뷰형 포스팅 생성 트리거"""
+    def post(self, request):
+        url = request.data.get('url', '').strip()
+        account_id = request.data.get('account_id')
+        category = request.data.get('category', '')
+        context = request.data.get('context', '')
+
+        if not url:
+            return Response({'error': 'url 필수'}, status=400)
+
+        cmd = ['python3', 'manage.py', 'generate_shopping_post', '--url', url]
+        if account_id:
+            cmd += ['--account', str(account_id)]
+        if category:
+            cmd += ['--category', category]
+        if context:
+            cmd += ['--context', context]
+
+        subprocess.Popen(cmd, cwd='/home/rejoice888/Avengers/backend',
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return Response({'ok': True, 'message': '링크에서 상품 정보 확인 후 글 생성 시작 (1~2분 소요)'})
+
+
 class PostDetailView(APIView):
     def get(self, request, pk):
         try:
@@ -267,16 +291,15 @@ class PostPublishView(APIView):
         except NaverBlogPost.DoesNotExist:
             return Response({'error': 'not found'}, status=404)
 
-        mode = request.data.get('mode', 'publish')
-        if mode not in ('publish', 'draft'):
-            mode = 'publish'
+        # 실제 발행(공개)은 아직 미검증 + 사용자 요청으로 비활성화. 항상 임시저장만 수행(2026-07-19).
+        mode = 'draft'
 
         subprocess.Popen(
             ['python3', 'manage.py', 'publish_blog_post', '--post-id', str(pk), '--mode', mode],
             cwd='/home/rejoice888/Avengers/backend',
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        return Response({'ok': True, 'message': '발행 시작' if mode == 'publish' else '네이버 임시저장 시작'})
+        return Response({'ok': True, 'message': '네이버 임시저장 시작'})
 
 
 class PostBulkDraftSaveView(APIView):
@@ -306,6 +329,7 @@ class SettingView(APIView):
             'has_gemini': bool(s.gemini_api_key),
             'naver_client_id': s.naver_client_id or os.environ.get('NAVER_CLIENT_ID', ''),
             'has_naver': bool(s.naver_client_id or os.environ.get('NAVER_CLIENT_ID')),
+            'style_prompt': s.style_prompt,
         })
 
     def post(self, request):
@@ -316,6 +340,8 @@ class SettingView(APIView):
             s.naver_client_id = request.data['naver_client_id']
         if 'naver_client_secret' in request.data:
             s.naver_client_secret = request.data['naver_client_secret']
+        if 'style_prompt' in request.data:
+            s.style_prompt = request.data['style_prompt']
         s.save()
         return Response({'ok': True})
 
@@ -423,6 +449,51 @@ class PostImageListView(APIView):
                 out.write(chunk)
 
         next_order = (NaverBlogPostImage.objects.filter(post=post).count())
+        img = NaverBlogPostImage.objects.create(post=post, image_path=fpath, order=next_order)
+        return Response({
+            'id': img.id,
+            'url': settings.MEDIA_URL + 'naver_blog_images/' + fname,
+            'order': img.order,
+            'marker': f'[이미지{next_order + 1}]',
+        }, status=201)
+
+
+class PostChartCreateView(APIView):
+    """실제 숫자 데이터로 막대 차트 이미지를 생성해 포스트에 첨부(AI 이미지 생성 대신 —
+    Gemini 이미지 모델은 무료 티어 할당량 0이라 사용 불가, 2026-07-19 확인)."""
+    def post(self, request, pk):
+        try:
+            post = NaverBlogPost.objects.get(pk=pk)
+        except NaverBlogPost.DoesNotExist:
+            return Response({'error': 'not found'}, status=404)
+
+        title = request.data.get('title', '').strip()
+        labels = request.data.get('labels') or []
+        values = request.data.get('values') or []
+        unit = request.data.get('unit', '')
+        reference_value = request.data.get('reference_value')
+        reference_label = request.data.get('reference_label', '')
+
+        if not title or not labels or not values or len(labels) != len(values):
+            return Response({'error': 'title, labels, values(labels와 개수 동일) 필수'}, status=400)
+        try:
+            values = [float(v) for v in values]
+            reference_value = float(reference_value) if reference_value not in (None, '') else None
+        except (TypeError, ValueError):
+            return Response({'error': 'values/reference_value는 숫자여야 함'}, status=400)
+
+        os.makedirs(PERSIST_IMG_DIR, exist_ok=True)
+        fname = f'chart_post{pk}_{int(__import__("time").time() * 1000)}.png'
+        fpath = os.path.join(PERSIST_IMG_DIR, fname)
+
+        from apps.naver_blog.services.chart_gen import generate_bar_chart
+        try:
+            generate_bar_chart(labels, values, title, fpath, unit=unit,
+                               reference_value=reference_value, reference_label=reference_label)
+        except Exception as e:
+            return Response({'error': f'차트 생성 실패: {e}'}, status=500)
+
+        next_order = NaverBlogPostImage.objects.filter(post=post).count()
         img = NaverBlogPostImage.objects.create(post=post, image_path=fpath, order=next_order)
         return Response({
             'id': img.id,

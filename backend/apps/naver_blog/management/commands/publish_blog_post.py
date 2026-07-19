@@ -41,8 +41,11 @@ class Command(BaseCommand):
         parser.add_argument('--post-id', type=int, help='특정 포스트 ID')
         parser.add_argument('--status', type=str, default='ready', help='발행 대상 상태 (기본: ready)')
         parser.add_argument('--limit', type=int, default=5, help='최대 발행 수')
-        parser.add_argument('--mode', type=str, default='publish', choices=['publish', 'draft'],
-                            help='publish=네이버에 실제 발행(공개), draft=네이버 자체 임시저장(비공개)')
+        # 기본값을 draft로 둠(안전 기본값): --mode를 깜빡 빠뜨려도 실수로 실제 발행되지 않도록.
+        # 실제 공개 발행은 미검증 + 사용자 요청으로 비활성화 상태(2026-07-19, generate_blog_post.py
+        # 호출부가 mode 생략 → 기본값 publish 때문에 실제 발행 사고가 났던 적 있음).
+        parser.add_argument('--mode', type=str, default='draft', choices=['publish', 'draft'],
+                            help='publish=네이버에 실제 발행(공개), draft=네이버 자체 임시저장(비공개, 기본값)')
 
     def handle(self, *args, **options):
         if not _acquire_lock():
@@ -105,11 +108,10 @@ class Command(BaseCommand):
                         img.image_path for img in post.images.order_by('order')
                         if img.image_path
                     ]
-                    # logNo 직접 URL 접근이 "삭제된 게시물" 오탐을 일으켜(2026-07-17 확인) 비활성화.
-                    # 저장은 계속 새 임시글로 생성됨 — 추후 클릭 기반 재개 방식으로 재구현 필요.
-                    existing_log_no = ''
+                    # mode=draft이고 예전에 저장한 제목이 있으면, 목록에서 그 글을 클릭해 열어 덮어씀(중복 방지)
+                    edit_match_title = post.naver_last_saved_title if mode == 'draft' else ''
                     self.stdout.write(f'  [{account.display_name}] {action_label}: {post.title[:30]} (이미지 {len(image_paths)}개)'
-                                       + (f' [기존 임시저장 수정: logNo={existing_log_no}]' if existing_log_no else ''))
+                                       + (f' [기존 임시저장 수정 시도: "{edit_match_title[:20]}"]' if edit_match_title else ''))
                     result = write_and_publish(
                         driver,
                         blog_id=blog_id,
@@ -119,12 +121,13 @@ class Command(BaseCommand):
                         image_paths=image_paths,
                         log_fn=log_fn,
                         publish=(mode == 'publish'),
-                        log_no=existing_log_no,
+                        edit_match_title=edit_match_title,
                     )
 
                     if mode == 'draft':
                         if result:
                             post.status = 'naver_draft'
+                            post.naver_last_saved_title = post.title
                             if result != 'saved_draft':
                                 post.naver_log_no = result
                         else:

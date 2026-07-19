@@ -6,6 +6,7 @@ class NaverBlogSetting(models.Model):
     gemini_api_key = models.CharField(max_length=200, blank=True, default='')
     naver_client_id = models.CharField(max_length=100, blank=True, default='')
     naver_client_secret = models.CharField(max_length=100, blank=True, default='')
+    style_prompt = models.TextField(blank=True, default='')
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -86,6 +87,7 @@ class NaverBlogPost(models.Model):
     tags = models.CharField(max_length=500, blank=True, default='')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='draft')
     naver_log_no = models.CharField(max_length=50, blank=True, default='')
+    naver_last_saved_title = models.CharField(max_length=500, blank=True, default='')
     published_url = models.CharField(max_length=500, blank=True, default='')
     published_at = models.DateTimeField(null=True, blank=True)
     error_message = models.TextField(blank=True, default='')

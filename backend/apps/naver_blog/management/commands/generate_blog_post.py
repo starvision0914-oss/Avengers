@@ -63,6 +63,8 @@ class Command(BaseCommand):
         self.stdout.write(f'  상태: {post.status}')
 
         if options['publish'] and account:
-            self.stdout.write(f'[blog] 발행 시작: {account.display_name}')
+            self.stdout.write(f'[blog] 네이버 임시저장 시작: {account.display_name}')
             from django.core.management import call_command
-            call_command('publish_blog_post', post_id=post.id)
+            # 실제 발행(공개)은 미검증 + 사용자 요청으로 비활성화. mode 생략 시 기본값이
+            # 'publish'라 반드시 명시해야 함 — 이걸 놓쳐서 실제 발행 사고가 났었음(2026-07-19).
+            call_command('publish_blog_post', post_id=post.id, mode='draft')

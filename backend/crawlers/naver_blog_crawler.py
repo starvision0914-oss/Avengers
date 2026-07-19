@@ -101,8 +101,9 @@ def _xkey(key, display_env=None, driver=None):
         from selenium.webdriver.common.action_chains import ActionChains
         from selenium.webdriver.common.keys import Keys
         keymap = {'Return': Keys.RETURN, 'Tab': Keys.TAB, 'Delete': Keys.DELETE, 'BackSpace': Keys.BACKSPACE}
-        if key == 'ctrl+a':
-            ActionChains(driver).key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL).perform()
+        if key in ('ctrl+a', 'ctrl+b'):
+            letter = key.split('+')[1]
+            ActionChains(driver).key_down(Keys.CONTROL).send_keys(letter).key_up(Keys.CONTROL).perform()
         else:
             ActionChains(driver).send_keys(keymap.get(key, key)).perform()
         time.sleep(0.1)
@@ -183,6 +184,26 @@ def login_naver(driver, login_id: str, login_pw: str, log_fn=None) -> bool:
         return False
 
 
+def _insert_heading(driver, text, disp, log_fn=None):
+    """'## 텍스트' 마커를 실제 굵은 소제목으로 변환(Ctrl+B 토글, 확인 필요 — 2026-07-19 버그 수정).
+    이전에는 '## '가 그대로 텍스트에 노출되던 문제가 있었음."""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+        logger.info(msg)
+    try:
+        _xkey('ctrl+b', disp, driver)
+        time.sleep(0.15)
+        _xtype(text, disp, driver)
+        _xkey('Return', disp, driver)
+        _xkey('ctrl+b', disp, driver)  # 다음 본문은 굵게 안 되도록 해제
+        time.sleep(0.15)
+        log(f'소제목 삽입: {text[:30]}')
+    except Exception as e:
+        log(f'소제목 삽입 실패({e}) — 일반 텍스트로 대체')
+        _xtype(text + '\n', disp, driver)
+
+
 def _insert_quote(driver, text, disp, log_fn=None):
     """상단 툴바 '인용구' 버튼으로 인용구 블록 삽입 후 텍스트 입력 (기본 스타일, 확인됨 2026-07-17)"""
     def log(msg):
@@ -229,6 +250,106 @@ def _insert_image(driver, file_path, disp, log_fn=None):
         return False
 
 
+def _insert_shopping_connect(driver, product_match: str, disp, log_fn=None) -> bool:
+    """상단 툴바 '쇼핑커넥트' 버튼으로 상품 카드 삽입(확인됨 2026-07-19).
+    product_match: 브랜드커넥트에서 이미 링크 발급받은 상품명의 일부 문자열(패널의 '최근 발급된 링크' 목록에서 매칭).
+    이 버튼으로 넣어야 네이버가 발행 시 표시광고법 대가성 문구를 자동으로 붙여줌(직접 링크 붙여넣기와 다름).
+    주의: 상품 카드와 '내돈내산' 글감은 동시에 넣을 수 없음(네이버 정책, 수익형 요소 개입 시 내돈내산 불가)."""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+        logger.info(msg)
+    try:
+        sc_btn = None
+        for btn in driver.find_elements(By.CSS_SELECTOR, 'button[data-name="shopping-connect"]'):
+            sc_btn = btn
+            break
+        if sc_btn is None:
+            log('쇼핑커넥트 버튼을 찾지 못함')
+            return False
+        driver.execute_script("arguments[0].click();", sc_btn)
+        time.sleep(1.5)
+
+        target_add_btn = None
+        for item in driver.find_elements(By.CSS_SELECTOR, '.se-shopping-connect-item'):
+            if product_match in item.text:
+                try:
+                    target_add_btn = item.find_element(By.CSS_SELECTOR, '.se-shopping-connect-item-add-button')
+                    break
+                except NoSuchElementException:
+                    continue
+        if target_add_btn is None:
+            log(f'쇼핑커넥트 상품 매칭 실패: "{product_match}" (발급된 링크 목록에서 못 찾음)')
+            try:
+                driver.find_element(By.XPATH, "//div[contains(text(),'쇼핑 커넥트')]/following::button[1]").click()
+            except Exception:
+                pass
+            return False
+
+        driver.execute_script("arguments[0].click();", target_add_btn)
+        time.sleep(1)
+        confirm_btn = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(
+            (By.XPATH, "//button[normalize-space(.)='추가하기']")
+        ))
+        confirm_btn.click()
+        time.sleep(1.5)
+        log(f'쇼핑커넥트 상품 삽입: {product_match}')
+        return True
+    except Exception as e:
+        log(f'쇼핑커넥트 삽입 실패: {e}')
+        return False
+
+
+def resolve_shopping_product(driver, url: str, log_fn=None) -> dict:
+    """쇼핑커넥트/naver.me 단축링크를 열어서 실제 상품 정보를 읽어옴(확인됨 2026-07-19).
+    반환: {title, brand, price, orig_price, discount_pct, rating, review_count, resolved_url} — 실패한 항목은 빈 값/None.
+    이 정보는 실제 스펙/가격이므로 콘텐츠 생성 시 가짜 체험 없이 사실 기반 설득 근거로 사용한다."""
+    def log(msg):
+        if log_fn:
+            log_fn(msg)
+        logger.info(msg)
+
+    import re as _re
+    info = {'title': '', 'brand': '', 'price': None, 'orig_price': None,
+            'discount_pct': None, 'rating': None, 'review_count': None, 'resolved_url': ''}
+    try:
+        driver.get(url)
+        time.sleep(3)
+        info['resolved_url'] = driver.current_url
+        info['title'] = driver.title.split(' : ')[0].strip()
+
+        body_text = driver.find_element(By.TAG_NAME, 'body').text
+
+        price_m = _re.search(r'\b(\d{1,3}(?:,\d{3})*)원\b', body_text)
+        # 할인율%와 정가 패턴: "16% 16,900원" 형태를 우선 탐색
+        discount_m = _re.search(r'(\d{1,2})%\s*\n?\s*(\d{1,3}(?:,\d{3})*)원', body_text)
+        if discount_m:
+            info['discount_pct'] = int(discount_m.group(1))
+            info['orig_price'] = int(discount_m.group(2).replace(',', ''))
+        rating_m = _re.search(r'\b([0-5]\.\d{1,2})\b', body_text)
+        review_m = _re.search(r'([\d,]+)\s*건\s*(?:리뷰|후기)?', body_text)
+
+        # 판매가는 할인율 패턴 직후 나오는 첫 번째 원화 금액(직전 정가와 다른 값)으로 추정
+        prices = [int(x.replace(',', '')) for x in _re.findall(r'\b(\d{1,3}(?:,\d{3})*)원\b', body_text)]
+        if info['orig_price'] and len(prices) >= 2:
+            for p in prices:
+                if p != info['orig_price']:
+                    info['price'] = p
+                    break
+        elif price_m:
+            info['price'] = int(price_m.group(1).replace(',', ''))
+
+        if rating_m:
+            info['rating'] = rating_m.group(1)
+        if review_m:
+            info['review_count'] = review_m.group(1)
+
+        log(f'상품 정보 확인: {info["title"][:40]} / 가격 {info["price"]} / 평점 {info["rating"]}')
+    except Exception as e:
+        log(f'상품 정보 조회 실패: {e}')
+    return info
+
+
 def fetch_temp_post_lognos(driver, blog_id):
     """admin.blog.naver.com의 임시저장 글 목록 JSON API 조회 (확인됨 2026-07-17).
     반환: [{blogNo, logNo, title, modiDate, editorVersion}, ...]"""
@@ -249,14 +370,14 @@ def fetch_temp_post_lognos(driver, blog_id):
 def write_and_publish(driver, blog_id: str, title: str, content: str,
                       tags: str = '', category_name: str = '',
                       image_paths: list = None, log_fn=None,
-                      publish: bool = True, log_no: str = '') -> str:
+                      publish: bool = True, edit_match_title: str = '') -> str:
     """
     글 작성 후 발행(publish=True) 또는 네이버 자체 임시저장(publish=False)
-    log_no를 주면 새 글이 아니라 해당 임시저장 글을 열어서 덮어씀(중복 방지, 미검증).
+    edit_match_title을 주면 새 글 대신, 임시저장 목록에서 그 제목과 정확히 일치하는
+    글을 클릭해서 열고 내용을 덮어씀(중복 방지). logNo 직접 URL 접근은 "삭제된 게시물"
+    오탐이 나서(2026-07-17) 쓰지 않고, 실제 목록 클릭 방식만 사용(확인됨 2026-07-19).
+    찾지 못하면 새 글로 진행.
     반환: 발행 시 결과 URL, 임시저장 시 logNo 문자열(조회 실패하면 'saved_draft'), 실패 시 ''
-
-    주의: publish=False(임시저장) 경로의 버튼 셀렉터는 실제 네이버 화면에서
-    검증되지 않았음. 계정 등록 후 1개 계정으로 반드시 먼저 테스트할 것.
     """
     def log(msg):
         if log_fn:
@@ -265,28 +386,28 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
 
     disp = _get_display()
     image_paths = image_paths or []
+    editing_existing = False
 
     try:
-        # 글쓰기 페이지 이동 (log_no 있으면 해당 임시저장 글을 직접 열어서 수정)
-        url = f'{BLOG_WRITE_URL}?blogId={blog_id}' + (f'&logNo={log_no}' if log_no else '')
+        # 글쓰기 페이지 이동 (항상 새 글 화면에서 시작 — logNo 직접 접근은 안 씀)
+        url = f'{BLOG_WRITE_URL}?blogId={blog_id}'
         driver.get(url)
         time.sleep(3)
-        log('글쓰기 페이지 이동 완료' + (f' (logNo={log_no} 수정)' if log_no else ''))
+        log('글쓰기 페이지 이동 완료')
 
         wait = WebDriverWait(driver, 20)
 
-        if not log_no:
-            # "작성 중인 글이 있습니다. 이어서 작성하시겠습니까?" 팝업 — 항상 새 글로 시작하도록 '취소' 클릭
-            # 주의: contains()로 하면 툴바의 '취소선' 버튼이 먼저 걸림 — 정확히 '취소'인 것만 매칭
-            try:
-                cancel_btn = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
-                    (By.XPATH, "//button[normalize-space(.)='취소']")
-                ))
-                cancel_btn.click()
-                time.sleep(1)
-                log('이어서 작성 팝업 — 취소(새 글로 시작)')
-            except TimeoutException:
-                pass
+        # "작성 중인 글이 있습니다. 이어서 작성하시겠습니까?" 팝업 — 항상 새 글로 시작하도록 '취소' 클릭
+        # 주의: contains()로 하면 툴바의 '취소선' 버튼이 먼저 걸림 — 정확히 '취소'인 것만 매칭
+        try:
+            cancel_btn = WebDriverWait(driver, 3).until(EC.element_to_be_clickable(
+                (By.XPATH, "//button[normalize-space(.)='취소']")
+            ))
+            cancel_btn.click()
+            time.sleep(1)
+            log('이어서 작성 팝업 — 취소(새 글로 시작)')
+        except TimeoutException:
+            pass
 
         # 도움말 패널이 열려있으면 닫기(가림 방지, 없어도 무방)
         try:
@@ -295,6 +416,32 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
         except Exception:
             pass
 
+        # edit_match_title이 있으면 임시저장 목록에서 같은 제목 글을 클릭해서 열기(수정 모드)
+        if edit_match_title:
+            try:
+                count_btn = driver.find_element(By.CLASS_NAME, 'save_count_btn__ZTLNa')
+                driver.execute_script("arguments[0].click();", count_btn)
+                time.sleep(1.5)
+                target = None
+                for btn in driver.find_elements(By.CSS_SELECTOR, 'button.article_button__JNVjf'):
+                    if btn.text.strip() == edit_match_title.strip() or edit_match_title.strip() in btn.text:
+                        target = btn
+                        break
+                if target:
+                    driver.execute_script("arguments[0].click();", target)
+                    time.sleep(2.5)
+                    editing_existing = True
+                    log(f'기존 임시저장 글 열어서 수정: {edit_match_title[:30]}')
+                else:
+                    # 못 찾으면 목록 팝업 닫고 새 글로 진행
+                    try:
+                        driver.find_element(By.CSS_SELECTOR, '.close_button__YWXJ_').click()
+                    except Exception:
+                        pass
+                    log(f'수정 대상 못 찾음({edit_match_title[:30]}) — 새 글로 진행')
+            except Exception as e:
+                log(f'임시저장 목록 열기 실패({e}) — 새 글로 진행')
+
         # ── 제목 입력 ── (SmartEditor ONE: 제목도 contenteditable 컴포넌트, 별도 iframe 없음)
         try:
             title_area = wait.until(EC.element_to_be_clickable(
@@ -302,7 +449,7 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
             ))
             title_area.click()
             time.sleep(0.3)
-            if log_no:
+            if editing_existing:
                 _xkey('ctrl+a', disp, driver)
                 _xkey('Delete', disp, driver)
                 time.sleep(0.2)
@@ -323,7 +470,7 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
             )))
             body_area.click()
             time.sleep(0.3)
-            if log_no:
+            if editing_existing:
                 # 기존 본문 전체 삭제 후 새로 입력(미검증: 제목까지 같이 지워지지 않는지 확인 필요)
                 _xkey('ctrl+a', disp, driver)
                 _xkey('Delete', disp, driver)
@@ -340,9 +487,13 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
             for line in content.split('\n'):
                 stripped = line.strip()
                 img_m = _re.match(r'^\[이미지\s*(\d+)\]$', stripped)
+                sc_m = _re.match(r'^\[쇼핑상품:\s*(.+?)\s*\]$', stripped)
                 if stripped.startswith('> '):
                     flush()
                     _insert_quote(driver, stripped[2:], disp, log_fn)
+                elif stripped.startswith('## '):
+                    flush()
+                    _insert_heading(driver, stripped[3:], disp, log_fn)
                 elif img_m:
                     flush()
                     idx = int(img_m.group(1)) - 1
@@ -350,6 +501,19 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
                         _insert_image(driver, image_paths[idx], disp, log_fn)
                     else:
                         log(f'이미지 마커 [이미지{idx+1}] — 전달된 이미지 부족(스킵)')
+                elif sc_m:
+                    flush()
+                    _insert_shopping_connect(driver, sc_m.group(1), disp, log_fn)
+                    # 카드 삽입으로 에디터 DOM이 재구성되어 이전 body_area 참조가 stale해짐 — 새로 조회해서 클릭
+                    try:
+                        fresh_body = driver.find_element(
+                            By.XPATH,
+                            "(//div[contains(@class,'se-module-text') and not(contains(@class,'se-title-text'))])[last()]"
+                        )
+                        fresh_body.click()
+                    except Exception as e:
+                        log(f'쇼핑카드 삽입 후 포커스 재확보 실패: {e}')
+                    time.sleep(0.3)
                 else:
                     buf.append(line)
             flush()
@@ -378,6 +542,12 @@ def write_and_publish(driver, blog_id: str, title: str, content: str,
                     (By.CSS_SELECTOR, '#tag-input')
                 ))
                 tag_input.click()
+                if editing_existing:
+                    # 기존 태그 칩들을 지우지 않고 이어 입력하면 뒤섞임(2026-07-19 발견) —
+                    # 입력칸이 빈 상태에서 Backspace는 마지막 태그 칩을 하나씩 지움. 최대 30개 한도보다 넉넉히 반복.
+                    for _ in range(40):
+                        _xkey('BackSpace', disp, driver)
+                    time.sleep(0.3)
                 for tag in tags.split(',')[:10]:
                     tag = tag.strip()
                     if tag:

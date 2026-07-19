@@ -194,8 +194,17 @@ def create_driver(download_dir=None, kill_existing=True, user_data_dir=None, ena
             # 무한정 멈춤(타임아웃 없음) — rejoice987/rejoice911 부가세수집이 '로그인 시도 1/3'
             # 단계에서 몇 분씩 조용히 멈춰있던 근본원인(2026-07-08). 120초로 상한을 둬서
             # 이후 호출부의 재시도 로직이 실제로 작동하도록 함.
+            # 2026-07-19: set_timeout()만으로는 무효였음 — Selenium 4.x는 RemoteConnection
+            # __init__ 시점(keep_alive=True)에 urllib3 커넥션풀(_conn)을 그 시점의
+            # timeout으로 미리 만들어 캐싱해두고, 이후 set_timeout()은 _client_config만
+            # 갱신할 뿐 이미 만들어진 _conn을 다시 만들지 않아 실제로는 계속 무제한 대기했음
+            # (11번가 verify_11st_logins가 find_elements에서 수십 분씩 멈춘 근본원인).
+            # _conn을 새 timeout으로 강제로 재생성해야 실효가 생긴다.
             try:
-                driver.command_executor.set_timeout(120)
+                ce = driver.command_executor
+                ce.set_timeout(120)
+                ce._client_config.timeout = 120
+                ce._conn = ce._get_connection_manager()
             except Exception:
                 pass
             if enable_perf_log:

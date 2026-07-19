@@ -13,7 +13,10 @@ Redis SMS 수신 플로우로 자동 해결합니다.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from django.core.management.base import BaseCommand
@@ -23,6 +26,29 @@ from crawlers.browser import create_driver
 from crawlers.eleven_crawler import _do_login, _save_cookies
 
 OTP_KEYWORDS = ('otpLoginForm', 'otp', 'auth_type_01')
+
+
+def _force_kill_driver(driver):
+    """드라이버(크롬드라이버+크롬)가 멈춰서 응답이 없을 때 OS 프로세스를 강제 종료.
+    driver.quit()은 죽은 연결에 또 HTTP 요청을 보내 같이 멈출 수 있어 먼저 PID를 직접 kill."""
+    pid = None
+    try:
+        pid = driver.service.process.pid
+    except Exception:
+        pid = None
+    if pid:
+        try:
+            subprocess.run(['pkill', '-9', '-P', str(pid)], timeout=5)
+        except Exception:
+            pass
+        try:
+            os.kill(pid, 9)
+        except Exception:
+            pass
+    try:
+        driver.quit()
+    except Exception:
+        pass
 
 
 class Command(BaseCommand):
@@ -37,6 +63,8 @@ class Command(BaseCommand):
                             help='do not wait for SMS OTP — mark as OTP_REQUIRED')
         parser.add_argument('--cooldown', type=float, default=3.0,
                             help='seconds between accounts')
+        parser.add_argument('--timeout', type=float, default=180.0,
+                            help='계정당 최대 대기 시간(초) — 초과 시 강제종료하고 다음 계정으로 진행')
         parser.add_argument('--out', type=str,
                             default='/tmp/11st_verify_result.json')
 
@@ -69,44 +97,72 @@ class Command(BaseCommand):
                 f'\n[{i}/{len(accounts)}] {acct.login_id} ({acct.seller_name}) — 시도')
             self.stdout.flush()
 
+            # 크롬드라이버가 죽거나 응답불능이 되면 셀레니움 호출이 무한정 멈출 수 있음
+            # (Selenium 4.x의 command_executor 타임아웃은 드라이버 생성 후 연결풀에
+            # 소급 적용되지 않는 결함이 있어 실효가 없었음, 2026-07-19 확인).
+            # 별도 스레드에서 실행하고 메인 스레드에서 --timeout(기본 180초)으로 하드컷 —
+            # 초과 시 강제로 프로세스를 죽이고 다음 계정으로 넘어간다(무한 대기 방지).
+            holder = {}
+
+            def _attempt(_acct=acct, _holder=holder):
+                d = create_driver()
+                _holder['driver'] = d
+                _ok = _do_login(d, _acct.login_id, _acct.password_enc)
+                return _ok
+
             driver = None
+            timed_out = False
             try:
-                driver = create_driver()
-                try:
-                    ok = _do_login(driver, acct.login_id, acct.password_enc)
-                except Exception as exc:
-                    ok = False
-                    entry['message'] = f'exception: {exc}'
-
-                final_url = ''
-                try:
-                    final_url = driver.current_url
-                except Exception:
-                    pass
-
-                if ok:
-                    entry['status'] = 'success'
-                    entry['message'] = final_url
-                    # ★ OTP 성공 세션을 쿠키로 저장 — 안 하면 last_otp_at만 갱신되고
-                    #   세션이 버려져 "OTP완료인데 인증 안됨"(다음 크롤이 또 OTP) 발생.
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(_attempt)
                     try:
-                        _save_cookies(driver, acct)
-                        self.stdout.write(f'  ✅ 성공 → {final_url} (쿠키 저장)')
-                    except Exception as _e:
-                        self.stdout.write(f'  ✅ 성공 → {final_url} (⚠️ 쿠키저장 실패: {_e})')
+                        ok = fut.result(timeout=opts['timeout'])
+                    except FutureTimeoutError:
+                        timed_out = True
+                        ok = False
+                    except BaseException as exc:
+                        # 외부 인터럽트(SIGINT 등) 포함 — 이 계정만 실패 처리하고 배치는 계속.
+                        ok = False
+                        entry['message'] = f'interrupted: {exc!r}'
+
+                driver = holder.get('driver')
+
+                if timed_out:
+                    entry['status'] = 'timeout'
+                    entry['message'] = f'{opts["timeout"]:.0f}초 초과 — 강제종료'
+                    self.stdout.write(f'  ⏱️ 타임아웃({opts["timeout"]:.0f}초) — 강제종료 후 다음 계정')
+                    _force_kill_driver(driver)
+                    driver = None   # 이미 강제종료했으니 아래 finally에서 재시도하지 않음
                 else:
-                    # OTP 페이지에 머물렀는지 확인
-                    lower = (final_url or '').lower()
-                    if any(k.lower() in lower for k in OTP_KEYWORDS):
-                        entry['status'] = 'otp_required'
-                        entry['otp_required'] = True
-                        entry['message'] = f'OTP 미완: {final_url}'
-                        self.stdout.write(f'  ⚠️ OTP 필요 / 실패 → {final_url}')
+                    final_url = ''
+                    try:
+                        final_url = driver.current_url if driver else ''
+                    except Exception:
+                        pass
+
+                    if ok:
+                        entry['status'] = 'success'
+                        entry['message'] = final_url
+                        # ★ OTP 성공 세션을 쿠키로 저장 — 안 하면 last_otp_at만 갱신되고
+                        #   세션이 버려져 "OTP완료인데 인증 안됨"(다음 크롤이 또 OTP) 발생.
+                        try:
+                            _save_cookies(driver, acct)
+                            self.stdout.write(f'  ✅ 성공 → {final_url} (쿠키 저장)')
+                        except Exception as _e:
+                            self.stdout.write(f'  ✅ 성공 → {final_url} (⚠️ 쿠키저장 실패: {_e})')
                     else:
-                        entry['status'] = 'failed'
-                        if not entry['message']:
-                            entry['message'] = final_url or 'login returned False'
-                        self.stdout.write(f'  ❌ 실패 → {entry["message"]}')
+                        # OTP 페이지에 머물렀는지 확인
+                        lower = (final_url or '').lower()
+                        if any(k.lower() in lower for k in OTP_KEYWORDS):
+                            entry['status'] = 'otp_required'
+                            entry['otp_required'] = True
+                            entry['message'] = f'OTP 미완: {final_url}'
+                            self.stdout.write(f'  ⚠️ OTP 필요 / 실패 → {final_url}')
+                        else:
+                            entry['status'] = entry['status'] if entry['status'] != 'unknown' else 'failed'
+                            if not entry['message']:
+                                entry['message'] = final_url or 'login returned False'
+                            self.stdout.write(f'  ❌ 실패 → {entry["message"]}')
             except Exception as exc:
                 entry['status'] = 'error'
                 entry['message'] = f'driver error: {exc}'
@@ -138,6 +194,7 @@ class Command(BaseCommand):
             'failed': sum(1 for r in results if r['status'] == 'failed'),
             'otp_required': sum(1 for r in results if r['status'] == 'otp_required'),
             'error': sum(1 for r in results if r['status'] == 'error'),
+            'timeout': sum(1 for r in results if r['status'] == 'timeout'),
             'elapsed_sec': elapsed,
         }
         self.stdout.write('\n========== 결과 요약 ==========')

@@ -64,6 +64,7 @@ export interface BlogSetting {
   has_gemini: boolean;
   naver_client_id: string;
   has_naver: boolean;
+  style_prompt: string;
 }
 
 // 대시보드
@@ -73,7 +74,7 @@ export const getBlogDashboard = () =>
 // 설정
 export const getBlogSetting = () =>
   api.get<BlogSetting>('/naver-blog/settings/').then(r => r.data);
-export const saveBlogSetting = (d: Partial<{ gemini_api_key: string; naver_client_id: string; naver_client_secret: string }>) =>
+export const saveBlogSetting = (d: Partial<{ gemini_api_key: string; naver_client_id: string; naver_client_secret: string; style_prompt: string }>) =>
   api.post('/naver-blog/settings/', d).then(r => r.data);
 
 // 계정
@@ -112,6 +113,12 @@ export const publishPost = (id: number, mode: 'publish' | 'draft' = 'publish') =
 export const bulkDraftSave = (limit = 50) =>
   api.post(`/naver-blog/posts/bulk-draft/`, { limit }).then(r => r.data);
 
+// 쇼핑 링크로 글 생성
+export const generateFromLink = (url: string, accountId: number | '', category = '', context = '') =>
+  api.post('/naver-blog/posts/generate-from-link/', {
+    url, account_id: accountId || undefined, category, context,
+  }).then(r => r.data);
+
 // 제미나이 글 생성 (multipart)
 export const generatePostGemini = (
   keyword: string, category: string, context: string,
@@ -143,6 +150,12 @@ export const uploadPostImage = (postId: number, file: File) => {
 };
 export const deletePostImage = (postId: number, imageId: number) =>
   api.delete(`/naver-blog/posts/${postId}/images/${imageId}/`).then(r => r.data);
+
+// 데이터 차트 이미지 생성
+export const generateChartImage = (postId: number, d: {
+  title: string; labels: string[]; values: number[]; unit?: string;
+  reference_value?: number; reference_label?: string;
+}) => api.post<PostImage>(`/naver-blog/posts/${postId}/chart/`, d).then(r => r.data);
 
 // 수동 생성
 export const createManualPost = (d: {
