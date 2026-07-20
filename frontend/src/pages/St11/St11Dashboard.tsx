@@ -80,6 +80,26 @@ export default function St11Dashboard() {
       alert(e?.response?.data?.error || '인증 시작 실패');
     }
   }, []);
+  const onExportExcel = useCallback(() => {
+    if (!summary) return;
+    const head = ['셀러명', '셀러ID', 'CPC광고비', '충전금', '잔액', '상품수', '매출', '구매가', '순수익', '거래건수'];
+    const body = summary.sellers.map(s => [
+      s.seller_alias, s.seller_id, s.cpc_spend, s.charge, s.balance,
+      s.products ?? '', s.sales ?? '', s.cost ?? '', s.net_profit ?? '', s.tx_count,
+    ]);
+    body.push(['합계', '', summary.totals.cpc_spend, summary.totals.charge, summary.totals.balance,
+      summary.totals.products, summary.totals.sales, summary.totals.cost, summary.totals.net_profit, '']);
+    const csv = '﻿' + [head, ...body]
+      .map(row => row.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `11번가_대시보드_${date}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [summary, date]);
+
   const onGradeCrawl = useCallback(async () => {
     try {
       const r = await api.post('/cpc/crawler/trigger/', { platform: '11st', type: 'grade' });
@@ -255,6 +275,8 @@ export default function St11Dashboard() {
                   className="px-2.5 py-1 text-[12px] font-semibold bg-[#1e6fd9] text-white rounded hover:bg-[#1857ad]">ROAS</button>
                 <button onClick={() => setShowGrade(true)}
                   className="px-2.5 py-1 text-[12px] font-semibold bg-[#555] text-white rounded hover:bg-[#444]">등급현황</button>
+                <button onClick={onExportExcel}
+                  className="px-2.5 py-1 text-[12px] font-semibold bg-[#217346] text-white rounded hover:bg-[#1a5c38]">📥 엑셀 다운로드</button>
               </div>
             )}
 
@@ -359,7 +381,8 @@ export default function St11Dashboard() {
               <div className="flex items-center gap-3 text-[10px] text-[#666]">
                 <span>잔액 <b className="text-[#333]">{formatKRW(summary.totals.balance)}</b></span>
                 <span>셀러 <b className="text-[#333]">{summary.totals.seller_count}개</b></span>
-                <button onClick={() => setShowGrade(true)} className="ml-auto text-[10px] text-[#e67700] font-bold">등급</button>
+                <button onClick={onExportExcel} className="ml-auto text-[10px] text-[#217346] font-bold">📥 엑셀</button>
+                <button onClick={() => setShowGrade(true)} className="text-[10px] text-[#e67700] font-bold">등급</button>
               </div>
             </div>
             <div className="bg-white border border-[#e0e0e0] rounded overflow-hidden">

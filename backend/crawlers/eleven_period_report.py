@@ -143,6 +143,47 @@ def _period_for(today):
     return '당월', d0, d1, f'{d0:%Y-%m}'
 
 
+def _fee_payment_daily_sums(login_id, d0, d1):
+    """seller_id=login_id, '수수료결제' 거래의 날짜별(KST) 비용 합계(양수). d0~d1: date."""
+    from django.utils import timezone
+    from apps.cpc.models import ElevenCostHistory
+    kst = timezone.get_fixed_timezone(9 * 60)
+    start = dt.datetime.combine(d0, dt.time.min, tzinfo=kst)
+    end = dt.datetime.combine(d1, dt.time.max, tzinfo=kst)
+    qs = ElevenCostHistory.objects.filter(
+        seller_id=login_id, raw_description__contains='수수료결제',
+        transaction_datetime__gte=start, transaction_datetime__lte=end,
+    )
+    sums = {}
+    for r in qs:
+        k = timezone.localtime(r.transaction_datetime, kst).strftime('%Y-%m-%d')
+        sums[k] = sums.get(k, 0) + abs(r.amount)
+    return sums
+
+
+def _merge_fee_payment(filled, login_id, d0, d1, log):
+    """기간별 보고서 rows에 수수료결제(거래내역 기반)를 '총비용'(idx 6) 열에 합산."""
+    fee_sums = _fee_payment_daily_sums(login_id, d0, d1)
+    if not fee_sums:
+        return
+    total_fee = 0
+    for r in filled[1:]:
+        key = (r[0] or '').strip()
+        fee = fee_sums.get(key)
+        if fee:
+            total_fee += fee
+            try:
+                r[6] = str(int(float(r[6] or 0)) + fee)
+            except Exception:
+                pass
+    if total_fee and filled[1] and (filled[1][0] or '').strip() == '합계':
+        try:
+            filled[1][6] = str(int(float(filled[1][6] or 0)) + total_fee)
+        except Exception:
+            pass
+    log(f'[{login_id}] 수수료결제 {total_fee:,}원 합산(총비용 열에 반영)')
+
+
 def collect_period_for_account(driver, login_id, password_enc, period_text, d0, d1, sheet, log):
     """이미 만들어진(로그인된) driver로 기간별 보고서 다운로드+구글시트 업로드.
     _login 멱등(이미 로그인이면 세션 재사용) → 상품ROAS 크롤과 로그인 1회 공유 가능."""
@@ -152,6 +193,7 @@ def collect_period_for_account(driver, login_id, password_enc, period_text, d0, 
     rows = collect_period_rows(driver, sn, period_text, log)
     filled = fill_missing_dates(rows, d0, d1)
     filled = [[('' if str(c).strip() == '-' else c) for c in r] for r in filled]
+    _merge_fee_payment(filled, login_id, d0, d1, log)
     log(f'[{login_id}] 기간별 {len(filled)}행 (헤더+합계+{(d1 - d0).days + 1}일)')
     if sheet is not None:
         from .gsheet_upload import upload_rows

@@ -1,6 +1,9 @@
 #!/bin/bash
 # Avengers 전체 백업 — 매일 23:00. (Claude 계정 변경 대비: 코드·문서·메모리는 GitHub, DB는 서버 보관)
 #  1) MySQL Avengers 덤프 → ~/backups (gzip, 7일 보관)
+#  1-1) MySQL 워드프레스(오산홈페이지) 덤프 → ~/backups (gzip, 7일 보관)
+#       2026-07-20: 지금까지 이 DB는 자동백업 대상이 아니어서(7/13 1회성 수동백업만 존재)
+#       그 뒤 발행한 글이 전부 무방비 상태였음 — 재부팅 전 점검 중 발견해 추가.
 #  2) Claude 메모리 → 레포 docs/claude_memory/ 동기화
 #  3) git add/commit/push (코드+문서+메모리). DB덤프는 용량(>2GB)으로 git 제외.
 set -u
@@ -27,6 +30,23 @@ if [ -n "${DBNAME:-}" ]; then
   ls -1t "$BK"/avengers_db_*.sql.gz 2>/dev/null | tail -n +8 | xargs -r rm -f   # 7일분만 유지
 else
   echo "$(date '+%F %T') DB접속정보 추출 실패 — 덤프 건너뜀" >> "$LOG"
+fi
+
+# 1-1) 워드프레스(오산홈페이지) DB 덤프
+WP_CONFIG=/home/rejoice888/homepage/wp-config.php
+if [ -f "$WP_CONFIG" ]; then
+  WPDB=$(grep "DB_NAME" "$WP_CONFIG" | sed -E "s/.*'DB_NAME', *'([^']*)'.*/\1/")
+  WPUSER=$(grep "DB_USER" "$WP_CONFIG" | sed -E "s/.*'DB_USER', *'([^']*)'.*/\1/")
+  WPPASS=$(grep "DB_PASSWORD" "$WP_CONFIG" | sed -E "s/.*'DB_PASSWORD', *'([^']*)'.*/\1/")
+  WPHOST=$(grep "DB_HOST" "$WP_CONFIG" | sed -E "s/.*'DB_HOST', *'([^']*)'.*/\1/")
+  if [ -n "${WPDB:-}" ]; then
+    mysqldump -h"${WPHOST:-localhost}" -u"$WPUSER" -p"$WPPASS" --single-transaction --quick "$WPDB" 2>>"$LOG" | gzip > "$BK/homepage_db_${TS}.sql.gz"
+    SZ=$(du -h "$BK/homepage_db_${TS}.sql.gz" | cut -f1)
+    echo "$(date '+%F %T') 워드프레스 DB덤프 완료: $SZ" >> "$LOG"
+    ls -1t "$BK"/homepage_db_*.sql.gz 2>/dev/null | tail -n +8 | xargs -r rm -f   # 7일분만 유지
+  else
+    echo "$(date '+%F %T') 워드프레스 DB접속정보 추출 실패 — 덤프 건너뜀" >> "$LOG"
+  fi
 fi
 
 # 2) 메모리 → 레포 동기화 (GitHub로 보존)

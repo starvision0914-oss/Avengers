@@ -28,6 +28,10 @@ def classify_11st_description(desc):
     desc = desc or ''
     if 'NewCPC' in desc or 'CPC' in desc:
         return 'CPC'
+    # '수수료결제' = 광고 관련 수수료(사용자 확인, 2026-07-19) — CPC에 합산.
+    # '서버이용료 결제' 등 다른 수수료 항목과 헷갈리지 않게 정확한 문자열로만 매칭.
+    if '수수료결제' in desc:
+        return 'CPC'
     if '프로모션' in desc or '보상' in desc:
         return 'REWARD'
     if '충전' in desc:
