@@ -181,6 +181,15 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
                     f'재확인 건수 불일치(원래 {total_before}건인데 {after_on + after_off}건 감지 — 렌더링 미완료로 추정)')
             break
         except Exception as e:
+            # 세션 자체가 죽은 경우(아래 문구들)는 추정치로 눙치면 안 됨 — 여기서 삼키면
+            # run_control의 죽은 driver 감지(dead session → 재생성)가 트리거되지 않아,
+            # 이후 전 계정이 로그인 실패로 연쇄 실패한다(2026-07-21 실측, rejoice666 이후
+            # 24계정 전부 '로그인 실패(2회)' — 실제로는 driver가 죽어있었을 뿐). 그대로 재던짐.
+            dead = any(s in str(e).lower() for s in
+                       ('not attached', 'invalid session', 'no such window',
+                        'chrome not reachable', 'disconnected', 'aborted by navigation'))
+            if dead:
+                raise
             if _nav_try == 0:
                 log(f'재진입 실패({e}) — 3초 대기 후 재시도')
                 time.sleep(3)
