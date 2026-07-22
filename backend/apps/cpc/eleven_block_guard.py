@@ -365,10 +365,19 @@ def acquire_global_lock(name, platform='11st'):
 
 
 def release_global_lock(platform='11st'):
+    """자기 PID가 잡은 락만 해제. 다른 프로세스가 이미 새로 잡은 락을 실수로 지우면
+    두 크롤이 진짜 동시실행되는 위험이 있다(2026-07-22 실측: 지마켓 상품광고비 크롤과
+    적자삭제가 락파일 경쟁으로 동시 실행됨) — PID 일치 확인 후에만 unlink."""
     try:
         lock = _lock_path(platform)
         if lock.exists():
-            lock.unlink()
+            try:
+                parts = lock.read_text(encoding='utf-8').strip().split('|')
+                owner_pid = int(parts[0])
+            except Exception:
+                owner_pid = None
+            if owner_pid is None or owner_pid == os.getpid():
+                lock.unlink()
     except Exception:
         pass
 
