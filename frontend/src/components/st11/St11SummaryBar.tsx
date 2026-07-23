@@ -45,6 +45,9 @@ export default function St11SummaryBar({ totals, delta, lastCollected, periodMod
         {isDaily
           ? <DeltaItem label="총CPC" value={totals.cpc_spend} delta={delta.cpc_delta} />
           : <Item label="총CPC" value={totals.cpc_spend} />}
+        <span className="text-[10px] text-[#999]">
+          (CPC {formatKRW(totals.cpc_pure || 0)} · 수수료결제 {formatKRW(totals.fee_payment || 0)})
+        </span>
         <Sep />
         <span>
           <span className="text-[#888] mr-1">총충전:</span>

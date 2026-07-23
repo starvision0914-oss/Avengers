@@ -14,9 +14,23 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 import redis as redis_client
+from urllib.parse import urlparse
 
 from .browser import create_driver, stop_display
 from .utils import parse_int, classify_11st_description, wait_for_download
+
+
+def _is_soffice_url(url):
+    """soffice.11st.co.kr(셀러오피스) 실제 도메인 도달 여부.
+    'soffice.11st.co.kr' in url 방식은 로그인 실패 후 남은
+    login.11st.co.kr/...?returnURL=https://soffice.11st.co.kr 같은 URL의
+    쿼리파라미터 문자열까지 잡아 오판(2026-07-22 실측, tmxkqlwus1 —
+    OTP 오입력 거부됐는데 '성공'으로 잘못 기록됨). 실제 host만 검사."""
+    try:
+        host = urlparse(url).netloc
+    except Exception:
+        return False
+    return 'soffice.11st.co.kr' in host or 'selleroffice' in host
 
 logger = logging.getLogger('crawler')
 
@@ -594,7 +608,7 @@ def _do_login(driver, login_id, password):
                 pass
 
             logger.info(f'[11st:{login_id}] OTP 후 URL: {driver.current_url}')
-            if 'soffice.11st.co.kr' in driver.current_url or 'selleroffice' in driver.current_url:
+            if _is_soffice_url(driver.current_url):
                 logger.info(f'[11st:{login_id}] OTP 인증 성공!')
                 try:
                     from apps.cpc.models import CrawlerAccount
@@ -606,7 +620,7 @@ def _do_login(driver, login_id, password):
             return False
 
         # 로그인 성공 확인
-        if 'soffice.11st.co.kr' in driver.current_url or 'selleroffice' in driver.current_url:
+        if _is_soffice_url(driver.current_url):
             return True
 
         return False

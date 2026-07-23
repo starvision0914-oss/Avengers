@@ -679,6 +679,7 @@ class ElevenSummaryView(views.APIView):
         stats_map = {}
         for s in qs.values('seller_id').annotate(
             cpc_total=Sum('amount', filter=models.Q(transaction_type='CPC')),
+            fee_payment_total=Sum('amount', filter=models.Q(transaction_type='CPC', raw_description__icontains='수수료결제')),
             charge_total=Sum('amount', filter=models.Q(transaction_type='CHARGE')),
             settle_total=Sum('amount', filter=models.Q(transaction_type='SETTLE')),
             server_fee_total=Sum('amount', filter=models.Q(transaction_type='OTHERS', raw_description__icontains='서버이용료')),
@@ -761,6 +762,7 @@ class ElevenSummaryView(views.APIView):
 
         sellers = []
         total_cpc = 0
+        total_fee_payment = 0
         total_charge = 0
         total_balance = 0
         total_cash = 0
@@ -779,6 +781,8 @@ class ElevenSummaryView(views.APIView):
             sid = acct.login_id
             stat = stats_map.get(sid, {})
             cpc = abs(stat.get('cpc_total') or 0)
+            fee_payment = abs(stat.get('fee_payment_total') or 0)   # 수수료결제(CPC에 합산집계된 항목 중 분리표시용)
+            cpc_pure = cpc - fee_payment                            # 순수 CPC(수수료결제 제외)
             charge = abs(stat.get('charge_total') or 0)
             settle = stat.get('settle_total') or 0
             server_fee = abs(stat.get('server_fee_total') or 0)   # 서버이용료(실비용)
@@ -795,6 +799,8 @@ class ElevenSummaryView(views.APIView):
                 'seller_id': sid,
                 'seller_alias': acct.seller_name or sid,
                 'cpc_spend': cpc,
+                'cpc_pure': cpc_pure,
+                'fee_payment': fee_payment,
                 'cpc_delta': cpc_delta,
                 'charge': charge if not is_cash else 0,
                 'settle': settle if is_cash else 0,
@@ -867,6 +873,7 @@ class ElevenSummaryView(views.APIView):
 
             sellers.append(seller)
             total_cpc += cpc
+            total_fee_payment += fee_payment
             total_charge += charge
             total_balance += balance
 
@@ -906,6 +913,8 @@ class ElevenSummaryView(views.APIView):
             'date': date_str or (date_from + '~' + date_to if date_from else ''),
             'totals': {
                 'cpc_spend': total_cpc,
+                'cpc_pure': total_cpc - total_fee_payment,
+                'fee_payment': total_fee_payment,
                 'charge': total_charge,
                 'balance': total_balance,
                 'ad_total': total_cpc,

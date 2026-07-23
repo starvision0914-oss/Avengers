@@ -112,3 +112,5 @@
 - [오너클랜 /owner 페이지 범위](project_ownerclan_owner_page_scope.md) — /ownerclan(예비상품)과 /owner(오너클랜크롤러) 혼동주의. /owner는 계정정보크롤링만 지시됨, 상품자동수집("새 상품 가져오기")은 아직 미지시·보류 상태(2026-07-14)
 - [TopNav를 사이드바로 오해](feedback_topnav_not_sidebar.md) — Avengers엔 세로 사이드바 없음(Sidebar.tsx는 죽은코드), "사이드바"=상단 TopNav. 페이지별 숨김 금지, 글자크기 20px로 전체앱 확대(2026-07-14)
 - [워드프레스 DB 백업 누락](project_wordpress_backup_gap.md) — 오산홈페이지 DB가 자동백업(backup_all.sh) 대상서 빠져있었음(7/13 이후 무방비), 재부팅 전 발견·수정(2026-07-20)
+- [오산홈페이지 오라클 이전](project_osan_homepage.md) — 2026-07-23 완료. 실서버=오라클(193.123.163.185), 로컬(45.100)은 안전장치. 캐시엔 WP_CACHE/WPCACHEHOME 상수, wp-content 쓰기권한 g+w 필요했던 함정 기록
+- [고단가 콘텐츠 배치 작성](project_highcpc_content_batch.md) — 애드센스 수익화용 부동산/건강/금융/법률 글 대량작성 진행중. "이어서 써줘"라고만 하면 진행목록 파일 보고 자동 이어감

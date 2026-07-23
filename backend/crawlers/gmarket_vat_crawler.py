@@ -400,22 +400,34 @@ def run_vat_accounts(account_filter=None, start_ym=None, end_ym=None, log_fn=Non
     if account_filter:
         accounts = [a for a in accounts if a.login_id in account_filter]
 
-    log(f"지마켓 부가세 수집 시작 — {len(accounts)}마스터계정, {start_ym}~{end_ym}")
-    ok, failed = 0, 0
-    for i, acct in enumerate(accounts, 1):
-        log(f"[{i}/{len(accounts)}] {acct.login_id} ({acct.seller_name})")
-        try:
-            success = crawl_one_vat(acct, start_ym, end_ym, log_fn=log, save=save)
-            if success:
-                ok += 1
-            else:
-                failed += 1
-        except Exception as e:
-            failed += 1
-            log(f"{acct.login_id} 오류: {e}")
-        if i < len(accounts):
-            time.sleep(random.uniform(8, 14))
+    # 다른 gmarket 크롤과 락 공유(전역 동시실행 금지) — 이 크롤러만 preflight를 안 걸어서
+    # crawl_gmarket_adcost 등과 진짜 동시 크롬 실행이 됐던 문제(2026-07-22 실측). wait=True로
+    # 다른 크롤 끝날 때까지 대기 후 진행(예약 크롤이므로 스킵 대신 대기).
+    from apps.cpc import eleven_block_guard as guard
+    ok_lock, reason = guard.preflight('지마켓부가세', platform='gmarket', wait=True, wait_timeout=1800)
+    if not ok_lock:
+        log(f"⛔ preflight 차단: {reason}")
+        return {'ok': 0, 'failed': 0, 'total': 0, 'skipped': reason}
 
-    result = {'ok': ok, 'failed': failed, 'total': len(accounts)}
-    log(f"완료: {result}")
-    return result
+    try:
+        log(f"지마켓 부가세 수집 시작 — {len(accounts)}마스터계정, {start_ym}~{end_ym}")
+        ok, failed = 0, 0
+        for i, acct in enumerate(accounts, 1):
+            log(f"[{i}/{len(accounts)}] {acct.login_id} ({acct.seller_name})")
+            try:
+                success = crawl_one_vat(acct, start_ym, end_ym, log_fn=log, save=save)
+                if success:
+                    ok += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                failed += 1
+                log(f"{acct.login_id} 오류: {e}")
+            if i < len(accounts):
+                time.sleep(random.uniform(8, 14))
+
+        result = {'ok': ok, 'failed': failed, 'total': len(accounts)}
+        log(f"완료: {result}")
+        return result
+    finally:
+        guard.release_global_lock(platform='gmarket')

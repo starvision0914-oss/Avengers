@@ -3,6 +3,8 @@ export interface St11SellerRow {
   seller_alias: string;
   balance: number;
   cpc_spend: number;
+  cpc_pure?: number;
+  fee_payment?: number;
   ad_total: number;
   last_tx: string | null;
   charge: number;
@@ -41,6 +43,8 @@ export interface St11SellerRow {
 
 export interface St11TotalsSummary {
   cpc_spend: number;
+  cpc_pure: number;
+  fee_payment: number;
   ad_total: number;
   charge: number;
   balance: number;
