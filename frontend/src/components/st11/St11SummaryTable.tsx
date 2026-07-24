@@ -38,7 +38,7 @@ function OfficeBadge({ value }: { value?: string }) {
 const OFFICE_RANK: Record<string, number> = { '우수': 4, '양호': 3, '주의': 2, '경고': 1, '미평가': 0 };
 function officeRank(v?: string): number { return v ? (OFFICE_RANK[v.split(' ')[0]] ?? -1) : -1; }
 
-type SortKey = 'seller_alias' | 'grade' | 'cash' | 'point' | 'cpc_spend' | 'charge' | 'balance' | 'products' | 'available' | 'tx_count' | 'ship' | 'prod' | 'cs' | 'sales' | 'cost' | 'margin_rate' | 'net_margin_rate' | 'server_fee' | 'reward' | 'net_profit' | 'time';
+type SortKey = 'seller_alias' | 'grade' | 'cash' | 'point' | 'cpc_spend' | 'fee_payment' | 'charge' | 'balance' | 'products' | 'available' | 'tx_count' | 'ship' | 'prod' | 'cs' | 'sales' | 'cost' | 'margin_rate' | 'net_margin_rate' | 'server_fee' | 'reward' | 'net_profit' | 'time';
 
 // 구매마진율 = (매출 − 구매가) / 매출 × 100 (매출 대비 구매가 빼고 남는 비율)
 function marginRate(s: St11SellerRow): number { return (s.sales || 0) > 0 ? ((s.sales! - (s.cost || 0)) / s.sales!) * 100 : 0; }
@@ -52,6 +52,7 @@ function getVal(s: St11SellerRow, key: SortKey): number | string {
     case 'cash': return s.cash ?? 0;
     case 'point': return s.point ?? 0;
     case 'cpc_spend': return s.cpc_spend ?? 0;
+    case 'fee_payment': return s.fee_payment ?? 0;
     case 'sales': return s.sales ?? 0;
     case 'cost': return s.cost ?? 0;
     case 'margin_rate': return marginRate(s);
@@ -81,6 +82,7 @@ const INIT_COLS: ColDef[] = [
   { key: 'cash', label: '캐시', sortKey: 'cash', align: 'right', initWidth: 90, minWidth: 50 },
   { key: 'point', label: '포인트', sortKey: 'point', align: 'right', initWidth: 82, minWidth: 50 },
   { key: 'cpc', label: '광고비', sortKey: 'cpc_spend', align: 'right', initWidth: 110, minWidth: 60 },
+  { key: 'fee', label: '수수료결제', sortKey: 'fee_payment', align: 'right', initWidth: 100, minWidth: 60 },
   { key: 'sales', label: '매출', sortKey: 'sales', align: 'right', initWidth: 100, minWidth: 60 },
   { key: 'cost', label: '구매가', sortKey: 'cost', align: 'right', initWidth: 96, minWidth: 60 },
   { key: 'margin_rate', label: '구매마진율', sortKey: 'margin_rate', align: 'right', initWidth: 88, minWidth: 56 },
@@ -177,6 +179,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'cash': return (s.cash || 0) !== 0 ? <span style={{ color: isLow ? '#dc2626' : '#0369a1', fontWeight: isLow ? 700 : 600 }}>{formatKRW(s.cash!)}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'point': return (s.point || 0) !== 0 ? <span style={{ color: isLow ? '#dc2626' : '#7c3aed', fontWeight: isLow ? 700 : 600 }}>{formatKRW(s.point!)}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'cpc': { const delta = (s as any).cpc_delta ?? 0; const fee = s.fee_payment || 0; const title = s.cpc_spend > 0 ? `CPC ${formatKRW(s.cpc_pure || 0)} · 수수료결제 ${formatKRW(fee)}` : undefined; return <><span style={{ color: s.cpc_spend > 0 ? '#e67700' : '#999', fontWeight: s.cpc_spend > 0 ? 700 : 400, cursor: 'pointer' }} title={title} onClick={e => { e.stopPropagation(); onCostClick(s.seller_id, s.seller_alias, 'cpc'); }}>{s.cpc_spend > 0 ? formatKRW(s.cpc_spend) : '-'}</span><span style={{ fontSize: 11, color: delta > 0 ? '#dc2626' : '#999', marginLeft: 3 }}>({delta > 0 ? '+' : ''}{formatKRW(delta)})</span></>; }
+      case 'fee': { const fee = s.fee_payment || 0; return fee > 0 ? <span style={{ color: '#b45309' }}>{formatKRW(fee)}</span> : <span style={{ color: '#999' }}>-</span>; }
       case 'sales': return (s.sales || 0) > 0 ? <span style={{ color: '#0369a1', fontWeight: 600 }} title={`매출 ${(s.sales_count || 0).toLocaleString()}건`}>{formatKRW(s.sales!)}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'cost': return (s.cost || 0) > 0 ? <span style={{ color: '#92400e' }}>{formatKRW(s.cost!)}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'margin_rate': { if ((s.sales || 0) <= 0) return <span style={{ color: '#999' }}>-</span>; const r = marginRate(s); return <span style={{ color: r > 0 ? '#0369a1' : '#dc2626', fontWeight: 600 }}>{r.toFixed(1)}%</span>; }
@@ -211,7 +214,8 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'seller': return `합계 ${filtered.length}개`;
       case 'cash': return <span style={{ color: '#0369a1' }}>{formatKRW(totals.cash)}</span>;
       case 'point': return <span style={{ color: '#7c3aed' }}>{formatKRW(totals.point)}</span>;
-      case 'cpc': return <span style={{ color: '#e67700' }}>{formatKRW(totals.cpc_spend)}</span>;
+      case 'cpc': return <span style={{ color: '#e67700' }} title={`CPC ${formatKRW(totals.cpc_pure || 0)} · 수수료결제 ${formatKRW(totals.fee_payment || 0)}`}>{formatKRW(totals.cpc_spend)}</span>;
+      case 'fee': return <span style={{ color: '#b45309' }}>{formatKRW(totals.fee_payment || 0)}</span>;
       case 'sales': return <span style={{ color: '#0369a1' }}>{formatKRW(totals.sales || 0)}</span>;
       case 'cost': return <span style={{ color: '#92400e' }}>{formatKRW(totals.cost || 0)}</span>;
       case 'margin_rate': { const ts = totals.sales || 0; if (ts <= 0) return '-'; const r = ((ts - (totals.cost || 0)) / ts) * 100; return <span style={{ color: r > 0 ? '#0369a1' : '#dc2626' }}>{r.toFixed(1)}%</span>; }
@@ -235,6 +239,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '8px 16px', background: '#fffbf0', borderBottom: '1px solid #e0e0e0', fontSize: 15 }}>
         <span>전체 <b>{sellers.length}</b></span>
         <span>총CPC <b style={{ color: '#e67700' }}>{formatKRW(totals.cpc_spend)}</b></span>
+        <span>총수수료결제 <b style={{ color: '#b45309' }}>{formatKRW(totals.fee_payment || 0)}</b></span>
         <span>총매출 <b style={{ color: '#0369a1' }}>{formatKRW(totals.sales || 0)}</b></span>
         <span>총순수익 <b style={{ color: (totals.net_profit || 0) >= 0 ? '#15803d' : '#dc2626' }}>{formatKRW(totals.net_profit || 0)}</b></span>
         <span>총충전 <b style={{ color: '#2e7d32' }}>{formatKRW(totals.charge)}</b></span>

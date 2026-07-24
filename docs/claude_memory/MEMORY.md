@@ -114,3 +114,5 @@
 - [워드프레스 DB 백업 누락](project_wordpress_backup_gap.md) — 오산홈페이지 DB가 자동백업(backup_all.sh) 대상서 빠져있었음(7/13 이후 무방비), 재부팅 전 발견·수정(2026-07-20)
 - [오산홈페이지 오라클 이전](project_osan_homepage.md) — 2026-07-23 완료. 실서버=오라클(193.123.163.185), 로컬(45.100)은 안전장치. 캐시엔 WP_CACHE/WPCACHEHOME 상수, wp-content 쓰기권한 g+w 필요했던 함정 기록
 - [고단가 콘텐츠 배치 작성](project_highcpc_content_batch.md) — 애드센스 수익화용 부동산/건강/금융/법률 글 대량작성 진행중. "이어서 써줘"라고만 하면 진행목록 파일 보고 자동 이어감
+- [부동산 제목 스타일 확정](feedback_realestate_title_style.md) — 검색어 일치형 유지(클릭유도형 제안 금지), 클릭률보다 구매의도 높은 트래픽·CPC 우선
+- [WebSearch 막혀도 트렌드 RSS는 가능](feedback_trends_rss_bypass.md) — curl로 구글트렌드 RSS 직접 조회하면 세션한도 무관, 뉴스스니펫 포함. 스니펫에 없는 사실은 창작 금지
