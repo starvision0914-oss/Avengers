@@ -40,6 +40,7 @@ urlpatterns = [
     path('api/speedgo/', include('apps.speedgo.urls')),
     path('api/smartstore/', include('apps.smartstore.urls')),
     path('api/naver-blog/', include('apps.naver_blog.urls')),
+    path('api/tistory/', include('apps.tistory_blog.urls')),
     path('api/coupang/', include('apps.coupang.urls')),
     path('api/lotteon/', include('apps.lotteon.urls')),
     # smsApp 호환 (root /api/settings/)

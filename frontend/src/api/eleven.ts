@@ -15,6 +15,8 @@ export async function getSt11Summary(
     seller_alias: s.seller_alias || s.seller_id,
     balance: s.balance || 0,
     cpc_spend: s.cpc_spend || 0,
+    cpc_pure: s.cpc_pure || 0,
+    fee_payment: s.fee_payment || 0,
     ad_total: s.ad_total || s.cpc_spend || 0,
     last_tx: s.last_crawled_at || null,
     charge: s.charge || 0,
@@ -51,6 +53,8 @@ export async function getSt11Summary(
   const t = data.totals || {};
   const totals = {
     cpc_spend: t.cpc_spend || 0,
+    cpc_pure: t.cpc_pure || 0,
+    fee_payment: t.fee_payment || 0,
     ad_total: t.ad_total || t.cpc_spend || 0,
     charge: t.charge || 0,
     balance: t.balance || 0,

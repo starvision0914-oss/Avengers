@@ -47,7 +47,11 @@ export default function St11MobileCard({ seller: s, index, isSelected, onSelect,
       <div className="flex items-center gap-3 text-[11px]">
         <span onClick={e => { e.stopPropagation(); onCostClick(s.seller_id, s.seller_alias); }}>
           <span className="text-[#999]">CPC </span>
-          <span className={s.cpc_spend > 0 ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}>{formatKRW(s.cpc_spend)}</span>
+          <span className={(s.cpc_pure || 0) > 0 ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}>{formatKRW(s.cpc_pure ?? s.cpc_spend)}</span>
+        </span>
+        <span>
+          <span className="text-[#999]">수수료 </span>
+          <span className={(s.fee_payment || 0) > 0 ? 'text-[#b45309] font-semibold' : 'text-[#ccc]'}>{formatKRW(s.fee_payment || 0)}</span>
         </span>
         <span>
           <span className="text-[#999]">충전 </span>

@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'apps.speedgo',
     'apps.smartstore',
     'apps.naver_blog',
+    'apps.tistory_blog',
     'apps.coupang',
     'apps.lotteon',
     'apps.club',

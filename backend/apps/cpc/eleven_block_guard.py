@@ -44,6 +44,7 @@ _REACH_URL = {
     'coupang': 'https://www.coupang.com/',
     'smartstore': 'https://smartstore.naver.com/',
     'lotteon': 'https://store.lotteon.com/',
+    'tistory': 'https://www.tistory.com/',
 }
 
 # 영구정지 계정 — AD OFFICE 접속 불가(광고비/ROAS 확인 안 됨). 정지 해제될 때까지

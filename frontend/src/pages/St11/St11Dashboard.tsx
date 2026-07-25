@@ -375,10 +375,11 @@ export default function St11Dashboard() {
                   합계 <span className="ml-1 text-[10px] text-[#999] font-normal">{mobileHideEmpty ? `${mobileFiltered.length}개만` : `${summary.sellers.length}개`}</span>
                 </span>
                 <span className="text-[12px] font-bold text-[#e67700]">
-                  CPC {formatKRW(summary.totals.cpc_spend)}
+                  CPC {formatKRW(summary.totals.cpc_pure ?? summary.totals.cpc_spend)}
                 </span>
               </div>
               <div className="flex items-center gap-3 text-[10px] text-[#666]">
+                <span>수수료 <b className="text-[#b45309]">{formatKRW(summary.totals.fee_payment || 0)}</b></span>
                 <span>잔액 <b className="text-[#333]">{formatKRW(summary.totals.balance)}</b></span>
                 <span>셀러 <b className="text-[#333]">{summary.totals.seller_count}개</b></span>
                 <button onClick={onExportExcel} className="ml-auto text-[10px] text-[#217346] font-bold">📥 엑셀</button>
