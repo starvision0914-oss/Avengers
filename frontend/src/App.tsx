@@ -39,6 +39,7 @@ import SmartStorePage from './pages/SmartStore/SmartStorePage';
 import NaverRoasPage from './pages/SmartStore/NaverRoasPage';
 import OwnerclanCrawlerPage from './pages/Ownerclan/OwnerclanCrawlerPage';
 import NaverBlogPage from './pages/NaverBlog/NaverBlogPage';
+import TistoryPage from './pages/Tistory/TistoryPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!isAuthenticated()) return <Navigate to="/login" replace />;
@@ -93,6 +94,7 @@ export default function App() {
           <Route path="smartstore" element={<SmartStorePage />} />
           <Route path="naver-roas" element={<NaverRoasPage />} />
           <Route path="naver-blog" element={<NaverBlogPage />} />
+          <Route path="tistory" element={<TistoryPage />} />
           <Route path="blog" element={<Navigate to="/owner" replace />} />
           <Route path="owner" element={<OwnerclanCrawlerPage />} />
         </Route>

@@ -3,6 +3,36 @@ from rest_framework.response import Response
 from .models import TistoryAccount, TistoryPost
 
 
+class GeneratePostView(APIView):
+    """키워드 기반 AI 글 생성(제목/본문/태그) — 초안으로 즉시 DB 저장까지."""
+    def post(self, request):
+        from .services.content_gen import generate_post
+
+        d = request.data
+        keyword = (d.get('keyword') or '').strip()
+        account_id = d.get('account_id')
+        category = d.get('category', '')
+        extra_context = d.get('extra_context', '')
+        if not keyword or not account_id:
+            return Response({'error': '키워드와 계정은 필수입니다'}, status=400)
+
+        last_err = None
+        for _attempt in range(2):
+            try:
+                result = generate_post(keyword, category=category, extra_context=extra_context)
+                break
+            except Exception as e:
+                last_err = e
+        else:
+            return Response({'error': f'생성 실패: {last_err}'}, status=500)
+
+        p = TistoryPost.objects.create(
+            account_id=account_id, title=result['title'], content=result['content'],
+            tags=result['tags'], category=category, status='draft',
+        )
+        return Response({'id': p.id, 'title': p.title, 'content': p.content, 'tags': p.tags})
+
+
 class AccountListView(APIView):
     def get(self, request):
         accounts = TistoryAccount.objects.all()

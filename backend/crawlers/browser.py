@@ -184,6 +184,8 @@ def create_driver(download_dir=None, kill_existing=True, user_data_dir=None, ena
                 'safebrowsing.enabled': False,
                 'intl.accept_languages': 'ko-KR,ko,en-US,en',
                 'profile.default_content_setting_values.notifications': 2,
+                'credentials_enable_service': False,
+                'profile.password_manager_enabled': False,
             }
             opts.add_experimental_option('prefs', prefs)
             if enable_perf_log:

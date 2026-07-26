@@ -4,7 +4,7 @@ import {
   Users, ShoppingCart, CheckSquare,
   MessageCircle, Mail, Settings, LogOut, Bot, MessageSquare,
   Sliders, Smartphone, Leaf, UserCog, Store, Package, MoreHorizontal,
-  BadgeCheck, Dices, Map, Receipt, Newspaper,
+  BadgeCheck, Dices, Map, Receipt, Newspaper, BookOpen,
 } from 'lucide-react';
 import { logout } from '../../api/auth';
 
@@ -20,6 +20,7 @@ const primary = [
   { to: '/speedgo', icon: Leaf, label: '스피드고' },
   { to: '/owner', icon: Package, label: '오너클랜' },
   { to: '/naver-blog', icon: Newspaper, label: '블로그' },
+  { to: '/tistory', icon: BookOpen, label: '티스토리' },
 ];
 
 const more = [
