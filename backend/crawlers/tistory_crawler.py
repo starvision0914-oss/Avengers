@@ -130,10 +130,29 @@ def login_kakao(driver, login_id: str, login_pw: str, log_fn=None) -> bool:
         return False
 
     time.sleep(3)
-    # 카카오 보안정책(기기인증/2단계인증) 화면이 뜰 수 있음 — 자동 처리 불가, 사람 개입 필요
+    # 카카오 보안정책(기기인증/2단계인증) 화면이 뜰 수 있음 — 자동 처리 불가.
+    # 사람이 폰에서 카카오톡 인증을 승인할 시간을 줘야 함(기존엔 3초만 보고 바로 실패 처리해
+    # 사용자가 폰을 확인하기도 전에 스크립트가 종료돼버리는 문제가 있었음 — 2026-07-27).
     if 'accounts.kakao.com' in driver.current_url:
-        log('⚠️ 카카오 추가 인증 화면 감지 — 자동 로그인 실패, 수동 개입 필요')
-        return False
+        log('⚠️ 카카오 2단계 인증 화면 감지 — 폰에서 카카오톡 인증을 승인해주세요 (최대 90초 대기)')
+        try:
+            from apps.cpc import eleven_block_guard as guard
+            guard._send_telegram_alert(
+                '📱 [티스토리 로그인] 카카오 2단계 인증 요청이 떴습니다.\n'
+                '카카오톡 앱에서 인증을 승인해주세요 (90초 내 미승인 시 실패 처리됩니다).'
+            )
+        except Exception:
+            pass
+
+        waited = 0
+        while waited < 90 and 'accounts.kakao.com' in driver.current_url:
+            time.sleep(3)
+            waited += 3
+
+        if 'accounts.kakao.com' in driver.current_url:
+            log('⛔ 90초 내 인증 승인 확인 안 됨 — 로그인 실패')
+            return False
+        log('✅ 카카오 2단계 인증 승인 확인됨')
 
     time.sleep(2)
     return _tistory_logged_in(driver)
