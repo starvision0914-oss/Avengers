@@ -93,7 +93,7 @@ def _save_cookies(driver, account):
         pass
 
 
-def login_kakao(driver, login_id: str, login_pw: str, log_fn=None) -> bool:
+def login_kakao(driver, login_id: str, login_pw: str, blog_name: str = None, log_fn=None) -> bool:
     """카카오계정으로 티스토리 로그인.
     최초 로그인 시 카카오 보안정책(기기인증 등)이 뜨면 자동 통과가 안 될 수 있음 —
     이 경우 False를 반환하고 로그 남김. 사람이 1회 수동으로 통과시킨 뒤 쿠키를 저장해두면
@@ -155,6 +155,21 @@ def login_kakao(driver, login_id: str, login_pw: str, log_fn=None) -> bool:
         log('✅ 카카오 2단계 인증 승인 확인됨')
 
     time.sleep(2)
+    # 카카오 OAuth 완료 직후엔 tistory.com 홈 등으로 리다이렉트될 뿐 manage 페이지가 아니라서
+    # 여기서 바로 판정하면 로그인 성공을 실패로 오판함(2026-07-28 실측) — 쿠키 로그인 검증과
+    # 동일하게 manage/newpost로 명시 이동 후 URL 안정화를 기다려야 함.
+    if blog_name:
+        driver.get(f'https://{blog_name}.tistory.com/manage/newpost/')
+        time.sleep(2)
+        _dismiss_resume_alert(driver)
+        last_url = None
+        for _ in range(6):
+            time.sleep(1)
+            _dismiss_resume_alert(driver)
+            cur = driver.current_url
+            if cur == last_url:
+                break
+            last_url = cur
     return _tistory_logged_in(driver)
 
 
@@ -163,7 +178,7 @@ def ensure_login(driver, account, log_fn=None) -> bool:
         if log_fn:
             log_fn('쿠키 로그인 성공')
         return True
-    ok = login_kakao(driver, account.login_id, account.login_pw, log_fn=log_fn)
+    ok = login_kakao(driver, account.login_id, account.login_pw, blog_name=account.blog_name, log_fn=log_fn)
     if ok:
         _save_cookies(driver, account)
     return ok
