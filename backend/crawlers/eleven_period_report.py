@@ -201,7 +201,9 @@ def collect_period_for_account(driver, login_id, password_enc, period_text, d0, 
     return len(filled)
 
 
-def run_all_accounts(log_fn=None, account_filter=None, gsheet=True):
+def run_all_accounts(log_fn=None, account_filter=None, gsheet=True, year_month=None):
+    """year_month: 'YYYY-MM' 지정 시 자동판단(당월/전월) 대신 해당 월 강제 조회.
+    adoffice 드롭다운이 당월/전월 두 옵션만 지원 — 오늘 기준 당월 또는 바로 전달만 지정 가능."""
     from apps.cpc.models import CrawlerAccount
     from apps.cpc.eleven_block_guard import exclude_perma_banned
     from django.utils import timezone
@@ -211,7 +213,21 @@ def run_all_accounts(log_fn=None, account_filter=None, gsheet=True):
         if log_fn:
             log_fn(m)
 
-    period_text, d0, d1, label = _period_for(timezone.localdate())
+    if year_month:
+        y, m = (int(x) for x in year_month.split('-'))
+        target = dt.date(y, m, 1)
+        today = timezone.localdate()
+        this_month = today.replace(day=1)
+        if target == this_month:
+            period_text, d0, d1, label = '당월', target, today - dt.timedelta(days=1), f'{target:%Y-%m}'
+        else:
+            prev_month = (this_month - dt.timedelta(days=1)).replace(day=1)
+            if target != prev_month:
+                raise ValueError(f'adoffice는 당월/전월만 지원 — {year_month} 조회 불가(오늘={today})')
+            d1 = this_month - dt.timedelta(days=1)
+            period_text, d0, label = '전월', target, f'{target:%Y-%m}'
+    else:
+        period_text, d0, d1, label = _period_for(timezone.localdate())
     log(f'기간별 보고서 수집: {period_text} ({d0}~{d1})')
 
     sheet = None
@@ -252,6 +268,7 @@ def run_all_accounts(log_fn=None, account_filter=None, gsheet=True):
             filled = fill_missing_dates(rows, d0, d1)
             # '-'(데이터 없음 표시) → 빈 칸으로
             filled = [[('' if str(c).strip() == '-' else c) for c in r] for r in filled]
+            _merge_fee_payment(filled, a.login_id, d0, d1, log)
             log(f'[{a.login_id}] {len(filled)}행 (헤더+합계+{ (d1-d0).days+1 }일)')
             if sheet is not None:
                 from .gsheet_upload import upload_rows

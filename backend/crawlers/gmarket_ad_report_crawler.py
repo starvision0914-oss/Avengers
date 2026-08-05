@@ -285,11 +285,12 @@ def crawl_account(driver, login_id, year, month, log_fn=None, sub_login_ids=None
 
 
 def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_keywords=False,
-        with_gsheet=False):
+        with_gsheet=False, gsheet_period=None):
     """periods: [(year,month), ...] 여러 달 순회(한 로그인으로). 미지정시 (year,month) 또는 당월.
     각 계정 로그인 1회로 모든 달을 크롤(IP 부담 최소화). 멱등 저장이라 재실행 안전.
     with_keywords=True면 계정 광고비 수집 후 같은 세션에서 그 계정 ROAS≥200 상품의 CPC 키워드까지 수집(로그인 1회).
-    with_gsheet=True면 같은 세션에서 '일자별' 리포트(CPC/AI)도 다운로드해 계정별 구글시트 업로드(1일=전월/그외=당월)."""
+    with_gsheet=True면 같은 세션에서 '일자별' 리포트(CPC/AI)도 다운로드해 계정별 구글시트 업로드(1일=전월/그외=당월).
+    gsheet_period=(year,month) 지정 시 일자별 gsheet 대상월을 강제(당월/전월 자동판단 대신)."""
     from apps.cpc.models import CrawlerAccount
     from apps.cpc import eleven_block_guard as guard
     from crawlers.browser import create_driver, stop_display
@@ -386,7 +387,7 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                 # 같은 세션에서 '일자별' 리포트(CPC/AI) 다운로드 → 계정별 구글시트 업로드 (에러 격리)
                 if with_gsheet and ss_cpc is not None:
                     try:
-                        gy, gm = gtarget()
+                        gy, gm = gsheet_period if gsheet_period else gtarget()
                         acct_res['daily_gsheet'] = daily_gsheet(
                             a.login_id, log_fn=log_fn, gsheet=True, year=gy, month=gm,
                             driver=driver, ss_cpc=ss_cpc, ss_ai=ss_ai)

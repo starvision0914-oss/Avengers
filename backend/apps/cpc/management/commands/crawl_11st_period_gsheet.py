@@ -11,6 +11,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--accounts', nargs='*', help='특정 login_id 만')
         parser.add_argument('--no-gsheet', action='store_true', help='시트 업로드 없이 수집만(점검용)')
+        parser.add_argument('--year-month', help="'YYYY-MM' 강제지정(당월/전월만 가능, 기본=자동판단)")
 
     def handle(self, *args, **options):
         from crawlers.eleven_period_report import run_all_accounts
@@ -18,5 +19,6 @@ class Command(BaseCommand):
             log_fn=lambda m: self.stdout.write(m),
             account_filter=options.get('accounts'),
             gsheet=not options.get('no_gsheet', False),
+            year_month=options.get('year_month'),
         )
         self.stdout.write(str(res))

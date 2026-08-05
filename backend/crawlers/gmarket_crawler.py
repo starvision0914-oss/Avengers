@@ -36,8 +36,9 @@ XPATHS = {
     'gmarket_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[1]/td[4]/div/strong',
     'auction_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[2]/td[4]/div/strong',
     'ai_usage': '//*[@id="spnGmktBillingMinusAmnt"]',
-    'login_btn': '//img[@alt="로그인"]',
-    'site_radio': '//input[@name="rdoSiteSelect" and @value="GMKT"]',
+    'login_btn': '#lnkLogin',
+    'site_tab': '//button[@data-site="GMKT" and @data-member="S"]',
+    'id_field': '//input[@placeholder="G마켓 판매 아이디"]',
 }
 
 CPC_URL = 'https://ad.esmplus.com/cpc/bidmng/bidmanagement'
@@ -104,28 +105,34 @@ def _try_cookie_login(driver, account):
 
 
 def _full_login(driver, login_id, password):
+    """ad.esmplus.com 로그인. 2026-07경 UI개편으로 탭(ESM PLUS/AUCTION/Gmarket/광고대행사) 방식으로 변경 —
+    각 탭 입력창은 name/id 없이 placeholder로만 구분되고 DOM에 전부 존재(비활성 탭은 display:none)."""
     driver.get(LOGIN_URL)
     time.sleep(2)
 
     try:
-        radio = WebDriverWait(driver, 5).until(
-            EC.element_to_be_clickable((By.XPATH, XPATHS['site_radio']))
+        tab = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, XPATHS['site_tab']))
         )
-        radio.click()
+        tab.click()
         time.sleep(0.5)
     except Exception:
         pass
 
     try:
-        id_field = driver.find_element(By.ID, 'SellerId')
+        id_field = WebDriverWait(driver, 10).until(
+            EC.visibility_of_element_located((By.XPATH, XPATHS['id_field']))
+        )
         id_field.clear()
         id_field.send_keys(login_id)
 
-        pw_field = driver.find_element(By.ID, 'SellerPassword')
+        pw_field = driver.find_element(
+            By.XPATH, XPATHS['id_field'] + '/ancestor::div[contains(@class,"form__group")]//input[@type="password"]'
+        )
         pw_field.clear()
         pw_field.send_keys(password)
 
-        login_btn = driver.find_element(By.XPATH, XPATHS['login_btn'])
+        login_btn = driver.find_element(By.CSS_SELECTOR, XPATHS['login_btn'])
         login_btn.click()
 
         time.sleep(5)

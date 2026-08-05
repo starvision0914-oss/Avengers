@@ -67,6 +67,8 @@ class Command(BaseCommand):
                 month = today.month
             self.stdout.write(f'지마켓 상품별 광고비 크롤 {year}-{month:02d} / 대상={o["eid"] or "전체"}'
                               + (' +일자별구글시트' if wg else '') + (' [1일→전월]' if today.day == 1 and not o['month'] else ''))
+            # --month를 명시했으면 일자별 gsheet도 같은 달로 강제(자동 당월/전월 판단 무시)
+            gp = (year, month) if o['month'] else None
             res = run(login_ids=login_ids, year=year, month=month, log_fn=lambda m: self.stdout.write(m),
-                      with_keywords=wk, with_gsheet=wg)
+                      with_keywords=wk, with_gsheet=wg, gsheet_period=gp)
         self.stdout.write(str(res))
