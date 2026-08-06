@@ -10,14 +10,18 @@
 안전장치:
 - 최근(--days, 기본 2일) 안에 수집된 계정만 대상(오래 안 돈 계정은 export 신선도 보장 안 됨).
 - 한 계정에서 이탈 비율이 --max-frac(기본 0.6) 초과면 '부분수집/실패' 의심으로 건너뜀(대량 오탐 방지).
-- 이미 판매중지/판매종료인 행은 건드리지 않음(멱등). 재등록되면 다음 크롤이 자동 복원.
+- 이미 판매중지/판매종료/품절인 행은 건드리지 않음(멱등). 재등록되면 다음 크롤이 자동 복원.
+
+2026-08-06 수정: 품절 상품이 그날 크롤 엑셀에 우연히 안 잡히면 "목록이탈=판매중지"로
+오판되어 실제로는 여전히 품절인 상품이 판매중지로 잘못 덮어써지는 문제 발견(15만건 중
+8.6만건이 이 경로로 판매중지 처리됨). 품절도 보호 대상에 추가해 재발 방지.
 """
 from django.core.management.base import BaseCommand
 from django.db.models import Max, Count
 from django.utils import timezone
 from datetime import timedelta
 
-STOPPED_LABELS = {'판매중지', '판매종료'}
+PROTECTED_LABELS = {'판매중지', '판매종료', '품절'}
 DELISTED_LABEL = '판매중지'
 
 
@@ -36,7 +40,7 @@ def reconcile(days=2, max_frac=0.6, account_filter=None, dry_run=False, log=prin
             continue
         if (now - mx) > timedelta(days=days):
             continue  # 최근 수집 없음 → 신선도 보장 안 됨, 건너뜀
-        cand = ElevenMyProduct.objects.filter(account=a, synced_at__lt=mx).exclude(status_type__in=STOPPED_LABELS)
+        cand = ElevenMyProduct.objects.filter(account=a, synced_at__lt=mx).exclude(status_type__in=PROTECTED_LABELS)
         cnt = cand.count()
         if cnt == 0:
             continue

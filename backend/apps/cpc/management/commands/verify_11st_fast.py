@@ -24,6 +24,12 @@ from apps.cpc.models import CrawlerAccount
 from crawlers.browser import create_driver
 from crawlers.eleven_crawler import _do_login, _save_cookies
 
+# 영속 브라우저 프로필 파일럿(2026-08-06): 매번 새 임시프로필로 로그인하면 11번가가
+# 매번 '신뢰 못한 기기'로 보고 OTP를 반복 요구하는 것으로 추정 — 계정 고정 프로필로
+# 재사용시 효과 있는지 확인 중. 여기 추가하면 그 계정만 별도 격리 Chrome+고정폴더 사용.
+PILOT_PERSISTENT_PROFILE_ACCOUNTS = {'dlrmsgh011'}
+PERSISTENT_PROFILE_DIR = '/home/rejoice888/.cache/avengers_11st_profiles'
+
 CHECK_URL = 'https://soffice.11st.co.kr/view/main'
 OTP_KEYWORDS = ('otpLoginForm', 'otp', 'auth_type_01')
 COOKIE_CHECK_TIMEOUT = 6
@@ -150,18 +156,27 @@ class Command(BaseCommand):
                     'message': '',
                 }
 
+                pilot_driver = None
                 try:
-                    # 이전 계정 쿠키 정리
-                    try:
-                        driver.delete_all_cookies()
-                    except Exception:
-                        pass
+                    if acct.login_id in PILOT_PERSISTENT_PROFILE_ACCOUNTS:
+                        import os as _os
+                        prof_dir = _os.path.join(PERSISTENT_PROFILE_DIR, acct.login_id)
+                        _os.makedirs(prof_dir, exist_ok=True)
+                        pilot_driver = create_driver(user_data_dir=prof_dir, kill_existing=False)
+                        use_driver = pilot_driver
+                    else:
+                        # 이전 계정 쿠키 정리
+                        try:
+                            driver.delete_all_cookies()
+                        except Exception:
+                            pass
+                        use_driver = driver
 
-                    ok = _do_login(driver, acct.login_id, acct.password_enc)
+                    ok = _do_login(use_driver, acct.login_id, acct.password_enc)
 
                     final_url = ''
                     try:
-                        final_url = driver.current_url
+                        final_url = use_driver.current_url
                     except Exception:
                         pass
 
@@ -169,7 +184,7 @@ class Command(BaseCommand):
                         entry['status'] = 'success'
                         entry['message'] = final_url
                         try:
-                            _save_cookies(driver, acct)
+                            _save_cookies(use_driver, acct)
                             self.stdout.write(f'    ✅ 성공 (쿠키 저장)')
                         except Exception as e:
                             self.stdout.write(f'    ✅ 성공 (⚠️ 쿠키저장 실패: {e})')
@@ -188,16 +203,23 @@ class Command(BaseCommand):
                     entry['status'] = 'error'
                     entry['message'] = str(exc)
                     self.stdout.write(f'    💥 오류: {exc}')
-                    # Chrome이 죽었으면 재시작
-                    try:
-                        driver.current_url
-                    except Exception:
-                        self.stdout.write('    [Chrome 재시작]')
+                    # Chrome이 죽었으면 재시작(공유 driver만 — 파일럿 전용 driver는 계정별로 매번 새로 만듦)
+                    if pilot_driver is None:
                         try:
-                            driver.quit()
+                            driver.current_url
+                        except Exception:
+                            self.stdout.write('    [Chrome 재시작]')
+                            try:
+                                driver.quit()
+                            except Exception:
+                                pass
+                            driver = create_driver()
+                finally:
+                    if pilot_driver is not None:
+                        try:
+                            pilot_driver.quit()
                         except Exception:
                             pass
-                        driver = create_driver()
 
                 entry['elapsed'] = round(time.time() - t0, 1)
                 results.append(entry)

@@ -286,6 +286,48 @@ export default function ElevenMyProductsPage() {
       .then(() => toast.success(`${real ? '실삭제' : '검증(dry-run)'} 시작 — ${totalAccs}계정. 진행상황은 텔레그램/로그로 확인하세요.`))
       .catch((e: any) => toast.error(e?.response?.data?.message || e?.response?.data?.error || '시작 실패'));
   };
+  // 선택 상품 판매중지(삭제 없음) — 품절 등 상태 무관하게 선택된 11번가 상품만 대상.
+  // 지마켓 판매중지 API는 아직 검증 전이라 11번가만 지원(선택 중 지마켓 항목은 제외).
+  const stopSelectedProducts = () => {
+    const sel = Array.from(selProd.values()).filter(p => p.platform === '11st' && p.login_id);
+    const skipped = selProd.size - sel.length;
+    if (!sel.length) { toast.error('판매중지할 11번가 상품을 선택하세요(지마켓은 미지원)'); return; }
+    const byAcc: Record<string, string[]> = {};
+    sel.forEach(p => { (byAcc[p.login_id!] = byAcc[p.login_id!] || []).push(String(p.product_no)); });
+    const accs = Object.keys(byAcc);
+    if (!window.confirm(
+      `선택 ${sel.length}개(${accs.length}계정)를 11번가에서 판매중지합니다.`
+      + (skipped ? `\n(지마켓 ${skipped}개는 제외됨)` : '')
+      + '\n삭제는 하지 않으며, 나중에 다시 판매중으로 되돌릴 수 있습니다.\n진행하시겠습니까?'
+    )) return;
+    Promise.all(accs.map(eid =>
+      api.post('/cpc/eleven-loss-products/delete/', { eid, product_nos: byAcc[eid], stop_only: 1, real: 1 })
+    ))
+      .then(() => toast.success(`판매중지 시작 — ${accs.length}계정. 진행상황은 텔레그램/로그로 확인하세요.`))
+      .catch((e: any) => toast.error(e?.response?.data?.message || e?.response?.data?.error || '시작 실패'));
+  };
+  // 선택 상품 실삭제(판매금지 전용) — 11번가에서 판매금지 상태인 상품을 영구 삭제.
+  // 기존 "선택 삭제"와 동일한 API(real:1)를 쓰지만, 판매금지만 다루는 버튼임을 명확히 하고
+  // 확인 문구도 그에 맞게 표시(다른 상태 상품이 섞여 선택돼도 그대로 삭제되니 사용 전 상태필터 확인 필요).
+  const deleteBannedProducts = () => {
+    const sel = Array.from(selProd.values()).filter(p => p.platform === '11st' && p.login_id);
+    const skipped = selProd.size - sel.length;
+    if (!sel.length) { toast.error('삭제할 11번가 상품을 선택하세요(지마켓은 미지원)'); return; }
+    const byAcc: Record<string, string[]> = {};
+    sel.forEach(p => { (byAcc[p.login_id!] = byAcc[p.login_id!] || []).push(String(p.product_no)); });
+    const accs = Object.keys(byAcc);
+    if (!window.confirm(
+      `⚠️ 위험(판매금지 삭제): 선택 ${sel.length}개(${accs.length}계정)를 11번가에서 실제·영구 삭제합니다(되돌릴 수 없음).`
+      + (skipped ? `\n(지마켓 ${skipped}개는 제외됨)` : '')
+      + '\n\n상태필터가 "판매금지"로 맞춰져 있는지 다시 확인하세요. 진행하시겠습니까?'
+    )) return;
+    if (!window.confirm(`최종 확인 ⚠️\n${sel.length}개(${accs.length}계정) 상품을 영구 삭제합니다.\n정말 진행하시겠습니까?`)) return;
+    Promise.all(accs.map(eid =>
+      api.post('/cpc/eleven-loss-products/delete/', { eid, product_nos: byAcc[eid], real: 1 })
+    ))
+      .then(() => toast.success(`실삭제 시작 — ${accs.length}계정. 진행상황은 텔레그램/로그로 확인하세요.`))
+      .catch((e: any) => toast.error(e?.response?.data?.message || e?.response?.data?.error || '시작 실패'));
+  };
   const pageAllSelected = items.length > 0 && items.every(p => selProd.has(compositeKey(p)));
   const togglePageAll = () => {
     setSelProd(prev => {
@@ -596,6 +638,24 @@ export default function ElevenMyProductsPage() {
               >
                 🔎 선택 검증 ({selProd.size})
               </button>
+              {Array.from(selProd.values()).some(p => p.platform === '11st') && (
+                <button
+                  onClick={stopSelectedProducts}
+                  title="선택한 11번가 상품을 셀러오피스에서 판매중지(삭제 아님, 되돌릴 수 있음). 품절 상품 필터 후 전체선택하면 품절→판매중지로 사용 가능."
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-amber-600 hover:bg-amber-700 text-white"
+                >
+                  🛑 선택 판매중지 ({Array.from(selProd.values()).filter(p => p.platform === '11st').length})
+                </button>
+              )}
+              {Array.from(selProd.values()).some(p => p.platform === '11st') && (
+                <button
+                  onClick={deleteBannedProducts}
+                  title="⚠️ 위험: 선택한 11번가 상품을 셀러오피스에서 실제 영구 삭제(판매금지 상품 전용). 상태필터=판매금지로 선택 후 사용하세요."
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-bold bg-rose-800 hover:bg-rose-900 text-white"
+                >
+                  🗑 판매금지 실삭제 ({Array.from(selProd.values()).filter(p => p.platform === '11st').length})
+                </button>
+              )}
               <button
                 onClick={() => deleteSelectedProducts(true)}
                 title="⚠️ 위험: 선택 상품을 셀러오피스에서 실제 영구 삭제(검증 후 진행)"
