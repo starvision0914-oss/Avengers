@@ -288,44 +288,41 @@ export default function ElevenMyProductsPage() {
   };
   // 선택 상품 판매중지(삭제 없음) — 품절 등 상태 무관하게 선택된 11번가 상품만 대상.
   // 지마켓 판매중지 API는 아직 검증 전이라 11번가만 지원(선택 중 지마켓 항목은 제외).
+  // 계정별로 별도 요청을 동시에 보내면 서버가 각각 새 프로세스+전역락을 다투다 대부분 스킵되므로
+  // (동시크롤 금지 락), items 배열 하나로 보내 서버가 계정을 순차 처리하게 한다.
   const stopSelectedProducts = () => {
     const sel = Array.from(selProd.values()).filter(p => p.platform === '11st' && p.login_id);
     const skipped = selProd.size - sel.length;
     if (!sel.length) { toast.error('판매중지할 11번가 상품을 선택하세요(지마켓은 미지원)'); return; }
-    const byAcc: Record<string, string[]> = {};
-    sel.forEach(p => { (byAcc[p.login_id!] = byAcc[p.login_id!] || []).push(String(p.product_no)); });
-    const accs = Object.keys(byAcc);
+    const accs = Array.from(new Set(sel.map(p => p.login_id!)));
     if (!window.confirm(
-      `선택 ${sel.length}개(${accs.length}계정)를 11번가에서 판매중지합니다.`
+      `선택 ${sel.length}개(${accs.length}계정)를 11번가에서 판매중지합니다(계정별로 순차 처리).`
       + (skipped ? `\n(지마켓 ${skipped}개는 제외됨)` : '')
-      + '\n삭제는 하지 않으며, 나중에 다시 판매중으로 되돌릴 수 있습니다.\n진행하시겠습니까?'
+      + '\n삭제는 하지 않으며, 나중에 다시 판매중으로 되돌릴 수 있습니다.\n계정이 많으면 시간이 걸릴 수 있습니다.\n진행하시겠습니까?'
     )) return;
-    Promise.all(accs.map(eid =>
-      api.post('/cpc/eleven-loss-products/delete/', { eid, product_nos: byAcc[eid], stop_only: 1, real: 1 })
-    ))
-      .then(() => toast.success(`판매중지 시작 — ${accs.length}계정. 진행상황은 텔레그램/로그로 확인하세요.`))
+    const items = sel.map(p => ({ eid: p.login_id, product_no: String(p.product_no) }));
+    api.post('/cpc/eleven-loss-products/delete/', { items, stop_only: 1, real: 1 })
+      .then((r: any) => toast.success(r.data?.message || `판매중지 시작 — ${accs.length}계정(순차 처리). 진행상황은 텔레그램/로그로 확인하세요.`))
       .catch((e: any) => toast.error(e?.response?.data?.message || e?.response?.data?.error || '시작 실패'));
   };
   // 선택 상품 실삭제(판매금지 전용) — 11번가에서 판매금지 상태인 상품을 영구 삭제.
   // 기존 "선택 삭제"와 동일한 API(real:1)를 쓰지만, 판매금지만 다루는 버튼임을 명확히 하고
   // 확인 문구도 그에 맞게 표시(다른 상태 상품이 섞여 선택돼도 그대로 삭제되니 사용 전 상태필터 확인 필요).
+  // stopSelectedProducts와 동일하게 items 배열로 보내 서버가 계정을 순차 처리(동시락 충돌 방지).
   const deleteBannedProducts = () => {
     const sel = Array.from(selProd.values()).filter(p => p.platform === '11st' && p.login_id);
     const skipped = selProd.size - sel.length;
     if (!sel.length) { toast.error('삭제할 11번가 상품을 선택하세요(지마켓은 미지원)'); return; }
-    const byAcc: Record<string, string[]> = {};
-    sel.forEach(p => { (byAcc[p.login_id!] = byAcc[p.login_id!] || []).push(String(p.product_no)); });
-    const accs = Object.keys(byAcc);
+    const accs = Array.from(new Set(sel.map(p => p.login_id!)));
     if (!window.confirm(
-      `⚠️ 위험(판매금지 삭제): 선택 ${sel.length}개(${accs.length}계정)를 11번가에서 실제·영구 삭제합니다(되돌릴 수 없음).`
+      `⚠️ 위험(판매금지 삭제): 선택 ${sel.length}개(${accs.length}계정)를 11번가에서 실제·영구 삭제합니다(되돌릴 수 없음, 계정별로 순차 처리).`
       + (skipped ? `\n(지마켓 ${skipped}개는 제외됨)` : '')
       + '\n\n상태필터가 "판매금지"로 맞춰져 있는지 다시 확인하세요. 진행하시겠습니까?'
     )) return;
     if (!window.confirm(`최종 확인 ⚠️\n${sel.length}개(${accs.length}계정) 상품을 영구 삭제합니다.\n정말 진행하시겠습니까?`)) return;
-    Promise.all(accs.map(eid =>
-      api.post('/cpc/eleven-loss-products/delete/', { eid, product_nos: byAcc[eid], real: 1 })
-    ))
-      .then(() => toast.success(`실삭제 시작 — ${accs.length}계정. 진행상황은 텔레그램/로그로 확인하세요.`))
+    const items = sel.map(p => ({ eid: p.login_id, product_no: String(p.product_no) }));
+    api.post('/cpc/eleven-loss-products/delete/', { items, real: 1 })
+      .then((r: any) => toast.success(r.data?.message || `실삭제 시작 — ${accs.length}계정(순차 처리). 진행상황은 텔레그램/로그로 확인하세요.`))
       .catch((e: any) => toast.error(e?.response?.data?.message || e?.response?.data?.error || '시작 실패'));
   };
   const pageAllSelected = items.length > 0 && items.every(p => selProd.has(compositeKey(p)));

@@ -1811,7 +1811,42 @@ class ElevenLossDeleteView(views.APIView):
                              'message': '⚠️ 실삭제는 아직 비활성화 상태입니다. 1상품 dry-run으로 검증한 뒤 활성화됩니다.'}, status=400)
         from apps.cpc.models import protected_login_ids
         stop_flag = ' --stop-only' if stop_only else ''
-        # ★ 상품번호 지정 삭제(나의상품 선택삭제) — date/적자 산출 없이 그 상품만
+        # ★ 다계정 일괄 지정(나의상품 선택 — 통합뷰에서 여러 11번가 계정을 한 번에 선택한 경우).
+        # 계정별로 별도 API를 호출하면 각각 새 subprocess가 동시에 전역락을 다투다 대부분 스킵되므로
+        # (동시크롤 금지 락에 걸림), 한 subprocess가 --targets-json으로 전 계정을 순차 처리하게 한다.
+        items = d.get('items') or []
+        if items:
+            acc_map = {}
+            for it in items:
+                eid = str(it.get('eid') or it.get('eleven_id') or '').strip()
+                pno = re.sub(r'\D', '', str(it.get('product_no') or ''))
+                if not eid or not pno or not re.match(r'^[A-Za-z0-9_]+$', eid):
+                    continue
+                acc_map.setdefault(eid, []).append(pno)
+            protected_now = protected_login_ids('11st')
+            skipped_accs = [e for e in acc_map if e in protected_now]
+            acc_map = {e: v for e, v in acc_map.items() if e not in protected_now}
+            if not acc_map:
+                return Response({'status': 'blocked',
+                                 'message': '⛔ 처리 가능한 계정이 없습니다(전부 테스트/타사 계정이거나 형식 오류).'}, status=400)
+            import json as _json
+            targets_json = _json.dumps(acc_map)
+            a = f"manage.py delete_loss_products --targets-json '{targets_json}'" + stop_flag
+            if real:
+                a += ' --real'
+            sc = (f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {a} >> /tmp/delete_loss.log 2>&1')
+            try:
+                subprocess.Popen(['bash', '-c', sc], start_new_session=True,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                return Response({'status': 'error', 'error': str(e)}, status=500)
+            total = sum(len(v) for v in acc_map.values())
+            action_label = '판매중지' if stop_only else ('실삭제' if real else '검증(dry-run)')
+            msg = f'🛑 11번가 {len(acc_map)}계정 총 {total}개 {action_label} 시작(계정 순차 처리) — 텔레그램/로그로 확인하세요.'
+            if skipped_accs:
+                msg += f' [제외: {", ".join(skipped_accs)}]'
+            return Response({'status': 'started', 'message': msg})
+        # ★ 상품번호 지정 삭제(나의상품 선택삭제, 단일계정) — date/적자 산출 없이 그 상품만
         pnos = [re.sub(r'\D', '', str(p)) for p in (d.get('product_nos') or [])]
         pnos = [p for p in pnos if p]
         if pnos:

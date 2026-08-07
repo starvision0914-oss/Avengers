@@ -24,6 +24,9 @@ class Command(BaseCommand):
         parser.add_argument('--eid', default=None, help='특정 계정만 처리(테스트용)')
         parser.add_argument('--product-nos', nargs='*', dest='product_nos',
                             help='상품번호 지정 삭제(나의상품 선택삭제용). --eid 필수.')
+        parser.add_argument('--targets-json', dest='targets_json', default=None,
+                            help='다계정 일괄 지정(나의상품 선택). {"eid1":["pno",...], "eid2":[...]} JSON. '
+                                 '한 프로세스가 계정을 순차 처리 + 락 1회 획득 → 계정간 동시실행 락충돌 방지.')
 
     def handle(self, *args, **o):
         from apps.cpc.views import _eleven_product_rows, _active_eids
@@ -34,6 +37,19 @@ class Command(BaseCommand):
         if o.get('stop_only'):
             from crawlers.eleven_suspend_only import suspend_only
             run_mode = 'real' if mode == 'real' else 'validate'
+            if o.get('targets_json'):
+                import json
+                acc_map = json.loads(o['targets_json'])
+                targets = [{'eleven_id': eid, 'product_no': str(p)}
+                           for eid, pnos in acc_map.items() if eid not in protected for p in pnos]
+                skipped_accs = [eid for eid in acc_map if eid in protected]
+                if skipped_accs:
+                    self.stdout.write(f'⛔ 테스트/타사 계정 제외: {", ".join(skipped_accs)}')
+                self.stdout.write(f'다계정 지정상품 {len(targets)}개 / {len(acc_map) - len(skipped_accs)}계정 '
+                                   f'(stop_only, mode={run_mode}, 계정 순차처리)')
+                res = suspend_only(targets, mode=run_mode, log_fn=lambda m: self.stdout.write(m))
+                self.stdout.write(str(res))
+                return
             if o.get('product_nos'):
                 eid = o['eid'] or ''
                 if eid in protected:
@@ -68,6 +84,19 @@ class Command(BaseCommand):
             return
 
         from crawlers.eleven_loss_delete import run_delete
+        if o.get('targets_json'):
+            import json
+            acc_map = json.loads(o['targets_json'])
+            targets = [{'eleven_id': eid, 'product_no': str(p), 'seller_code': '', 'status': ''}
+                       for eid, pnos in acc_map.items() if eid not in protected for p in pnos]
+            skipped_accs = [eid for eid in acc_map if eid in protected]
+            if skipped_accs:
+                self.stdout.write(f'⛔ 테스트/타사 계정 제외: {", ".join(skipped_accs)}')
+            self.stdout.write(f'다계정 지정상품 {len(targets)}개 / {len(acc_map) - len(skipped_accs)}계정 '
+                               f'(mode={mode}, 계정 순차처리)')
+            res = run_delete(targets, mode=mode, log_fn=lambda m: self.stdout.write(m))
+            self.stdout.write(str({k: res.get(k) for k in ('mode', 'accounts', 'rest_done', 'marked', 'failed', 'skipped')}))
+            return
         # 상품번호 지정 삭제(나의상품 선택삭제) — 적자 산출 없이 그 상품만. run_delete가 status 무관 처리.
         if o.get('product_nos'):
             eid = o['eid'] or ''
