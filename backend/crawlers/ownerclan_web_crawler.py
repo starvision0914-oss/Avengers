@@ -92,7 +92,7 @@ def crawl_account_info(account, log_fn=None):
         if 'loginform' in driver.current_url:
             driver.find_element(By.ID, 'id').send_keys(account.login_id)
             driver.find_element(By.ID, 'passwd').send_keys(account.login_pw)
-            driver.find_element(By.CSS_SELECTOR, 'input[type=submit]').click()
+            driver.find_element(By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"]').click()
             time.sleep(3)
             try:
                 alert = driver.switch_to.alert

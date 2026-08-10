@@ -71,6 +71,8 @@ class Command(BaseCommand):
         parser.add_argument('--only', type=str, default='')
         parser.add_argument('--force', action='store_true',
                             help='쿠키 체크 생략, 전계정 재인증')
+        parser.add_argument('--grade-priority', action='store_true',
+                            help='OTP 필요 계정을 셀러등급 우선순위로 정렬(좋은 등급 먼저 처리)')
         parser.add_argument('--out', type=str, default='/tmp/11st_fast_result.json')
 
     def handle(self, *args, **opts):
@@ -134,6 +136,19 @@ class Command(BaseCommand):
         if not need_otp:
             self.stdout.write('✅ 모든 쿠키 유효. OTP 인증 불필요.')
             return
+
+        if opts['grade_priority']:
+            from apps.cpc.models import ElevenSellerGrade
+            from django.db.models import Max
+            latest_ts = {r['eleven_id']: r['m'] for r in
+                         ElevenSellerGrade.objects.values('eleven_id').annotate(m=Max('collected_at'))}
+            grade_map = {}
+            for g in ElevenSellerGrade.objects.filter(eleven_id__in=latest_ts.keys()):
+                if latest_ts.get(g.eleven_id) == g.collected_at:
+                    grade_map[g.eleven_id] = g.grade
+            # grade는 숫자가 작을수록 상위 등급. 등급정보 없는 계정은 맨 뒤로.
+            need_otp.sort(key=lambda a: (grade_map.get(a.login_id) is None, grade_map.get(a.login_id, 0)))
+            self.stdout.write('[grade-priority] OTP 필요 계정을 셀러등급 우선순위로 재정렬')
 
         # ── Step 2: 만료 계정만 Chrome 1개로 순서대로 OTP ──
         self.stdout.write(f'[Step 2] Chrome OTP 처리: {len(need_otp)}개')
