@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 django.setup()
 from apps.cpc.models import CrawlerAccount, St11AdStrategyLog
 from apps.cpc import eleven_block_guard as guard
-from crawlers.eleven_crawler import _do_login, _drain_alerts
+from crawlers.eleven_crawler import _do_login, _drain_alerts, _try_cookie_login, _save_cookies
 from crawlers.browser import create_driver, stop_display
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -41,6 +41,21 @@ def _log(run_id, status, msg, eid='', campaign='', group=''):
             group_name=group, status=status, detail=str(msg)[:500])
     except Exception:
         pass
+
+
+def _login(driver, account):
+    """쿠키 우선 로그인 — 저장된 쿠키가 살아있으면 재사용(OTP 불필요), 죽었으면 풀로그인 후 쿠키 저장.
+    (기존엔 이 모듈이 매번 _do_login()만 호출해 캠페인 조회/전략적용을 누를 때마다
+    직전 로그인 여부와 무관하게 무조건 새 OTP 문자를 발송시켰다 — 2026-08-11 수정)"""
+    ck = _try_cookie_login(driver, account)
+    if ck:
+        return True
+    if ck is None:   # Chrome 죽음 시그널
+        return False
+    if not _do_login(driver, account.login_id, account.password_enc):
+        return False
+    _save_cookies(driver, account)
+    return True
 
 
 def close_all_popups(driver):
@@ -73,15 +88,34 @@ def click_focus_menu(driver):
 
 
 def open_ad_management(driver):
+    """'광고관리' 클릭은 하위메뉴(전체캠페인/ON캠페인)를 펼치기만 할 뿐 페이지 이동이 없다
+    (실측 확인 2026-08-11 — URL이 /dashboard 그대로라 캠페인 0개로 나오던 원인).
+    펼친 뒤 실제 캠페인 목록으로 이동하는 '전체캠페인' 하위링크까지 마저 클릭해야 한다."""
     ad_xpath = '//*[@id="root"]/div/div[1]/div/nav/div[2]/div[2]/div[2]/div/div/div/div[1]/div[1]/div[1]/span'
+    expanded = False
     try:
         WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.XPATH, ad_xpath)))
-        driver.find_element(By.XPATH, ad_xpath).click(); time.sleep(2); return True
+        driver.find_element(By.XPATH, ad_xpath).click(); time.sleep(1.5); expanded = True
     except Exception:
         # 텍스트 기반 폴백(메뉴 구조 변동 대비)
         els = [e for e in driver.find_elements(By.XPATH, "//*[normalize-space(text())='광고관리']") if e.is_displayed()]
         if els:
-            driver.execute_script('arguments[0].click();', els[0]); time.sleep(2); return True
+            driver.execute_script('arguments[0].click();', els[0]); time.sleep(1.5); expanded = True
+    if not expanded:
+        return False
+    # '전체캠페인' 하위링크 클릭 → 실제 캠페인 목록 페이지로 이동.
+    # 하위메뉴 렌더가 시스템 부하 시 늦어질 수 있어(실측 — 고정 sleep만으론 간헐 실패) 최대 8초 폴링.
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        try:
+            els = [e for e in driver.find_elements(
+                By.XPATH, "//*[contains(normalize-space(text()),'전체캠페인')]") if e.is_displayed()]
+            if els:
+                driver.execute_script('arguments[0].click();', els[0]); time.sleep(2)
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
     return False
 
 
@@ -528,11 +562,11 @@ def list_campaigns(eid, run_id=None):
     if not ok:
         _log(run_id, 'ERROR', f'전역락/접속 불가 — {reason}', eid)
         _log(run_id, 'DONE', '중단'); return run_id
-    pw = {x.login_id: x.password_enc for x in CrawlerAccount.objects.filter(platform='11st')}
+    account = CrawlerAccount.objects.filter(platform='11st', login_id=eid).first()
     driver = None
     try:
         driver = create_driver(kill_existing=False)
-        sn = _do_login(driver, eid, pw.get(eid, ''))
+        sn = _login(driver, account) if account else False
         if not sn:
             _log(run_id, 'ERROR', '로그인 실패', eid); _log(run_id, 'DONE', '중단'); return run_id
         driver.implicitly_wait(0); driver.set_page_load_timeout(40)
@@ -611,7 +645,7 @@ def run_strategy(accounts, campaigns, on_start=8, on_end=16, weekdays=None,
         _log(run_id, 'DONE', '중단')
         return run_id
 
-    pw = {x.login_id: x.password_enc for x in CrawlerAccount.objects.filter(platform='11st')}
+    accts = {x.login_id: x for x in CrawlerAccount.objects.filter(platform='11st')}
     guard.clear_control_stop('st11strategy')   # 새 실행 — 묵은 중지플래그 제거
     try:
         for eid in accounts:
@@ -621,7 +655,7 @@ def run_strategy(accounts, campaigns, on_start=8, on_end=16, weekdays=None,
             driver = None
             try:
                 driver = create_driver(kill_existing=False)
-                t = time.time(); sn = _do_login(driver, eid, pw.get(eid, ''))
+                t = time.time(); sn = _login(driver, accts[eid]) if eid in accts else False
                 _log(run_id, 'INFO', f'로그인 {time.time()-t:.1f}s sn={sn}', eid)
                 if not sn:
                     _log(run_id, 'ERROR', '로그인 실패', eid); continue
