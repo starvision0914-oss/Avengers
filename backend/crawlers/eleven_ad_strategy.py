@@ -577,6 +577,18 @@ def list_campaigns(eid, run_id=None):
             _log(run_id, 'ERROR', '광고관리 진입 실패', eid); _log(run_id, 'DONE', '중단'); return run_id
         set_page_size_100(driver, run_id, eid)
         links = find_campaign_links(driver)
+        # 0개면 곧바로 포기하지 않고 재조회(신규 캠페인 생성 직후 11번가 서버 반영 지연 대응 — 2026-08-12 실측).
+        retry = 0
+        while not links and retry < 2:
+            retry += 1
+            _log(run_id, 'INFO', f'캠페인 0개 — 반영 지연 의심, {8}초 후 재조회({retry}/2)', eid)
+            time.sleep(8)
+            driver.get(ADOFFICE); time.sleep(4); close_all_popups(driver)
+            click_focus_menu(driver)
+            if not open_ad_management(driver):
+                continue
+            set_page_size_100(driver, run_id, eid)
+            links = find_campaign_links(driver)
         names = []
         for nm, _el in links:
             if nm and nm not in names:

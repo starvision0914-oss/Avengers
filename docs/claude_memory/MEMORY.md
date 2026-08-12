@@ -116,3 +116,4 @@
 - [고단가 콘텐츠 배치 작성](project_highcpc_content_batch.md) — 애드센스 수익화용 부동산/건강/금융/법률 글 대량작성 진행중. "이어서 써줘"라고만 하면 진행목록 파일 보고 자동 이어감
 - [부동산 제목 스타일 확정](feedback_realestate_title_style.md) — 검색어 일치형 유지(클릭유도형 제안 금지), 클릭률보다 구매의도 높은 트래픽·CPC 우선
 - [WebSearch 막혀도 트렌드 RSS는 가능](feedback_trends_rss_bypass.md) — curl로 구글트렌드 RSS 직접 조회하면 세션한도 무관, 뉴스스니펫 포함. 스니펫에 없는 사실은 창작 금지
+- [11번가 전략설정 캠페인 조회 레이스](project_11st_ad_strategy_campaign_race.md) — 캠페인 생성 직후 조회하면 11번가서버 반영지연으로 0개. list_campaigns 재시도(8초×2) 추가·pm2 재시작(2026-08-12)

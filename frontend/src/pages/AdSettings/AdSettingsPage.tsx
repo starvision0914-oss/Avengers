@@ -264,13 +264,22 @@ export default function AdSettingsPage() {
   }, [stratRunId]);
 
   // 전략 탭에 있는 동안 실행 내역 목록 폴링(다른 세션·CLI 실행도 보임)
+  // 페이지를 새로고침/재접속하면 stratRunId가 초기화돼 실행 중인 백그라운드 작업과
+  // 연결이 끊기고, '강제중지' 버튼이 disabled={!stratRunning} 때문에 계속 비활성 상태로
+  // 남아 눌리지 않는 문제가 있었다 — 실행 중인 run을 발견하면 자동으로 연결(2026-08-12 수정).
   useEffect(() => {
     if (tab !== 'st11strategy') return;
-    const fetchRuns = () => getSt11StrategyRuns().then(d => setStratRuns(d.runs || [])).catch(() => {});
+    const fetchRuns = () => getSt11StrategyRuns().then(d => {
+      const runs = d.runs || [];
+      setStratRuns(runs);
+      const active = runs.find((r: any) => r.running);
+      if (active && active.run_id !== stratRunId) { setStratRunId(active.run_id); setStratRunning(true); }
+      else if (!active && stratRunning) { setStratRunning(false); }
+    }).catch(() => {});
     fetchRuns();
     const t = setInterval(fetchRuns, 3000);
     return () => clearInterval(t);
-  }, [tab]);
+  }, [tab, stratRunId, stratRunning]);
 
   return (
     <div className="max-w-[1000px] mx-auto space-y-4">
