@@ -41,6 +41,7 @@ export interface ElevenAccountSummary {
   has_api_key: boolean;
   api_key_masked: string;
   product_count: number;
+  soldout_count: number;
   last_synced: string | null;
   grade: number | null;
   grade_message: string;
@@ -150,6 +151,11 @@ export async function triggerProductRecrawl(loginIds: string[]): Promise<{ statu
   const { data } = await api.post('/cpc/crawler/trigger/', {
     platform: '11st', type: 'product', accounts: loginIds,
   });
+  return data;
+}
+
+export async function suspendSoldoutProducts(loginIds: string[]): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+  const { data } = await api.post('/cpc/eleven-my/suspend-soldout/', { eids: loginIds });
   return data;
 }
 

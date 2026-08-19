@@ -331,7 +331,7 @@ def sync_focused_accounts(log_fn=None, fail_fast_threshold=SOFT_FAIL_THRESHOLD,
 _SORT_MAP = {
     'product_no': 'product_no', 'product_name': 'product_name', 'sale_price': 'sale_price',
     'stock_quantity': 'stock_quantity', 'status_type': 'status_type',
-    'seller_product_code': 'seller_product_code', 'category_id': 'category_id',
+    'seller_product_code': 'seller_product_code', 'category_id': 'category_id', 'category': 'category_id',
     'seller_name': 'account__seller_name', 'login_id': 'account__login_id', 'synced_at': 'synced_at',
 }
 
@@ -472,6 +472,47 @@ def refresh_purchase_costs(codes=None):
         return updated
 
 
+def refresh_gmarket_purchase_costs(codes=None):
+    """gmarket_my_product.purchase_cost 를 예비상품(ownerclan) 마켓가로 갱신 — refresh_purchase_costs와 동일 패턴(set-based JOIN).
+    - codes=None: 전체 갱신
+    - codes=[...]: 해당 예비상품 코드와 매칭되는 행만 갱신 (예비상품 업로드 직후, 빠름)"""
+    from django.db import connection
+    code_list = None
+    if codes is not None:
+        code_list = [c for c in {str(x).strip() for x in codes} if c]
+        if not code_list:
+            return 0
+    with connection.cursor() as c:
+        if code_list is None:
+            c.execute("""
+                UPDATE gmarket_my_product g
+                JOIN ownerclan_product o ON o.product_code = g.seller_product_code
+                SET g.purchase_cost = NULLIF(o.market_price, 0)
+                WHERE g.seller_product_code <> ''
+            """)
+            updated = c.rowcount
+            c.execute("""
+                UPDATE gmarket_my_product g
+                LEFT JOIN ownerclan_product o ON o.product_code = g.seller_product_code
+                SET g.purchase_cost = NULL
+                WHERE g.purchase_cost IS NOT NULL
+                  AND (g.seller_product_code = '' OR o.product_code IS NULL OR o.market_price = 0)
+            """)
+            return updated
+        updated = 0
+        for i in range(0, len(code_list), 5000):
+            chunk = code_list[i:i + 5000]
+            ph = ','.join(['%s'] * len(chunk))
+            c.execute(f"""
+                UPDATE gmarket_my_product g
+                LEFT JOIN ownerclan_product o ON o.product_code = g.seller_product_code
+                SET g.purchase_cost = NULLIF(o.market_price, 0)
+                WHERE g.seller_product_code IN ({ph})
+            """, chunk)
+            updated += c.rowcount
+        return updated
+
+
 def get_my_product_detail(product_pk):
     try:
         p = ElevenMyProduct.objects.select_related('account').get(pk=product_pk)
@@ -553,7 +594,10 @@ def get_account_summary(all_accounts=False):
         x['account_id']: x for x in
         ElevenMyProduct.objects.filter(account_id__in=account_ids)
             .values('account_id')
-            .annotate(product_count=Count('id'), last_synced=Max('synced_at'))
+            .annotate(
+                product_count=Count('id'), last_synced=Max('synced_at'),
+                soldout_count=Count('id', filter=Q(status_type='품절')),
+            )
     }
 
     # 등급: login_id별 가장 최근
@@ -596,6 +640,7 @@ def get_account_summary(all_accounts=False):
             'has_api_key': bool(a.api_key),
             'api_key_masked': ('****' + a.api_key[-4:]) if a.api_key else '',
             'product_count': agg.get('product_count', 0),
+            'soldout_count': agg.get('soldout_count', 0),
             'last_synced': agg['last_synced'].isoformat() if agg.get('last_synced') else None,
             'grade': g.grade if g else None,
             'grade_message': g.grade_message if g else '',

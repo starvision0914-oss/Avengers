@@ -1,6 +1,18 @@
 import { useState, useEffect, useCallback, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
-import { PlayCircle, Package, BarChart3, RefreshCw, Download } from 'lucide-react';
+import { PlayCircle, Package, BarChart3, RefreshCw, Download, TrendingUp } from 'lucide-react';
 import api from '../../api/client';
+
+interface WeeklyPopularFile {
+  filename: string;
+  size: number;
+  saved_at: number;
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)}KB`;
+  return `${(n / 1024 / 1024).toFixed(1)}MB`;
+}
 
 interface AccountInfo {
   login_id: string;
@@ -137,6 +149,51 @@ export default function OwnerclanCrawlerPage() {
     load();
   };
 
+  const [weeklyFiles, setWeeklyFiles] = useState<WeeklyPopularFile[]>([]);
+  const [weeklyBusy, setWeeklyBusy] = useState(false);
+  const [weeklyMsg, setWeeklyMsg] = useState('');
+
+  const loadWeekly = useCallback(() => {
+    api.get('/ownerclan/weekly-popular/').then(r => {
+      setWeeklyFiles(r.data.files || []);
+      setWeeklyBusy(r.data.busy);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadWeekly();
+    const t = setInterval(loadWeekly, 10000);
+    return () => clearInterval(t);
+  }, [loadWeekly]);
+
+  const handleWeeklyRun = async () => {
+    setWeeklyMsg('');
+    try {
+      await api.post('/ownerclan/weekly-popular/');
+      setWeeklyMsg('다운로드 시작됨 — 약 20~30초 소요');
+      setTimeout(loadWeekly, 25000);
+    } catch (e: any) {
+      setWeeklyMsg(e?.response?.data?.error || '시작 실패');
+    }
+  };
+
+  const handleWeeklyDownload = async (filename: string) => {
+    try {
+      const res = await api.get('/ownerclan/weekly-popular/download/', {
+        params: { filename },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('다운로드 실패');
+    }
+  };
+
   const [infoMsg, setInfoMsg] = useState('');
   const handleInfoRefresh = async () => {
     setInfoMsg('');
@@ -264,6 +321,59 @@ export default function OwnerclanCrawlerPage() {
                 <span className="font-bold text-[#dc2626]">{lowestTotals[c.key] ?? 0}개</span>
               </span>
             ))}
+          </div>
+        </div>
+
+        {/* ── 주간 인기 상품(db저장창고) ── */}
+        <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
+            <TrendingUp size={15} className="text-[#dc2626]" />
+            <span className="text-[15px] font-bold text-[#222]">주간 인기 상품 (db저장창고)</span>
+            <span className="text-[13px] text-[#999]">매일 09:00 자동 저장 · 계정 무관 사이트 전체 랭킹</span>
+            <span className="ml-auto flex items-center gap-2">
+              {weeklyMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{weeklyMsg}</span>}
+              <button onClick={handleWeeklyRun} disabled={weeklyBusy}
+                className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
+                style={{ background: weeklyBusy ? '#aaa' : '#dc2626' }}>
+                <PlayCircle size={13} className={weeklyBusy ? 'animate-spin' : ''} />
+                {weeklyBusy ? '다운로드 중…' : '지금 다운로드'}
+              </button>
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[15px]">
+              <thead>
+                <tr>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555]">파일명</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-right font-semibold text-[#555] w-28">크기</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-48">저장 시각</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-center font-semibold text-[#555] w-24">다운로드</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weeklyFiles.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
+                      아직 저장된 파일이 없습니다
+                    </td>
+                  </tr>
+                ) : (
+                  weeklyFiles.map((f, idx) => (
+                    <tr key={f.filename} className={idx % 2 === 1 ? 'bg-[#fafbfc]' : 'bg-white'}>
+                      <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#333]">{f.filename}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-right tabular-nums text-[#555]">{formatBytes(f.size)}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#555]">{new Date(f.saved_at * 1000).toLocaleString('ko-KR')}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-center">
+                        <button onClick={() => handleWeeklyDownload(f.filename)}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#2563eb] rounded hover:bg-[#1d4ed8]">
+                          <Download size={11} /> 받기
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 

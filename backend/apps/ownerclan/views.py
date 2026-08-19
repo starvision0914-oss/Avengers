@@ -360,6 +360,82 @@ class OwnerclanApiCrawlView(APIView):
         return Response({'status': 'started', 'task_id': task.id})
 
 
+class OwnerclanWeeklyPopularView(APIView):
+    """오너클랜 '주간 인기 상품' 다운로드(db저장창고) — 파일 목록 조회/수동 실행.
+    매일 09:00 크론(cron_ownerclan_weekly_popular.sh)으로도 자동 저장됨."""
+    permission_classes = [IsAuthenticated]
+    LOG_FILE = '/tmp/cron_ownerclan_weekly.log'
+
+    def get(self, request):
+        import os
+        from django.conf import settings
+        storage_dir = os.path.join(settings.BASE_DIR, 'media', 'ownerclan_weekly_popular')
+        files = []
+        if os.path.isdir(storage_dir):
+            for name in os.listdir(storage_dir):
+                path = os.path.join(storage_dir, name)
+                if os.path.isfile(path):
+                    stat = os.stat(path)
+                    files.append({
+                        'filename': name,
+                        'size': stat.st_size,
+                        'saved_at': stat.st_mtime,
+                    })
+        files.sort(key=lambda f: f['saved_at'], reverse=True)
+
+        task = OwnerclanTask.objects.filter(task_type='weekly_popular').order_by('-created_at').first()
+        busy = False
+        if task and task.status == 'running' and task.pid:
+            try:
+                os.kill(task.pid, 0)
+                busy = True
+            except (ProcessLookupError, PermissionError):
+                task.status = 'done'
+                task.save(update_fields=['status'])
+
+        return Response({'files': files, 'storage_dir': storage_dir, 'busy': busy})
+
+    def post(self, request):
+        import os
+        import subprocess
+        running = OwnerclanTask.objects.filter(task_type='weekly_popular', status='running').first()
+        if running and running.pid:
+            try:
+                os.kill(running.pid, 0)
+                return Response({'error': '이미 수집 중입니다.'}, status=409)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+        task = OwnerclanTask.objects.create(task_type='weekly_popular', status='running')
+        cmd = (f'cd /home/rejoice888/Avengers/backend && '
+               f'python3 manage.py crawl_ownerclan_weekly_popular > {self.LOG_FILE} 2>&1; '
+               f'echo DONE >> {self.LOG_FILE}')
+        proc = subprocess.Popen(['bash', '-c', cmd], start_new_session=True)
+        task.pid = proc.pid
+        task.status = 'running'
+        task.save(update_fields=['pid', 'status'])
+        return Response({'status': 'started', 'task_id': task.id})
+
+
+class OwnerclanWeeklyPopularDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import os
+        from django.conf import settings
+        from django.http import FileResponse, Http404
+
+        filename = request.query_params.get('filename', '')
+        # 경로 조작 방지 — 순수 파일명만 허용
+        if not filename or os.path.basename(filename) != filename:
+            raise Http404()
+        storage_dir = os.path.join(settings.BASE_DIR, 'media', 'ownerclan_weekly_popular')
+        path = os.path.join(storage_dir, filename)
+        if not os.path.isfile(path):
+            raise Http404()
+        return FileResponse(open(path, 'rb'), as_attachment=True, filename=filename)
+
+
 class OwnerclanAccountInfoCrawlView(APIView):
     """오너클랜 마이페이지 계정정보(예치금/주문현황/구독서비스/최저가선점권) 새로고침 — 백그라운드 실행."""
     permission_classes = [IsAuthenticated]

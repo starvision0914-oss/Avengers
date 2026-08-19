@@ -1904,6 +1904,61 @@ class ElevenLossDeleteView(views.APIView):
         return Response({'status': 'started', 'message': msg})
 
 
+class ElevenSuspendSoldoutView(views.APIView):
+    """11번가 품절(재고0) 상품 일괄 판매중지 — 계정 선택형.
+    선택 계정들의 ElevenMyProduct 중 status_type='품절'인 상품번호를 서버에서 직접 조회해
+    delete_loss_products --targets-json --stop-only (suspend_only)로 넘긴다. 판매중지는 삭제가
+    아니라 되돌릴 수 있는 조치라 dry-run 없이 바로 실행(real=1 고정). 진행 중 강제종료는
+    같은 11번가 전역락을 쓰는 기존 St11CrawlStopView(/cpc/crawler/eleven-cost/stop/)로 가능."""
+    def post(self, request):
+        import re, json, subprocess
+        from apps.cpc.models import ElevenMyProduct, protected_login_ids
+
+        eids = [str(e).strip() for e in (request.data.get('eids') or []) if str(e).strip()]
+        eids = [e for e in eids if re.match(r'^[A-Za-z0-9_]+$', e)]
+        if not eids:
+            return Response({'error': 'eids(계정 목록) 필수'}, status=400)
+
+        protected_now = protected_login_ids('11st')
+        skipped_protected = [e for e in eids if e in protected_now]
+        eids = [e for e in eids if e not in protected_now]
+
+        acc_map = {}
+        for eid in eids:
+            pnos = list(ElevenMyProduct.objects.filter(
+                account__login_id=eid, status_type='품절'
+            ).values_list('product_no', flat=True))
+            if pnos:
+                acc_map[eid] = [str(p) for p in pnos]
+        no_soldout = [e for e in eids if e not in acc_map]
+
+        if not acc_map:
+            msg = '⛔ 선택 계정에 품절 상품이 없습니다.'
+            if skipped_protected:
+                msg += f' [제외: {", ".join(skipped_protected)}]'
+            return Response({'status': 'blocked', 'message': msg}, status=400)
+
+        targets_json = json.dumps(acc_map)
+        args = f"manage.py delete_loss_products --targets-json '{targets_json}' --stop-only --real"
+        script = f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {args} >> /tmp/delete_loss.log 2>&1'
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        total = sum(len(v) for v in acc_map.values())
+        msg = f'🛑 품절→판매중지 시작 — {len(acc_map)}계정 총 {total}개. 진행상황은 텔레그램/로그(/tmp/delete_loss.log)로 확인, 강제종료는 "강제중지" 버튼 사용.'
+        notes = []
+        if skipped_protected:
+            notes.append(f'제외(테스트계정): {", ".join(skipped_protected)}')
+        if no_soldout:
+            notes.append(f'품절 없음: {", ".join(no_soldout)}')
+        if notes:
+            msg += ' [' + ' / '.join(notes) + ']'
+        return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
+
+
 class ElevenLossMarkDeletedView(views.APIView):
     """적자상품 삭제완료 표시 — 11번가에서 삭제한 상품을 기록(비고 '삭제완료' 파란색).
     body: {product_nos:[...], eleven_id?} 또는 {all:true}(현재 적자 전체 삭제완료 처리)."""
@@ -3369,6 +3424,8 @@ _GMKT_SORT = {
     'stock_quantity': 'stock_quantity', 'status_type': 'status_type', 'market': 'market',
     'seller_product_code': 'seller_product_code', 'synced_at': 'synced_at',
     'login_id': 'account__login_id', 'seller_name': 'account__seller_name',
+    'purchase_cost': 'purchase_cost', 'cost_diff': 'cost_diff',
+    'category': 'category_code', 'category_code': 'category_code',
 }
 
 
@@ -3389,6 +3446,7 @@ class GmarketMyProductListView(views.APIView):
         search = request.query_params.get('search') or None
         sort = request.query_params.get('sort') or 'product_no'
         order = request.query_params.get('order') or 'asc'
+        needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
 
         qs = GmarketMyProduct.objects.select_related('account')
         if account_id:
@@ -3402,6 +3460,16 @@ class GmarketMyProductListView(views.APIView):
         if search:
             qs = qs.filter(Q(product_name__icontains=search) | Q(product_no__icontains=search)
                            | Q(seller_product_code__icontains=search) | Q(account__login_id__icontains=search))
+
+        # 확인필요 = 역마진(구매원가>판매가 → cost_diff<0). 현재 필터 기준 건수(배지표시용, 캐시).
+        from django.core.cache import cache as _ncache
+        nc_key = f"gmkt_needs:{account_id}:{login_id}:{market}:{status_q}:{search}"
+        needs_total = _ncache.get(nc_key)
+        if needs_total is None:
+            needs_total = qs.filter(cost_diff__lt=0).count()
+            _ncache.set(nc_key, needs_total, 120)
+        if needs_check:
+            qs = qs.filter(cost_diff__lt=0)
         # 중복제외: 같은 (계정, 판매자코드)는 1개만(가장 빠른 id) — 같은 상품의 다중 상품번호/마켓 중복 제거.
         # 기존 `id__in=<keep_ids 서브쿼리>`는 48만행 semi-join이 매 페이지 재실행돼 ~353초였음.
         # 제거 대상(loser=그룹 내 min 초과분)은 ~3.9만개뿐 → loser id만 캐시하고 exclude.
@@ -3419,8 +3487,15 @@ class GmarketMyProductListView(views.APIView):
                 _cache.set(sig, loser_ids, 180)
             if loser_ids:
                 qs = qs.exclude(id__in=loser_ids)
-        sf = _GMKT_SORT.get(sort, 'product_no')
-        qs = qs.order_by('-' + sf if order == 'desc' else sf)
+        from django.db.models import F
+        if needs_check and sort not in _GMKT_SORT:
+            qs = qs.order_by(F('cost_diff').asc(nulls_last=True), '-id')   # 확인필요 기본: 역마진 심한 순
+        elif sort in ('purchase_cost', 'cost_diff'):
+            nulls = F(sort).asc(nulls_last=True) if order == 'asc' else F(sort).desc(nulls_last=True)
+            qs = qs.order_by(nulls, '-id')
+        else:
+            sf = _GMKT_SORT.get(sort, 'product_no')
+            qs = qs.order_by('-' + sf if order == 'desc' else sf)
 
         if request.query_params.get('export'):
             import csv as _csv
@@ -3445,11 +3520,14 @@ class GmarketMyProductListView(views.APIView):
 
         # COUNT(*)는 48만행이라 페이지 이동마다 ~2초 → 필터별 캐시(동기화 때만 변함)
         from django.core.cache import cache as _cache
-        cnt_key = f"gmkt_my_count:{account_id}:{login_id}:{market}:{status_q}:{search}:{int(dedup_on)}"
-        total = _cache.get(cnt_key)
-        if total is None:
-            total = qs.count()
-            _cache.set(cnt_key, total, 180)
+        if needs_check:
+            total = needs_total
+        else:
+            cnt_key = f"gmkt_my_count:{account_id}:{login_id}:{market}:{status_q}:{search}:{int(dedup_on)}"
+            total = _cache.get(cnt_key)
+            if total is None:
+                total = qs.count()
+                _cache.set(cnt_key, total, 180)
         start = (page - 1) * per_page
         items = [{
             'id': p.id, 'login_id': p.account.login_id, 'seller_name': p.account.seller_name,
@@ -3458,9 +3536,11 @@ class GmarketMyProductListView(views.APIView):
             'status_type': p.status_type, 'seller_product_code': p.seller_product_code,
             'category_code': p.category_code,
             'synced_at': p.synced_at.isoformat() if p.synced_at else None,
+            'purchase_cost': p.purchase_cost, 'cost_diff': p.cost_diff,
         } for p in qs[start:start + per_page]]
         return Response({'items': items, 'total': total, 'page': page, 'per_page': per_page,
-                         'total_pages': math.ceil(total / per_page) if per_page else 1})
+                         'total_pages': math.ceil(total / per_page) if per_page else 1,
+                         'needs_check_total': needs_total})
 
 
 class GmarketCrawlStatusView(views.APIView):
@@ -3898,7 +3978,8 @@ class MyProductsAllView(views.APIView):
     permission_classes = [IsAuthenticated]
 
     _COMMON_SORT = {'product_name', 'sale_price', 'stock_quantity', 'status_type',
-                     'seller_product_code', 'login_id', 'seller_name', 'synced_at'}
+                     'seller_product_code', 'login_id', 'seller_name', 'synced_at',
+                     'purchase_cost', 'cost_diff'}
 
     def get(self, request):
         import math
@@ -3932,8 +4013,9 @@ class MyProductsAllView(views.APIView):
             eq = eq.filter(cost_diff__lt=0)
         _E_SORT = {'product_name': 'product_name', 'sale_price': 'sale_price', 'stock_quantity': 'stock_quantity',
                    'status_type': 'status_type', 'seller_product_code': 'seller_product_code',
-                   'login_id': 'account__login_id', 'seller_name': 'account__seller_name', 'synced_at': 'synced_at'}
-        ef = _E_SORT[sort]
+                   'login_id': 'account__login_id', 'seller_name': 'account__seller_name', 'synced_at': 'synced_at',
+                   'purchase_cost': 'purchase_cost', 'cost_diff': 'cost_diff'}
+        ef = _E_SORT.get(sort, 'synced_at')
         eq = eq.order_by(('-' if order == 'desc' else '') + ef, '-id')
 
         eleven_total = 0
@@ -3967,7 +4049,7 @@ class MyProductsAllView(views.APIView):
             gq = gq.filter(Q(product_name__icontains=search) | Q(product_no__icontains=search)
                            | Q(seller_product_code__icontains=search) | Q(account__login_id__icontains=search))
         if needs_check:
-            gmkt_allowed = False   # 확인필요(역마진)는 11번가 전용 개념
+            gq = gq.filter(cost_diff__lt=0)
         if dedup_on:
             from django.db.models import Min
             from django.core.cache import cache as _cache
@@ -3988,7 +4070,7 @@ class MyProductsAllView(views.APIView):
         gmkt_rows = []
         if gmkt_allowed:
             from django.core.cache import cache as _cache
-            gcnt_key = f"gmkt_all_count:{status_q}:{search}:{int(dedup_on)}"
+            gcnt_key = f"gmkt_all_count:{status_q}:{search}:{int(dedup_on)}:{int(needs_check)}"
             gmkt_total = _cache.get(gcnt_key)
             if gmkt_total is None:
                 gmkt_total = gq.count()
@@ -4003,7 +4085,7 @@ class MyProductsAllView(views.APIView):
                     'seller_product_code': p.seller_product_code, 'category': p.category_code,
                     'product_image_url': p.product_image_url,
                     'synced_at': p.synced_at.isoformat() if p.synced_at else None,
-                    'purchase_cost': None, 'cost_diff': None,
+                    'purchase_cost': p.purchase_cost, 'cost_diff': p.cost_diff,
                 })
 
         # ── 쿠팡 (오픈API 등록상품 — 판매가/재고 데이터 없음, 승인상태만 존재) ──

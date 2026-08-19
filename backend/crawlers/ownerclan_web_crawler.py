@@ -12,6 +12,7 @@
 """
 import logging
 import os
+import shutil
 import time
 
 from django.utils import timezone
@@ -156,3 +157,97 @@ def crawl_account_info(account, log_fn=None):
     account.save(update_fields=['balance', 'order_stats', 'subscription_info',
                                  'lowest_price_quota', 'info_synced_at'])
     return result
+
+
+# db저장창고 — 오너클랜 '주간 인기 상품' 다운로드. 판매자별 상품이 아닌 사이트 전체 랭킹
+# 정적 리포트라 어느 계정으로 로그인해도 동일 파일. 버튼(id=btn-download-weekly-strategic-selfcode)
+# 클릭 시 /V2/_ajax/product_download_ajax.php(mode=downloadStrategicSalesSelfcode)로 즉시
+# fetch+blob 다운로드되는 방식이라 다운로드 세트 생성/대기 없이 바로 받아짐(2026-08-19 실측, rejoice333).
+# Avengers DB 테이블에는 적재하지 않고 파일만 보관.
+DOWNLOAD_PAGE = 'https://ownerclan.com/V2/service/productDownload.php'
+WEEKLY_POPULAR_STORAGE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'media', 'ownerclan_weekly_popular'
+)
+
+
+def crawl_weekly_popular(login_id, log_fn=None):
+    from selenium.webdriver.common.by import By
+    from selenium.common.exceptions import NoAlertPresentException, UnexpectedAlertPresentException
+    from django.utils import timezone as dj_timezone
+    from crawlers.browser import create_driver
+    from apps.ownerclan.models import OwnerclanApiAccount
+
+    account = OwnerclanApiAccount.objects.get(login_id=login_id)
+
+    os.environ.setdefault('DISPLAY', ':99')
+    os.makedirs(WEEKLY_POPULAR_STORAGE_DIR, exist_ok=True)
+    dl_dir = f'/tmp/ownerclan_weekly_popular_dl_{login_id}'
+    os.makedirs(dl_dir, exist_ok=True)
+    for f in os.listdir(dl_dir):
+        try:
+            os.remove(os.path.join(dl_dir, f))
+        except OSError:
+            pass
+
+    profile_dir = f'/tmp/ownerclan_web_profile_{login_id}'
+    os.makedirs(profile_dir, exist_ok=True)
+    driver = create_driver(user_data_dir=profile_dir, kill_existing=False, download_dir=dl_dir)
+    try:
+        try:
+            driver.get(LOGIN_URL)
+        except UnexpectedAlertPresentException:
+            pass
+        time.sleep(2)
+        try:
+            alert = driver.switch_to.alert
+            alert.accept()
+        except NoAlertPresentException:
+            pass
+        if 'loginform' in driver.current_url:
+            driver.find_element(By.ID, 'id').send_keys(account.login_id)
+            driver.find_element(By.ID, 'passwd').send_keys(account.login_pw)
+            driver.find_element(By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"]').click()
+            time.sleep(3)
+            try:
+                alert = driver.switch_to.alert
+                alert_text = alert.text
+                alert.accept()
+                if '로그인' in alert_text:
+                    _log(log_fn, f'[ownerclan-weekly:{login_id}] 로그인 실패: {alert_text}')
+                    return {'error': f'로그인 실패: {alert_text}'}
+            except NoAlertPresentException:
+                pass
+        _log(log_fn, f'[ownerclan-weekly:{login_id}] 로그인 성공')
+
+        driver.get(DOWNLOAD_PAGE)
+        time.sleep(2)
+        try:
+            driver.switch_to.alert.accept()
+        except NoAlertPresentException:
+            pass
+
+        btn = driver.find_element(By.ID, 'btn-download-weekly-strategic-selfcode')
+        btn.click()
+        _log(log_fn, f'[ownerclan-weekly:{login_id}] 주간 인기 상품 다운로드 클릭')
+
+        waited = 0
+        downloaded = None
+        while waited < 60:
+            time.sleep(2)
+            waited += 2
+            files = [f for f in os.listdir(dl_dir) if not f.endswith('.crdownload')]
+            if files:
+                downloaded = files[0]
+                break
+        if not downloaded:
+            _log(log_fn, f'[ownerclan-weekly:{login_id}] 다운로드 실패(타임아웃)')
+            return {'error': '다운로드 타임아웃'}
+
+        today = dj_timezone.localtime(dj_timezone.now()).strftime('%Y-%m-%d')
+        ext = os.path.splitext(downloaded)[1] or '.zip'
+        dest_path = os.path.join(WEEKLY_POPULAR_STORAGE_DIR, f'best_prod_{today}{ext}')
+        shutil.move(os.path.join(dl_dir, downloaded), dest_path)
+        _log(log_fn, f'[ownerclan-weekly:{login_id}] 저장 완료: {dest_path}')
+        return {'saved_path': dest_path}
+    finally:
+        driver.quit()

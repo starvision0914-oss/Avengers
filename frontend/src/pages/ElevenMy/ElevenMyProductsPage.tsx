@@ -3,10 +3,13 @@ import { Sun, Moon, RefreshCw, Search, ChevronLeft, ChevronRight, Package, Star,
 import toast from 'react-hot-toast';
 import {
   fetchElevenMyProducts, fetchElevenMyAccounts, syncElevenMyProducts,
-  exportElevenMyProducts, triggerIntegratedSync, triggerProductRecrawl,
+  exportElevenMyProducts, triggerIntegratedSync, triggerProductRecrawl, suspendSoldoutProducts,
   type ElevenAccountSummary,
 } from '../../api/elevenMy';
+import { stopElevenCrawl } from '../../api/crawler';
 import { fetchGmarketMyProducts, fetchGmarketMyAccounts, exportGmarketMyProducts } from '../../api/gmarketMy';
+import { getAccounts as getSmartstoreAccounts, getProducts as getSmartstoreProducts, downloadProductExcel as downloadSmartstoreExcel } from '../../api/smartstore';
+import { fetchLotteonMyAccounts, fetchLotteonMyProducts } from '../../api/lotteonMy';
 import { fetchAllMyProducts, type MyProductAllItem } from '../../api/myProductsAll';
 import api from '../../api/client';
 import { useTheme } from '../../hooks/useTheme';
@@ -36,6 +39,15 @@ const STATUS_COLOR: Record<string, string> = {
   '판매중지': '#6b7280', '판매금지': '#dc2626', '판매불가': '#dc2626', '재고부족': '#f59e0b',
 };
 
+// 스마트스토어 status_type은 영문 코드로 저장됨 — 표시/필터용 한글 매핑
+const SS_STATUS_MAP: Record<string, string> = {
+  SALE: '판매중', SUSPENSION: '판매중지', OUTOFSTOCK: '품절',
+  WAIT: '판매대기', PROHIBITION: '판매금지', UNADMISSION: '미승인',
+};
+const SS_STATUS_REVERSE: Record<string, string> = Object.fromEntries(
+  Object.entries(SS_STATUS_MAP).map(([k, v]) => [v, k])
+);
+
 function fmt(n: number | null | undefined): string {
   if (n == null) return '-';
   return n.toLocaleString();
@@ -59,7 +71,7 @@ export default function ElevenMyProductsPage() {
   const [page, setPage] = useState(1);
   const [perPage, setPerPage] = useState(50);
   const [pageInput, setPageInput] = useState('');
-  const [platform, setPlatform] = useState<'all' | '11st' | 'gmarket'>('all');   // 쇼핑몰 선택
+  const [platform, setPlatform] = useState<'all' | '11st' | 'gmarket' | 'smartstore' | 'lotteon'>('all');   // 쇼핑몰 선택
   const [accountId, setAccountId] = useState<number | undefined>(undefined);
   const [status, setStatus] = useState<string>('');
   const [search, setSearch] = useState('');
@@ -76,6 +88,11 @@ export default function ElevenMyProductsPage() {
   const [recrawlOpen, setRecrawlOpen] = useState(false);
   const [recrawlSel, setRecrawlSel] = useState<Set<string>>(new Set());
   const [recrawling, setRecrawling] = useState(false);
+  // 품절 상품 일괄 판매중지(계정 선택형)
+  const [suspendOpen, setSuspendOpen] = useState(false);
+  const [suspendSel, setSuspendSel] = useState<Set<string>>(new Set());
+  const [suspending, setSuspending] = useState(false);
+  const [stoppingJob, setStoppingJob] = useState(false);
   // 상품 선택(엑셀 다운로드용) — 페이지 넘어가도 유지 (platform:id → 상품)
   const [selProd, setSelProd] = useState<Map<string, MyProductAllItem>>(new Map());
   // 정렬
@@ -83,7 +100,7 @@ export default function ElevenMyProductsPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [needsCheck, setNeedsCheck] = useState(false);          // 확인필요(역마진)만 보기
   const [needsCheckTotal, setNeedsCheckTotal] = useState(0);    // 확인필요 건수(배지)
-  const [allAccounts, setAllAccounts] = useState(false);        // 전체 계정 보기(집중관리 외 비집중 포함)
+  const [allAccounts, setAllAccounts] = useState(true);         // 전체 계정 보기(집중관리 외 비집중 포함) — 기본 ON
   const [dedup, setDedup] = useState(false);                    // 지마켓 중복(같은 판매자코드) 제외
 
   const loadAccounts = useCallback(async () => {
@@ -94,6 +111,18 @@ export default function ElevenMyProductsPage() {
         setAccounts(accs.map(a => ({
           account_id: a.account_id, login_id: a.login_id, seller_name: a.seller_name,
           product_count: a.product_count, has_api_key: true,
+        })) as any);
+      } else if (platform === 'smartstore') {
+        const accs = await getSmartstoreAccounts();
+        setAccounts(accs.map(a => ({
+          account_id: a.id, login_id: a.login_id, seller_name: a.display_name || a.store_name,
+          product_count: 0, has_api_key: a.has_api_key,
+        })) as any);
+      } else if (platform === 'lotteon') {
+        const accs = await fetchLotteonMyAccounts();
+        setAccounts(accs.map(a => ({
+          account_id: a.account_id, login_id: a.login_id, seller_name: a.seller_name,
+          product_count: a.product_count, has_api_key: a.has_api_key,
         })) as any);
       } else {
         const r = await fetchElevenMyAccounts(allAccounts);
@@ -113,10 +142,36 @@ export default function ElevenMyProductsPage() {
         setTotal(r.total);
         setTotalPages(r.total_pages);
       } else if (platform === 'gmarket') {
-        const r = await fetchGmarketMyProducts(page, perPage, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup);
+        const r = await fetchGmarketMyProducts(page, perPage, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup, needsCheck);
         setItems(r.items.map(p => ({
           ...p, platform: 'gmarket', category: p.category_code, is_focused: null,
-          status_label: p.status_type, purchase_cost: null, cost_diff: null,
+          status_label: p.status_type,
+        })) as any);
+        setTotal(r.total);
+        setTotalPages(r.total_pages);
+        setNeedsCheckTotal(r.needs_check_total ?? 0);
+      } else if (platform === 'smartstore') {
+        const ssStatus = status ? SS_STATUS_REVERSE[status] : undefined;
+        const r = await getSmartstoreProducts({
+          account_id: accountId, page, per_page: perPage, status: ssStatus, search: search || undefined,
+        });
+        const ssLoginById = new Map(accounts.map((a: any) => [a.account_id, a.login_id]));
+        setItems(r.items.map(p => ({
+          id: p.id, platform: 'smartstore', login_id: ssLoginById.get(p.account_id) || '', seller_name: p.store_name, is_focused: null,
+          market: null, product_no: p.product_no, product_name: p.name,
+          sale_price: p.sale_price, stock_quantity: p.stock_quantity,
+          status_type: p.status_type, status_label: SS_STATUS_MAP[p.status_type] || p.status_type,
+          seller_product_code: p.seller_management_code, category: p.category_id,
+          product_image_url: p.product_image_url, synced_at: p.synced_at,
+          purchase_cost: null, cost_diff: null,
+        })) as any);
+        setTotal(r.total);
+        setTotalPages(r.total_pages);
+      } else if (platform === 'lotteon') {
+        const r = await fetchLotteonMyProducts(page, perPage, accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder);
+        setItems(r.items.map(p => ({
+          ...p, platform: 'lotteon', is_focused: null, market: null,
+          purchase_cost: null, cost_diff: null,
         })) as any);
         setTotal(r.total);
         setTotalPages(r.total_pages);
@@ -134,7 +189,7 @@ export default function ElevenMyProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [platform, page, perPage, accountId, status, search, sortKey, sortOrder, needsCheck, allAccounts, dedup]);
+  }, [platform, page, perPage, accountId, status, search, sortKey, sortOrder, needsCheck, allAccounts, dedup, accounts]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -246,6 +301,50 @@ export default function ElevenMyProductsPage() {
     }
   };
 
+  const toggleSuspend = (loginId: string) => {
+    setSuspendSel(prev => {
+      const n = new Set(prev);
+      if (n.has(loginId)) n.delete(loginId); else n.add(loginId);
+      return n;
+    });
+  };
+  const allSuspendSelected = accounts.length > 0 && suspendSel.size === accounts.length;
+  const toggleAllSuspend = () => {
+    setSuspendSel(allSuspendSelected ? new Set() : new Set(accounts.map(a => a.login_id)));
+  };
+  const startSuspendSoldout = async () => {
+    const ids = Array.from(suspendSel);
+    if (ids.length === 0) { toast.error('계정을 선택하세요'); return; }
+    if (!window.confirm(`선택 ${ids.length}개 계정의 품절 상품을 전부 판매중지로 전환합니다. 계속할까요?`)) return;
+    setSuspending(true);
+    const tid = toast.loading(`${ids.length}개 계정 품절→판매중지 시작 중...`);
+    try {
+      const r = await suspendSoldoutProducts(ids);
+      if (r.status === 'started') {
+        toast.success(r.message || '시작됨', { id: tid, duration: 6000 });
+        setSuspendOpen(false);
+      } else {
+        toast.error(r.message || r.error || '시작 실패', { id: tid });
+      }
+    } catch (e: any) {
+      toast.error(`시작 실패: ${e.response?.data?.message || e.response?.data?.error || e.message}`, { id: tid });
+    } finally {
+      setSuspending(false);
+    }
+  };
+  const stopSuspendSoldout = async () => {
+    if (!window.confirm('실행 중인 11번가 작업(품절→판매중지 등)을 강제로 중지할까요?')) return;
+    setStoppingJob(true);
+    try {
+      const r = await stopElevenCrawl();
+      toast.success(r?.message || '중지했습니다.');
+    } catch (e: any) {
+      toast.error(e?.response?.data?.error || '중지 실패');
+    } finally {
+      setStoppingJob(false);
+    }
+  };
+
   const toggleProd = (p: MyProductAllItem) => {
     setSelProd(prev => {
       const n = new Map(prev);
@@ -348,8 +447,26 @@ export default function ElevenMyProductsPage() {
         const resp = await fetchAllMyProducts(1, MAX_SELECT, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, dedup);
         fetched = resp.items; respTotal = resp.total;
       } else if (platform === 'gmarket') {
-        const resp = await fetchGmarketMyProducts(1, MAX_SELECT, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup);
-        fetched = resp.items.map(p => ({ ...p, platform: 'gmarket' as const, category: p.category_code, is_focused: null, status_label: p.status_type, purchase_cost: null, cost_diff: null })) as any;
+        const resp = await fetchGmarketMyProducts(1, MAX_SELECT, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup, needsCheck);
+        fetched = resp.items.map(p => ({ ...p, platform: 'gmarket' as const, category: p.category_code, is_focused: null, status_label: p.status_type })) as any;
+        respTotal = resp.total;
+      } else if (platform === 'smartstore') {
+        const ssStatus = status ? SS_STATUS_REVERSE[status] : undefined;
+        const resp = await getSmartstoreProducts({ account_id: accountId, page: 1, per_page: MAX_SELECT, status: ssStatus, search: search || undefined });
+        const ssLoginById = new Map(accounts.map((a: any) => [a.account_id, a.login_id]));
+        fetched = resp.items.map(p => ({
+          id: p.id, platform: 'smartstore' as const, login_id: ssLoginById.get(p.account_id) || '', seller_name: p.store_name, is_focused: null,
+          market: null, product_no: p.product_no, product_name: p.name,
+          sale_price: p.sale_price, stock_quantity: p.stock_quantity,
+          status_type: p.status_type, status_label: SS_STATUS_MAP[p.status_type] || p.status_type,
+          seller_product_code: p.seller_management_code, category: p.category_id,
+          product_image_url: p.product_image_url, synced_at: p.synced_at,
+          purchase_cost: null, cost_diff: null,
+        })) as any;
+        respTotal = resp.total;
+      } else if (platform === 'lotteon') {
+        const resp = await fetchLotteonMyProducts(1, MAX_SELECT, accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder);
+        fetched = resp.items.map(p => ({ ...p, platform: 'lotteon' as const, is_focused: null, market: null, purchase_cost: null, cost_diff: null })) as any;
         respTotal = resp.total;
       } else {
         const resp = await fetchElevenMyProducts(1, MAX_SELECT, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck);
@@ -404,10 +521,19 @@ export default function ElevenMyProductsPage() {
   };
   // 현재 필터(계정/상태/검색)에 맞는 '전체' 상품을 CSV로 다운로드 — 선택 불필요 (플랫폼 단일 선택 시에만 가능)
   const downloadAllExcel = async () => {
-    if (downloading || platform === 'all') return;
+    if (downloading || platform === 'all' || platform === 'lotteon') return;
     setDownloading(true);
     const tid = toast.loading(`전체 상품 다운로드 중... (${fmt(total)}건)`);
     try {
+      if (platform === 'smartstore') {
+        const ssStatus = status ? SS_STATUS_REVERSE[status] : undefined;
+        await downloadSmartstoreExcel({
+          account_ids: accountId ? [accountId] : undefined,
+          statuses: ssStatus ? [ssStatus] : undefined,
+        });
+        toast.success(`전체 ${fmt(total)}건 엑셀 다운로드`, { id: tid });
+        return;
+      }
       const blob = platform === 'gmarket'
         ? await exportGmarketMyProducts(accountId, undefined, status || undefined, search || undefined, dedup)
         : await exportElevenMyProducts(accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder);
@@ -489,7 +615,7 @@ export default function ElevenMyProductsPage() {
         </div>
 
         <div className={`flex flex-wrap items-center gap-2 rounded-xl border ${card} p-2.5`}>
-          {platform !== 'all' && (
+          {(platform === '11st' || platform === 'gmarket') && (
             <button
               onClick={openIntegratedSync}
               disabled={integratedRunning || accounts.length === 0}
@@ -513,13 +639,15 @@ export default function ElevenMyProductsPage() {
 
           <select
             value={platform}
-            onChange={e => { setPlatform(e.target.value as 'all' | '11st' | 'gmarket'); setAccountId(undefined); setPage(1); }}
+            onChange={e => { setPlatform(e.target.value as 'all' | '11st' | 'gmarket' | 'smartstore' | 'lotteon'); setAccountId(undefined); setStatus(''); setPage(1); }}
             className={`px-2 py-2 rounded-lg border text-[12px] font-semibold ${inputBg}`}
             title="쇼핑몰 선택"
           >
             <option value="all">🗂 전체</option>
             <option value="11st">🛒 11번가</option>
             <option value="gmarket">🛍 지마켓/옥션</option>
+            <option value="smartstore">🟢 스마트스토어</option>
+            <option value="lotteon">🔴 롯데ON</option>
           </select>
 
           {platform !== 'all' && (
@@ -556,9 +684,11 @@ export default function ElevenMyProductsPage() {
             <option value="판매중">판매중</option>
             <option value="판매중지">판매중지</option>
             <option value="품절">품절</option>
-            {platform === '11st' && <option value="판매금지">판매금지</option>}
-            {platform !== '11st' && <option value="판매불가">판매불가</option>}
-            {platform !== '11st' && <option value="판매종료">판매종료</option>}
+            {(platform === '11st' || platform === 'smartstore') && <option value="판매금지">판매금지</option>}
+            {(platform === 'gmarket' || platform === 'all') && <option value="판매불가">판매불가</option>}
+            {(platform === 'gmarket' || platform === 'lotteon' || platform === 'all') && <option value="판매종료">판매종료</option>}
+            {platform === 'smartstore' && <option value="판매대기">판매대기</option>}
+            {platform === 'smartstore' && <option value="미승인">미승인</option>}
           </select>
 
           {platform === '11st' && (
@@ -575,17 +705,17 @@ export default function ElevenMyProductsPage() {
             </label>
           )}
 
-          {(platform === '11st' || platform === 'all') && (
+          {(platform === '11st' || platform === 'gmarket' || platform === 'all') && (
             <button
               onClick={() => { setNeedsCheck(v => !v); setPage(1); }}
-              title="구매원가가 판매가보다 높은(역마진) 상품 — 11번가만 해당. 단위 불일치/원가 오류 등 확인 필요."
+              title="구매원가가 판매가보다 높은(역마진) 상품 — 11번가·지마켓 해당. 단위 불일치/원가 오류 등 확인 필요."
               className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[12px] font-semibold ${
                 needsCheck
                   ? 'bg-red-600 text-white border-red-600'
                   : `${inputBg} ${needsCheckTotal > 0 ? 'text-red-500 border-red-400' : ''}`
               }`}
             >
-              ⚠ 확인필요{platform === '11st' && needsCheckTotal > 0 ? ` (${fmt(needsCheckTotal)})` : ''}
+              ⚠ 확인필요{(platform === '11st' || platform === 'gmarket') && needsCheckTotal > 0 ? ` (${fmt(needsCheckTotal)})` : ''}
             </button>
           )}
 
@@ -599,7 +729,7 @@ export default function ElevenMyProductsPage() {
             </label>
           )}
 
-          {platform !== 'all' && (
+          {(platform === '11st' || platform === 'gmarket') && (
             <button
               onClick={() => setRecrawlOpen(o => !o)}
               disabled={accounts.length === 0}
@@ -607,6 +737,27 @@ export default function ElevenMyProductsPage() {
               title="계정 선택 후 등록상품(대량엑셀) 새로 크롤링"
             >
               <Package size={13} /> 등록상품 재크롤{recrawlSel.size > 0 ? ` (${recrawlSel.size})` : ''}
+            </button>
+          )}
+
+          {platform === '11st' && (
+            <button
+              onClick={() => setSuspendOpen(o => !o)}
+              disabled={accounts.length === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-40"
+              title="계정 선택 후 그 계정들의 품절 상품을 전부 판매중지로 전환(삭제 아님)"
+            >
+              🛑 품절→판매중지{suspendSel.size > 0 ? ` (${suspendSel.size})` : ''}
+            </button>
+          )}
+          {platform === '11st' && (
+            <button
+              onClick={stopSuspendSoldout}
+              disabled={stoppingJob}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
+              title="현재 실행 중인 11번가 작업(품절→판매중지 등)을 강제로 즉시 중지"
+            >
+              ⛔ 강제중지
             </button>
           )}
 
@@ -665,9 +816,9 @@ export default function ElevenMyProductsPage() {
 
           <button
             onClick={downloadAllExcel}
-            disabled={downloading || platform === 'all'}
+            disabled={downloading || platform === 'all' || platform === 'lotteon'}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-40"
-            title={platform === 'all' ? '전체 다운로드는 플랫폼(11번가/지마켓)을 선택한 뒤 가능합니다' : '현재 필터(계정/상태/검색)에 맞는 전체 상품을 CSV로 다운로드 (선택 불필요)'}
+            title={platform === 'all' ? '전체 다운로드는 플랫폼을 선택한 뒤 가능합니다' : platform === 'lotteon' ? '롯데ON은 전체 다운로드 미지원 — "최대 N개 선택" 후 선택 다운로드를 이용하세요' : '현재 필터(계정/상태/검색)에 맞는 전체 상품을 CSV로 다운로드 (선택 불필요)'}
           >
             <Download size={13} /> {downloading ? '다운로드 중…' : `전체 엑셀 다운로드 (${fmt(total)})`}
           </button>
@@ -728,12 +879,70 @@ export default function ElevenMyProductsPage() {
           </div>
         )}
 
+        {/* 품절 상품 일괄 판매중지 — 계정 선택 패널 */}
+        {platform === '11st' && suspendOpen && (
+          <div className={`rounded-xl border ${card} p-3 space-y-2.5`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-3">
+                <span className={`text-[12px] font-bold ${text1}`}>품절 상품을 판매중지로 전환할 계정 선택</span>
+                <label className={`flex items-center gap-1 text-[11px] ${text2} cursor-pointer`}>
+                  <input type="checkbox" checked={allSuspendSelected} onChange={toggleAllSuspend} />
+                  전체선택 ({suspendSel.size}/{accounts.length})
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={startSuspendSoldout}
+                  disabled={suspending || suspendSel.size === 0}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-40"
+                >
+                  🛑 선택 {suspendSel.size}개 실행
+                </button>
+                <button
+                  onClick={stopSuspendSoldout}
+                  disabled={stoppingJob}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-bold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
+                >
+                  ⛔ 강제중지
+                </button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-1.5">
+              {accounts.map(a => {
+                const on = suspendSel.has(a.login_id);
+                const soldout = (a as any).soldout_count ?? 0;
+                return (
+                  <label
+                    key={a.account_id}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border cursor-pointer text-[11px] ${on ? 'border-amber-500 bg-amber-500/10' : `${inputBg}`}`}
+                  >
+                    <input type="checkbox" checked={on} onChange={() => toggleSuspend(a.login_id)} />
+                    <span className={`truncate ${text1}`} title={`${a.seller_name} (${a.login_id})`}>
+                      {a.seller_name || a.login_id}
+                    </span>
+                    <span className={`ml-auto shrink-0 ${soldout > 0 ? 'text-amber-500 font-semibold' : text3}`} title="품절 상품수">
+                      품절 {fmt(soldout)}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className={`text-[10px] ${text3}`}>
+              ※ 선택 계정의 "품절" 상태 상품을 전부 셀러오피스에서 판매중지로 전환합니다(삭제 아님, 되돌릴 수 있음). 각 계정의 현재 품절
+              상품수를 옆에 표시하니 참고해서 선택하세요. 백그라운드로 계정을 순차 처리하며, 다른 11번가 크롤 실행 중이면 거부됩니다.
+              진행 중 문제가 있으면 "강제중지"로 즉시 중단할 수 있습니다.
+            </p>
+          </div>
+        )}
+
         <div className={`rounded-xl border ${card} overflow-hidden`}>
           {noFocused ? (
             <div className="p-12 text-center space-y-3">
               <AlertCircle size={32} className={`mx-auto ${text3}`} />
-              <p className={`text-[12px] ${text2}`}>집중관리 ON 11번가 계정이 없습니다.</p>
-              <p className={`text-[11px] ${text3}`}>ID 관리 페이지에서 11번가 계정에 별표(★)를 지정하고 API 키를 등록하세요.</p>
+              <p className={`text-[12px] ${text2}`}>
+                {platform === '11st' ? '집중관리 ON 11번가 계정이 없습니다.' : `등록된 ${PLATFORM_BADGE[platform]?.label ?? platform} 계정이 없습니다.`}
+              </p>
+              {platform === '11st' && <p className={`text-[11px] ${text3}`}>ID 관리 페이지에서 11번가 계정에 별표(★)를 지정하고 API 키를 등록하세요.</p>}
             </div>
           ) : loading ? (
             <div className="p-12 text-center">
@@ -763,10 +972,14 @@ export default function ElevenMyProductsPage() {
                     <th onClick={() => handleSort('stock_quantity')} className="px-3 py-2 text-right font-medium w-16 cursor-pointer select-none">재고{sortArrow('stock_quantity')}</th>
                     <th onClick={() => handleSort('status_type')} className="px-3 py-2 text-center font-medium w-20 cursor-pointer select-none">상태{sortArrow('status_type')}</th>
                     <th onClick={() => handleSort('seller_product_code')} className="px-3 py-2 text-left font-medium w-28 cursor-pointer select-none">셀러코드{sortArrow('seller_product_code')}</th>
-                    <th className="px-3 py-2 text-left font-medium w-24">카테고리</th>
+                    <th onClick={() => handleSort('category')} className="px-3 py-2 text-left font-medium w-24 cursor-pointer select-none">카테고리{sortArrow('category')}</th>
                     <th onClick={() => handleSort('synced_at')} className="px-3 py-2 text-right font-medium w-28 cursor-pointer select-none">동기화{sortArrow('synced_at')}</th>
-                    {platform !== 'all' && <th className="px-3 py-2 text-right font-medium w-24" title="예비상품(오너클랜) 마켓가(마켓실제판매가) — 판매자코드 매칭">마켓가</th>}
-                    {platform !== 'all' && <th className="px-3 py-2 text-right font-medium w-24" title="판매가 - 마켓가">차이</th>}
+                    {platform !== 'all' && (
+                      <th onClick={() => handleSort('purchase_cost')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="예비상품(오너클랜) 마켓가(마켓실제판매가) — 판매자코드 매칭">마켓가{sortArrow('purchase_cost')}</th>
+                    )}
+                    {platform !== 'all' && (
+                      <th onClick={() => handleSort('cost_diff')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="판매가 - 마켓가">차이{sortArrow('cost_diff')}</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className={`divide-y ${dark ? 'divide-[#2a2b35]' : 'divide-gray-100'}`}>

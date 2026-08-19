@@ -15,8 +15,6 @@ from apps.ownerclan.services import (
     set_workspace, _t,
 )
 
-PROGRESS_INTERVAL = 1000
-
 
 class Command(BaseCommand):
     help = '오너클랜 상품대장 비동기 업로드 워커'
@@ -42,11 +40,13 @@ class Command(BaseCommand):
             result = _process_upload(file_path, task)
             task.result_data = result
             task.status = 'done'
-            # 예비상품 적재 직후 11번가 나의상품 '구매원가/차이' 정렬값 자동 갱신 (업로드된 코드만, 빠름)
+            # 예비상품 적재 직후 11번가/지마켓 나의상품 '구매원가/차이' 정렬값 자동 갱신 (업로드된 코드만, 빠름)
             try:
-                from apps.cpc.eleven_my_product_service import refresh_purchase_costs
+                from apps.cpc.eleven_my_product_service import refresh_purchase_costs, refresh_gmarket_purchase_costs
                 n = refresh_purchase_costs(codes=result.get('codes'))
                 result['purchase_cost_refreshed'] = n
+                gn = refresh_gmarket_purchase_costs(codes=result.get('codes'))
+                result['gmarket_purchase_cost_refreshed'] = gn
             except Exception:
                 result['purchase_cost_refreshed'] = f'skip: {traceback.format_exc().splitlines()[-1]}'
         except Exception:
@@ -112,15 +112,8 @@ def _process_upload(file_path, task):
     workbooks = _load_workbooks(file_path)
     now = datetime.now()
 
-    inserted = 0
-    updated = 0
-    skipped = 0
-
-    existing = {}
-    with connections['default'].cursor() as cur:
-        cur.execute(f"SELECT id, product_code FROM {_t()}")
-        for row in cur.fetchall():
-            existing[row[1]] = row[0]
+    fields = list(EXCEL_COL_MAP.values())
+    orig_fields = [f'orig_{f}' for f in fields]
 
     rows_to_process = []
     for wb_name, wb in workbooks:
@@ -135,97 +128,101 @@ def _process_upload(file_path, task):
             rows_to_process.append((product_code, data))
         wb.close()
 
+    # 같은 파일 안에서 동일 product_code가 중복되면 마지막 값으로 통일(= 순차처리 최종상태와 동일 결과).
+    dedup = {}
+    for pc, data in rows_to_process:
+        dedup[pc] = data
+    codes = list(dedup.keys())
     total_rows = len(rows_to_process)
+
     task.result_data = {
         'progress': 0, 'inserted': 0, 'updated': 0,
         'skipped': 0, 'total_rows': total_rows,
     }
     task.save(update_fields=['result_data'])
 
-    fields = list(EXCEL_COL_MAP.values())
-    orig_fields = [f'orig_{f}' for f in fields]
-
+    # 1) 기존 행(현재값+원본값)을 청크 단위 IN 조회로 일괄 로딩 — 건당 SELECT 왕복 제거.
+    select_cols = ['id', 'product_code'] + fields + orig_fields
+    existing = {}
     with connections['default'].cursor() as cur:
-        for idx, (product_code, data) in enumerate(rows_to_process, 1):
-            if product_code in existing:
-                pid = existing[product_code]
-                cur.execute(
-                    f"SELECT {', '.join(fields)} FROM {_t()} WHERE id=%s",
-                    [pid],
-                )
-                old_row = cur.fetchone()
-                old_data = dict(zip(fields, old_row))
-
-                any_current_changed = False
-                for f in fields:
-                    if _field_changed(old_data[f], data[f], f):
-                        any_current_changed = True
-                        break
-
-                if not any_current_changed:
-                    skipped += 1
-                else:
-                    set_parts = [f"{f}=%s" for f in fields]
-                    set_parts.append("uploaded_at=%s")
-                    vals = [data[f] for f in fields] + [now]
-
-                    cur.execute(
-                        f"UPDATE {_t()} SET {', '.join(set_parts)} WHERE id=%s",
-                        vals + [pid],
-                    )
-
-                    cur.execute(
-                        f"SELECT {', '.join(orig_fields)} FROM {_t()} WHERE id=%s",
-                        [pid],
-                    )
-                    orig_row = cur.fetchone()
-                    orig_data = dict(zip(fields, orig_row))
-
-                    is_synced = 1
-                    for f in fields:
-                        if _field_changed(orig_data[f], data[f], f):
-                            is_synced = 0
-                            break
-
-                    cur.execute(
-                        f"UPDATE {_t()} SET is_synced=%s WHERE id=%s",
-                        [is_synced, pid],
-                    )
-                    updated += 1
-            else:
-                all_fields = ['product_code'] + fields + orig_fields + [
-                    'sale_status', 'is_synced', 'uploaded_at',
-                ]
-                placeholders = ', '.join(['%s'] * len(all_fields))
-                vals = (
-                    [product_code]
-                    + [data[f] for f in fields]
-                    + [data[f] for f in fields]
-                    + [1, 1, now]
-                )
-                cur.execute(
-                    f"INSERT INTO {_t()} ({', '.join(all_fields)}) "
-                    f"VALUES ({placeholders})",
-                    vals,
-                )
-                existing[product_code] = cur.lastrowid
-                inserted += 1
-
-            if idx % PROGRESS_INTERVAL == 0 or idx == total_rows:
-                progress = int(idx * 100 / total_rows) if total_rows else 100
-                task.result_data = {
-                    'progress': progress,
-                    'inserted': inserted,
-                    'updated': updated,
-                    'skipped': skipped,
-                    'total_rows': total_rows,
+        FETCH_CHUNK = 3000
+        for i in range(0, len(codes), FETCH_CHUNK):
+            chunk = codes[i:i + FETCH_CHUNK]
+            ph = ', '.join(['%s'] * len(chunk))
+            cur.execute(f"SELECT {', '.join(select_cols)} FROM {_t()} WHERE product_code IN ({ph})", chunk)
+            for row in cur.fetchall():
+                d = dict(zip(select_cols, row))
+                existing[d['product_code']] = {
+                    'id': d['id'],
+                    'cur': {f: d[f] for f in fields},
+                    'orig': {f: d[f'orig_{f}'] for f in fields},
                 }
-                task.save(update_fields=['result_data'])
+
+    # 2) 삽입/갱신 대상 분류 (파이썬 메모리 비교, DB 왕복 없음)
+    insert_batch = []   # (product_code, data)
+    update_batch = []   # (data, is_synced, id)
+    inserted = updated = skipped = 0
+    for pc in codes:
+        data = dedup[pc]
+        ex = existing.get(pc)
+        if ex is None:
+            insert_batch.append((pc, data))
+            continue
+        old_data = ex['cur']
+        if not any(_field_changed(old_data[f], data[f], f) for f in fields):
+            skipped += 1
+            continue
+        orig_data = ex['orig']
+        is_synced = 0 if any(_field_changed(orig_data[f], data[f], f) for f in fields) else 1
+        update_batch.append((data, is_synced, ex['id']))
+
+    def _save_progress(done):
+        progress = int(done * 100 / total_rows) if total_rows else 100
+        task.result_data = {
+            'progress': progress, 'inserted': inserted, 'updated': updated,
+            'skipped': skipped, 'total_rows': total_rows,
+        }
+        task.save(update_fields=['result_data'])
+
+    WRITE_CHUNK = 2000
+    with connections['default'].cursor() as cur:
+        # INSERT — executemany로 일괄 처리
+        insert_sql = (
+            f"INSERT INTO {_t()} (product_code, {', '.join(fields)}, {', '.join(orig_fields)}, "
+            f"sale_status, is_synced, uploaded_at) "
+            f"VALUES ({', '.join(['%s'] * (1 + len(fields) * 2 + 3))})"
+        )
+        for i in range(0, len(insert_batch), WRITE_CHUNK):
+            chunk = insert_batch[i:i + WRITE_CHUNK]
+            params = [
+                [pc] + [data[f] for f in fields] + [data[f] for f in fields] + [1, 1, now]
+                for pc, data in chunk
+            ]
+            cur.executemany(insert_sql, params)
+            inserted += len(chunk)
+            _save_progress(inserted + updated + skipped)
+
+        # UPDATE — 모든 변경행이 동일한 SET 구조(전체필드+is_synced+uploaded_at)라 executemany 가능.
+        update_sql = (
+            f"UPDATE {_t()} SET {', '.join(f'{f}=%s' for f in fields)}, "
+            f"is_synced=%s, uploaded_at=%s WHERE id=%s"
+        )
+        for i in range(0, len(update_batch), WRITE_CHUNK):
+            chunk = update_batch[i:i + WRITE_CHUNK]
+            params = [
+                [data[f] for f in fields] + [is_synced, now, pid]
+                for data, is_synced, pid in chunk
+            ]
+            cur.executemany(update_sql, params)
+            updated += len(chunk)
+            _save_progress(inserted + updated + skipped)
+
+    _save_progress(total_rows)
 
     return {
         'inserted': inserted,
         'updated': updated,
         'skipped': skipped,
         'total': inserted + updated + skipped,
-        'codes': [pc for pc, _ in rows_to_process],
+        'codes': codes,
     }

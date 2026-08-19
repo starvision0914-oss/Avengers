@@ -766,6 +766,15 @@ class GmarketMyProduct(models.Model):
     synced_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # 구매원가 = 예비상품(ownerclan) 마켓가 (seller_product_code=product_code 매칭). 11번가와 동일 패턴.
+    purchase_cost = models.IntegerField(null=True, blank=True, db_index=True)
+    # 차이 = 판매가 - 구매원가 (DB STORED 생성컬럼 → 인덱스 정렬). purchase_cost 갱신 시 자동 재계산.
+    cost_diff = models.GeneratedField(
+        expression=models.F('sale_price') - models.F('purchase_cost'),
+        output_field=models.IntegerField(),
+        db_persist=True,
+        db_index=True,
+    )
 
     class Meta:
         db_table = 'gmarket_my_product'
