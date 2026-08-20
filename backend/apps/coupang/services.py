@@ -88,6 +88,55 @@ def fetch_products(account, log_fn=print, max_per_page=50):
     return all_items
 
 
+def fetch_product_detail(account, seller_product_id):
+    """등록상품 상세 조회 — 목록 API엔 없는 items[].marketplaceItemData.externalVendorSku(판매자관리코드/W코드) 포함."""
+    path = f'/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}'
+    resp = _request(account, 'GET', path)
+    return resp.get('data') or {}
+
+
+def backfill_seller_codes(account, log_fn=print, only_missing=True):
+    """등록상품마다 상세 API를 호출해 판매자관리코드(seller_product_code)를 채움.
+
+    상품 1건당 API 호출 1회 필요(목록 API에 없음) — 호출 간 0.4초 페이싱, 429 시 1회 재시도.
+    """
+    from apps.coupang.models import CoupangProduct
+
+    qs = CoupangProduct.objects.filter(account=account)
+    if only_missing:
+        qs = qs.filter(seller_product_code='')
+
+    ids = list(qs.values_list('id', 'seller_product_id'))
+    total = len(ids)
+    updated = 0
+    for i, (pk, seller_product_id) in enumerate(ids, 1):
+        try:
+            detail = fetch_product_detail(account, seller_product_id)
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429:
+                time.sleep(2)
+                try:
+                    detail = fetch_product_detail(account, seller_product_id)
+                except requests.HTTPError as e2:
+                    log_fn(f'[쿠팡API:{account.login_id}] {seller_product_id} 상세조회 실패: {e2}')
+                    continue
+            else:
+                log_fn(f'[쿠팡API:{account.login_id}] {seller_product_id} 상세조회 실패: {e}')
+                continue
+
+        items = detail.get('items') or []
+        code = ''
+        if items:
+            code = (items[0].get('marketplaceItemData') or {}).get('externalVendorSku') or ''
+
+        CoupangProduct.objects.filter(pk=pk).update(seller_product_code=code)
+        updated += 1
+        if i % 50 == 0 or i == total:
+            log_fn(f'[쿠팡API:{account.login_id}] 판매자관리코드 {i}/{total} 처리 (갱신 {updated})')
+        time.sleep(0.4)
+    return updated
+
+
 def save_products(account, products):
     from apps.coupang.models import CoupangProduct
     from django.utils.dateparse import parse_datetime

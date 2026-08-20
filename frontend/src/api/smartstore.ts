@@ -75,6 +75,9 @@ export interface SmartStoreProduct {
   product_image_url: string;
   ownerclan_soldout: boolean;
   synced_at: string;
+  purchase_cost?: number | null;
+  cost_diff?: number | null;
+  cost_pct?: number | null;
 }
 
 export interface ProductListResponse {
@@ -83,6 +86,9 @@ export interface ProductListResponse {
   page: number;
   per_page: number;
   total_pages: number;
+  needs_check_total?: number;
+  no_match_total?: number;
+  high_margin_total?: number;
 }
 
 export interface ProductStats {
@@ -148,8 +154,20 @@ export async function getProducts(params: {
   status?: string;
   search?: string;
   ownerclan_soldout?: string;
+  needs_check?: string | number;
+  no_match?: string | number;
+  high_margin?: string | number;
 }): Promise<ProductListResponse> {
   const { data } = await api.get<ProductListResponse>('/smartstore/products/', { params });
+  return data;
+}
+
+/** 미매칭 전체(SALE만) 판매중지 — 선택 없이 서버가 현재 필터 기준 전체를 계산해 처리(스마트스토어). */
+export async function suspendAllNoMatchProducts(account_id?: number, search?: string): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+  const body: Record<string, unknown> = {};
+  if (account_id) body.account_id = account_id;
+  if (search) body.search = search;
+  const { data } = await api.post('/smartstore/products/suspend-all-no-match/', body);
   return data;
 }
 

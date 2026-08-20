@@ -247,12 +247,19 @@ class DashboardView(APIView):
 
 class ProductListView(APIView):
     def get(self, request):
+        from django.core.cache import cache
+        from django.db.models import F
+        from apps.cpc.eleven_my_product_service import _apply_no_match_filter
+
         account_id = request.query_params.get('account_id', '0')
         page = int(request.query_params.get('page', 1))
         per_page = int(request.query_params.get('per_page', 50))
         status = request.query_params.get('status', '')
         search = request.query_params.get('search', '')
         ownerclan_soldout = request.query_params.get('ownerclan_soldout')
+        needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
+        no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
+        high_margin = request.query_params.get('high_margin') in ('1', 'true', 'True')
 
         qs = SmartStoreProduct.objects.select_related('account')
         if account_id and account_id != '0':
@@ -264,7 +271,46 @@ class ProductListView(APIView):
         if ownerclan_soldout is not None:
             qs = qs.filter(ownerclan_soldout=ownerclan_soldout == '1')
 
-        total = qs.count()
+        # 확인필요/미매칭/고마진 — 11번가/지마켓과 동일 패턴(W코드+구매원가 매칭, status_type=SALE만).
+        nc_key = f"ss_needs:{account_id}:{status}:{search}"
+        needs_total = cache.get(nc_key)
+        if needs_total is None:
+            needs_total = qs.filter(cost_diff__lt=0).count()
+            cache.set(nc_key, needs_total, 120)
+        nm_key = f"ss_nomatch:{account_id}:{status}:{search}"
+        no_match_total = cache.get(nm_key)
+        if no_match_total is None:
+            no_match_total = _apply_no_match_filter(
+                qs.filter(seller_management_code__startswith='W', purchase_cost__isnull=True, status_type='SALE')
+                  .exclude(seller_management_code__regex=r'[가-힣]'),
+                code_field='seller_management_code',
+            ).count()
+            cache.set(nm_key, no_match_total, 120)
+        hm_key = f"ss_highmargin:{account_id}:{status}:{search}"
+        high_margin_total = cache.get(hm_key)
+        if high_margin_total is None:
+            high_margin_total = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5).count()
+            cache.set(hm_key, high_margin_total, 120)
+
+        if needs_check:
+            qs = qs.filter(cost_diff__lt=0)
+        elif no_match:
+            qs = _apply_no_match_filter(
+                qs.filter(seller_management_code__startswith='W', purchase_cost__isnull=True, status_type='SALE')
+                  .exclude(seller_management_code__regex=r'[가-힣]'),
+                code_field='seller_management_code',
+            )
+        elif high_margin:
+            qs = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
+
+        if needs_check and not no_match and not high_margin:
+            total = needs_total
+        elif no_match:
+            total = no_match_total
+        elif high_margin:
+            total = high_margin_total
+        else:
+            total = qs.count()
         offset = (page - 1) * per_page
         items = qs.order_by('-id')[offset:offset + per_page]
 
@@ -285,6 +331,9 @@ class ProductListView(APIView):
                 'product_image_url': p.product_image_url,
                 'ownerclan_soldout': p.ownerclan_soldout,
                 'synced_at': p.synced_at.isoformat(),
+                'purchase_cost': p.purchase_cost,
+                'cost_diff': p.cost_diff,
+                'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else None,
             })
 
         return Response({
@@ -293,6 +342,9 @@ class ProductListView(APIView):
             'page': page,
             'per_page': per_page,
             'total_pages': (total + per_page - 1) // per_page if total else 0,
+            'needs_check_total': needs_total,
+            'no_match_total': no_match_total,
+            'high_margin_total': high_margin_total,
         })
 
 
@@ -423,6 +475,76 @@ class SuspendPreviewView(APIView):
             'by_store': [{'store_name': k, 'count': v} for k, v in by_store.items()],
             'w_codes': w_codes,
         })
+
+
+class SuspendAllNoMatchView(APIView):
+    """미매칭 전체(SALE만) 판매중지 — 지마켓/11번가 SuspendAllNoMatchView와 동일 개념.
+    선택 없이 서버가 현재 no_match 조건(W코드+구매원가매칭실패+SALE, 라이브상태 확인반영)에
+    해당하는 상품 전체를 계산해 처리. 셀레니움이 아니라 네이버 API 직접호출이라 백그라운드
+    스레드로 실행(계정별 순차, 락 불필요 — 지마켓/11번가 크롤과 독립적으로 동시 실행 가능)."""
+    LOG_FILE = '/tmp/suspend_smartstore_nomatch.log'
+
+    def post(self, request):
+        from apps.cpc.eleven_my_product_service import _apply_no_match_filter
+        import threading, time
+
+        account_id = request.data.get('account_id')
+        search = request.data.get('search')
+        qs = SmartStoreProduct.objects.select_related('account').filter(
+            seller_management_code__startswith='W', purchase_cost__isnull=True, status_type='SALE',
+        ).exclude(seller_management_code__regex=r'[가-힣]')
+        qs = _apply_no_match_filter(qs, code_field='seller_management_code')
+        if account_id:
+            qs = qs.filter(account_id=int(account_id))
+        if search:
+            qs = qs.filter(Q(name__icontains=search) | Q(seller_management_code__icontains=search))
+
+        targets = list(qs)
+        if not targets:
+            return Response({'status': 'blocked', 'message': '⛔ 미매칭(SALE) 대상이 없습니다.'}, status=400)
+
+        store_groups = {}
+        for t in targets:
+            store_groups.setdefault(t.account_id, {'account': t.account, 'items': []})['items'].append(t)
+
+        def _run():
+            from .services.naver_api import _get_access_token, suspend_product_api
+            with open(self.LOG_FILE, 'a') as log:
+                log.write(f'\n{time.strftime("%F %T")} 미매칭 전체 판매중지 시작 — {len(targets)}건 / {len(store_groups)}스토어\n')
+                success = fail = 0
+                for sid, group in store_groups.items():
+                    acc = group['account']
+                    if not acc.commerce_api_key or not acc.commerce_secret_key:
+                        fail += len(group['items'])
+                        log.write(f'  [{acc.store_name}] API키 미등록 — {len(group["items"])}건 스킵\n')
+                        continue
+                    try:
+                        token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
+                    except Exception as e:
+                        fail += len(group['items'])
+                        log.write(f'  [{acc.store_name}] 토큰 발급 실패: {e}\n')
+                        continue
+                    for item in group['items']:
+                        try:
+                            suspend_product_api(item.product_no, token)
+                            SmartStoreProduct.objects.filter(pk=item.pk).update(status_type='SUSPENSION')
+                            success += 1
+                        except Exception as e:
+                            fail += 1
+                            log.write(f'  [{acc.store_name}] {item.product_no} 실패: {e}\n')
+                        time.sleep(1)
+                    log.flush()
+                log.write(f'{time.strftime("%F %T")} 완료 — 성공 {success} / 실패 {fail}\n')
+
+        threading.Thread(target=_run, daemon=True).start()
+
+        by_store = {}
+        for t in targets:
+            name = t.account.display_name or t.account.store_name
+            by_store[name] = by_store.get(name, 0) + 1
+        msg = (f'🛑 미매칭 전체 판매중지 시작 — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
+               f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
 
 
 class SuspendProductsView(APIView):

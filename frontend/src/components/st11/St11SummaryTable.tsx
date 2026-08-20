@@ -38,7 +38,7 @@ function OfficeBadge({ value }: { value?: string }) {
 const OFFICE_RANK: Record<string, number> = { '우수': 4, '양호': 3, '주의': 2, '경고': 1, '미평가': 0 };
 function officeRank(v?: string): number { return v ? (OFFICE_RANK[v.split(' ')[0]] ?? -1) : -1; }
 
-type SortKey = 'seller_alias' | 'grade' | 'cash' | 'point' | 'cpc_spend' | 'fee_payment' | 'charge' | 'balance' | 'products' | 'available' | 'tx_count' | 'ship' | 'prod' | 'cs' | 'sales' | 'cost' | 'margin_rate' | 'net_margin_rate' | 'server_fee' | 'reward' | 'net_profit' | 'time';
+type SortKey = 'seller_alias' | 'grade' | 'cash' | 'point' | 'cpc_spend' | 'fee_payment' | 'charge' | 'balance' | 'products' | 'available' | 'banned' | 'tx_count' | 'ship' | 'prod' | 'cs' | 'sales' | 'cost' | 'margin_rate' | 'net_margin_rate' | 'server_fee' | 'reward' | 'net_profit' | 'time';
 
 // 구매마진율 = (매출 − 구매가) / 매출 × 100 (매출 대비 구매가 빼고 남는 비율)
 function marginRate(s: St11SellerRow): number { return (s.sales || 0) > 0 ? ((s.sales! - (s.cost || 0)) / s.sales!) * 100 : 0; }
@@ -65,6 +65,7 @@ function getVal(s: St11SellerRow, key: SortKey): number | string {
     case 'balance': return s.balance ?? 0;
     case 'products': return s.products ?? 0;
     case 'available': return s.available ?? 0;
+    case 'banned': return s.banned ?? 0;
     case 'tx_count': return s.tx_count ?? 0;
     case 'ship': return officeRank(s.fulfillment);
     case 'prod': return officeRank(s.shipping);
@@ -90,6 +91,7 @@ const INIT_COLS: ColDef[] = [
   { key: 'net_margin_rate', label: '순수익마진율', sortKey: 'net_margin_rate', align: 'right', initWidth: 96, minWidth: 60 },
   { key: 'charge', label: '충전/정산·서버료', sortKey: 'charge', align: 'right', initWidth: 140, minWidth: 80 },
   { key: 'products', label: '상품', sortKey: 'products', align: 'right', initWidth: 98, minWidth: 50 },
+  { key: 'banned', label: '판매금지', sortKey: 'banned', align: 'right', initWidth: 70, minWidth: 48 },
   { key: 'available', label: '등록', sortKey: 'available', align: 'right', initWidth: 52, minWidth: 36 },
   { key: 'ship', label: '이행', sortKey: 'ship', align: 'center', initWidth: 78, minWidth: 48 },
   { key: 'prod', label: '배송', sortKey: 'prod', align: 'center', initWidth: 78, minWidth: 48 },
@@ -201,6 +203,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'balance': return isCash ? (s.balance < 0 ? <span style={{ color: '#dc2626', fontWeight: 700 }}>{formatKRW(Math.abs(s.balance))}</span> : <span style={{ color: '#999' }}>-</span>) : (s.balance !== 0 ? <span style={{ color: s.balance > 0 ? '#0369a1' : '#dc2626', fontWeight: 600 }}>{formatKRW(s.balance)}</span> : <span style={{ color: '#999' }}>-</span>);
       case 'products': return (s.products || 0) > 0 ? <>{s.products!.toLocaleString()}<span style={{ fontSize: 12, color: '#888' }}>/{(s.product_limit || 0).toLocaleString()}</span></> : <span style={{ color: '#999' }}>-</span>;
       case 'available': return (s.available || 0) > 0 ? <span style={{ color: (s.available || 0) < 100 ? '#dc2626' : '#00a651', fontWeight: (s.available || 0) < 100 ? 700 : 400 }}>{s.available!.toLocaleString()}</span> : <span style={{ color: '#999' }}>-</span>;
+      case 'banned': return (s.banned || 0) > 0 ? <span style={{ color: '#dc2626', fontWeight: 700 }}>{s.banned!.toLocaleString()}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'ship': return <OfficeBadge value={s.fulfillment} />;
       case 'prod': return <OfficeBadge value={s.shipping} />;
       case 'cs': return <OfficeBadge value={s.inquiry} />;
@@ -230,6 +233,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'balance': return <><span style={{ color: '#0369a1', fontSize: 13 }}>{formatKRW(filtered.filter(s => s.cost_type !== 'sellercash').reduce((a, s) => a + s.balance, 0))}</span><span style={{ color: '#888', margin: '0 2px', fontSize: 12 }}>/</span><span style={{ color: '#dc2626', fontSize: 13 }}>{formatKRW(Math.abs(filtered.filter(s => s.cost_type === 'sellercash').reduce((a, s) => a + s.balance, 0)))}</span></>;
       case 'products': return totals.products.toLocaleString();
       case 'available': return <span style={{ color: '#00a651' }}>{totals.available.toLocaleString()}</span>;
+      case 'banned': return (totals.banned || 0) > 0 ? <span style={{ color: '#dc2626' }}>{totals.banned.toLocaleString()}</span> : '-';
       default: return '';
     }
   };

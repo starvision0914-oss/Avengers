@@ -248,6 +248,13 @@ def crawl_account(driver, login_id, year, month, log_fn=None, sub_login_ids=None
             time.sleep(3)
             sdt, edt = _set_period_thismonth(driver) if is_current else _set_period_month(driver, year, month)
             driver.execute_script(cfg['search']); time.sleep(8)
+            # 광고 집행 자체가 없는 계정은 '검색결과 : 총 0건'으로 정상 표시됨 — 이 경우 다운로드하면
+            # 항상 0바이트 파일이 나와 '다운로드 실패'로 오판됐었다(15일 연속 8개 계정, 2026-08-20 확인).
+            # 진짜 실패(세션 끊김/페이지 오류)와 구분해 정상 0건으로 처리.
+            if re.search(r'총\s*0\s*건', driver.find_element(By.TAG_NAME, 'body').text):
+                _log(log_fn, f'  [{login_id}/{ad_type}] 광고 집행 0건(정상)')
+                res[ad_type] = {'ok': True, 'products': 0, 'cost': 0, 'period': f'{sdt}~{edt}'}
+                continue
             _clear_dl()
             driver.execute_script(cfg['down'])
             f = _wait_dl(35)

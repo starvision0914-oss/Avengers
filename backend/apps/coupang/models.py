@@ -89,6 +89,7 @@ class CoupangProduct(models.Model):
     """쿠팡 오픈API 등록상품 목록 (seller-products)."""
     account = models.ForeignKey(CoupangAccount, on_delete=models.CASCADE, related_name='products')
     seller_product_id = models.CharField(max_length=50)
+    seller_product_code = models.CharField(max_length=100, blank=True, default='', help_text='판매자관리코드(items[].marketplaceItemData.externalVendorSku, W코드) — 상세조회API 필요, 목록API엔 없음')
     product_name = models.CharField(max_length=500, blank=True, default='')
     product_id = models.CharField(max_length=50, blank=True, default='')
     category_id = models.CharField(max_length=50, blank=True, default='')

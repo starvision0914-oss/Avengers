@@ -770,6 +770,7 @@ class ElevenSummaryView(views.APIView):
         total_products = 0
         total_limit = 0
         total_available = 0
+        total_banned = 0
         total_sales = 0
         total_cost = 0
         total_server_fee = 0
@@ -856,6 +857,7 @@ class ElevenSummaryView(views.APIView):
                 seller['products'] = ofs.products
                 seller['product_limit'] = ofs.product_limit
                 seller['available'] = ofs.available
+                seller['banned'] = ofs.banned
                 seller['overdue'] = ofs.overdue
                 seller['undelivered'] = ofs.undelivered
                 seller['draft'] = ofs.draft
@@ -868,6 +870,7 @@ class ElevenSummaryView(views.APIView):
                 total_products += ofs.products
                 total_limit += ofs.product_limit
                 total_available += ofs.available
+                total_banned += ofs.banned
                 if ofs.collected_at and (not last_collected_at or ofs.collected_at > last_collected_at):
                     last_collected_at = ofs.collected_at
 
@@ -924,6 +927,7 @@ class ElevenSummaryView(views.APIView):
                 'products': total_products,
                 'product_limit': total_limit,
                 'available': total_available,
+                'banned': total_banned,
                 'sales': total_sales,
                 'cost': total_cost,
                 'server_fee': total_server_fee,
@@ -1669,16 +1673,18 @@ class St11CampaignViewSet(viewsets.ReadOnlyModelViewSet):
 CRAWL_LOCKFILE = '/tmp/avengers_crawl_chrome.lock'
 
 
-def _crawl_lock_busy():
+def _crawl_lock_busy(lockfile=None):
     """크롬 크롤러 락이 살아있는 프로세스에 잡혀 있으면 (pid, True), 아니면 (None, False).
-    cron 스크립트와 동일한 락 파일을 공유 → 수동/자동 크롤이 서로 겹치지 않음."""
+    cron 스크립트와 동일한 락 파일을 공유 → 수동/자동 크롤이 서로 겹치지 않음.
+    lockfile 미지정시 11번가 기본 경로(하위호환), 지정시 해당 플랫폼 락(예: 지마켓)."""
     import os
-    if not os.path.exists(CRAWL_LOCKFILE):
+    lockfile = lockfile or CRAWL_LOCKFILE
+    if not os.path.exists(lockfile):
         return None, False
     try:
         # 락 형식은 'pid|name|time' (eleven_block_guard.acquire_global_lock) — 첫 필드가 pid.
         # 통째 int 변환하면 ValueError로 멀쩡한 락을 stale로 오인·삭제했었음(2026-06-11 수정).
-        raw = (open(CRAWL_LOCKFILE).read() or '').strip()
+        raw = (open(lockfile).read() or '').strip()
         pid = int((raw.split('|')[0] or '0').strip() or 0)
     except Exception:
         pid = 0
@@ -1690,7 +1696,7 @@ def _crawl_lock_busy():
             pass
     # 죽은 PID / 손상 → stale 락 정리
     try:
-        os.remove(CRAWL_LOCKFILE)
+        os.remove(lockfile)
     except Exception:
         pass
     return None, False
@@ -1959,6 +1965,158 @@ class ElevenSuspendSoldoutView(views.APIView):
         return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
 
 
+class ElevenSuspendSelectedView(views.APIView):
+    """선택 상품(나의상품 그리드에서 체크한 것) 판매중지 — 확인필요/고마진 화면 등에서 임의 선택한
+    상품 id 목록을 받아 계정별로 묶어 delete_loss_products --targets-json --stop-only로 넘긴다.
+    ElevenSuspendSoldoutView(계정 선택형)와 동일 안전패턴, 대상만 임의 선택 상품으로 다름."""
+    def post(self, request):
+        import json, subprocess
+        from apps.cpc.models import ElevenMyProduct, protected_login_ids
+
+        ids = [int(i) for i in (request.data.get('ids') or []) if str(i).isdigit()]
+        if not ids:
+            return Response({'error': 'ids(선택 상품 id 목록) 필수'}, status=400)
+
+        rows = list(ElevenMyProduct.objects.filter(id__in=ids).select_related('account')
+                    .values('account__login_id', 'product_no'))
+        protected = protected_login_ids('11st')
+        acc_map = {}
+        skipped_protected = set()
+        for r in rows:
+            eid = r['account__login_id']
+            if eid in protected:
+                skipped_protected.add(eid)
+                continue
+            acc_map.setdefault(eid, []).append(str(r['product_no']))
+
+        if not acc_map:
+            msg = '⛔ 선택 상품이 없거나 전부 보호 계정입니다.'
+            if skipped_protected:
+                msg += f' [제외: {", ".join(skipped_protected)}]'
+            return Response({'status': 'blocked', 'message': msg}, status=400)
+
+        targets_json = json.dumps(acc_map)
+        args = f"manage.py delete_loss_products --targets-json '{targets_json}' --stop-only --real"
+        script = f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {args} >> /tmp/delete_loss.log 2>&1'
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        total = sum(len(v) for v in acc_map.values())
+        msg = f'🛑 선택상품 판매중지 시작 — {len(acc_map)}계정 총 {total}개. 진행상황은 /tmp/delete_loss.log 확인.'
+        if skipped_protected:
+            msg += f' [제외: {", ".join(skipped_protected)}]'
+        return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
+
+
+class ElevenSuspendAllNoMatchView(views.APIView):
+    """미매칭 전체 판매중지 — 화면에서 선택하지 않고, 현재 미매칭 필터(get_my_products no_match와 동일 로직)에
+    해당하는 '판매중' 상품 전체를 서버에서 계산해 한 번에 처리. 1만개 선택 캡을 여러 번 반복해야 하는
+    불편 해소용(2026-08-20). status_type='판매중'만 대상(이미 판매중지/삭제된 건 처리 불필요)."""
+    def post(self, request):
+        import json, subprocess
+        from apps.cpc.models import ElevenMyProduct, protected_login_ids
+        from apps.cpc.eleven_my_product_service import _apply_no_match_filter
+
+        account_id = request.data.get('account_id')
+        search = request.data.get('search')
+        qs = ElevenMyProduct.objects.filter(
+            seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중',
+        ).exclude(seller_product_code__regex=r'[가-힣]')
+        qs = _apply_no_match_filter(qs)
+        if account_id:
+            qs = qs.filter(account_id=int(account_id))
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(Q(product_name__icontains=search) | Q(seller_product_code__icontains=search))
+
+        rows = list(qs.select_related('account').values('account__login_id', 'product_no'))
+        protected = protected_login_ids('11st')
+        acc_map = {}
+        skipped_protected = set()
+        for r in rows:
+            eid = r['account__login_id']
+            if eid in protected:
+                skipped_protected.add(eid)
+                continue
+            acc_map.setdefault(eid, []).append(str(r['product_no']))
+
+        if not acc_map:
+            msg = '⛔ 미매칭(판매중) 대상이 없거나 전부 보호 계정입니다.'
+            if skipped_protected:
+                msg += f' [제외: {", ".join(skipped_protected)}]'
+            return Response({'status': 'blocked', 'message': msg}, status=400)
+
+        targets_json = json.dumps(acc_map)
+        args = f"manage.py delete_loss_products --targets-json '{targets_json}' --stop-only --real"
+        script = f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {args} >> /tmp/delete_loss.log 2>&1'
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        total = sum(len(v) for v in acc_map.values())
+        msg = f'🛑 미매칭 전체 판매중지 시작 — {len(acc_map)}계정 총 {total}개(판매중만 대상). 진행상황은 /tmp/delete_loss.log 확인.'
+        if skipped_protected:
+            msg += f' [제외: {", ".join(skipped_protected)}]'
+        return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
+
+
+class GmarketSuspendAllNoMatchView(views.APIView):
+    """지마켓 미매칭 전체(판매중만) 판매중지 — ElevenSuspendAllNoMatchView와 동일 패턴."""
+    def post(self, request):
+        import json, subprocess
+        from apps.cpc.models import GmarketMyProduct, protected_login_ids
+        from apps.cpc.eleven_my_product_service import _apply_no_match_filter
+
+        account_id = request.data.get('account_id')
+        search = request.data.get('search')
+        qs = GmarketMyProduct.objects.filter(
+            seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중',
+        ).exclude(seller_product_code__regex=r'[가-힣]')
+        qs = _apply_no_match_filter(qs)
+        if account_id:
+            qs = qs.filter(account_id=int(account_id))
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(Q(product_name__icontains=search) | Q(seller_product_code__icontains=search))
+
+        rows = list(qs.select_related('account').values('account__login_id', 'product_no'))
+        protected = protected_login_ids('gmarket')
+        acc_map = {}
+        skipped_protected = set()
+        for r in rows:
+            eid = r['account__login_id']
+            if eid in protected:
+                skipped_protected.add(eid)
+                continue
+            acc_map.setdefault(eid, []).append(str(r['product_no']))
+
+        if not acc_map:
+            msg = '⛔ 미매칭(판매중) 대상이 없거나 전부 보호 계정입니다.'
+            if skipped_protected:
+                msg += f' [제외: {", ".join(skipped_protected)}]'
+            return Response({'status': 'blocked', 'message': msg}, status=400)
+
+        targets_json = json.dumps(acc_map)
+        args = f"manage.py delete_loss_gmarket --targets-json '{targets_json}' --stop-only --real"
+        script = f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {args} >> /tmp/delete_loss_gmarket.log 2>&1'
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        total = sum(len(v) for v in acc_map.values())
+        msg = f'🛑 미매칭 전체 판매중지 시작 — {len(acc_map)}계정 총 {total}개(판매중만 대상, 지마켓 순차처리). 진행상황은 /tmp/delete_loss_gmarket.log 확인.'
+        if skipped_protected:
+            msg += f' [제외: {", ".join(skipped_protected)}]'
+        return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
+
+
 class ElevenLossMarkDeletedView(views.APIView):
     """적자상품 삭제완료 표시 — 11번가에서 삭제한 상품을 기록(비고 '삭제완료' 파란색).
     body: {product_nos:[...], eleven_id?} 또는 {all:true}(현재 적자 전체 삭제완료 처리)."""
@@ -2091,6 +2249,43 @@ class St11CrawlStopView(views.APIView):
         subprocess.call(['pkill', '-f', 'chromedriver'])
         try:
             os.remove(CRAWL_LOCKFILE)
+        except Exception:
+            pass
+        return Response({'status': 'stopped', 'pid': pid})
+
+
+GMARKET_CRAWL_LOCKFILE = '/tmp/avengers_crawl_chrome_gmarket.lock'
+
+
+class GmarketCrawlStopView(views.APIView):
+    """실행 중인 지마켓 크롤(선택상품 판매중지 등 delete_loss_gmarket 포함)을 강제 중지.
+    St11CrawlStopView와 동일 패턴 — 락(/tmp/avengers_crawl_chrome_gmarket.lock) PID의 프로세스그룹 종료 + 크롬 정리."""
+    def post(self, request):
+        import os, signal, time, subprocess
+        pid, busy = _crawl_lock_busy(GMARKET_CRAWL_LOCKFILE)
+        if not busy:
+            return Response({'status': 'idle', 'message': '실행 중인 지마켓 크롤이 없습니다.'})
+        if pid == os.getpid():
+            subprocess.call(['pkill', '-f', 'org.chromium.Chromium.scoped_dir'])
+            subprocess.call(['pkill', '-f', 'chromedriver'])
+            return Response({'status': 'stopped', 'message': '진행 중 크롤의 크롬을 종료했습니다.'})
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            time.sleep(2)
+            try:
+                os.kill(pid, 0)
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except OSError:
+                pass
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        subprocess.call(['pkill', '-f', 'org.chromium.Chromium.scoped_dir'])
+        subprocess.call(['pkill', '-f', 'chromedriver'])
+        try:
+            os.remove(GMARKET_CRAWL_LOCKFILE)
         except Exception:
             pass
         return Response({'status': 'stopped', 'pid': pid})
@@ -3369,12 +3564,19 @@ class ElevenMyProductListView(views.APIView):
         sort = request.query_params.get('sort') or None
         order = request.query_params.get('order') or 'asc'
         needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
+        no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
+        high_margin = request.query_params.get('high_margin') in ('1', 'true', 'True')
+        min_abs_pct_raw = request.query_params.get('min_abs_pct')
+        min_abs_pct = float(min_abs_pct_raw) if min_abs_pct_raw not in (None, '') else None
 
         # 전체 다운로드(export=1): 현재 필터에 맞는 '전체' 상품을 CSV로 스트리밍 (페이지 무관, 선택 무관)
+        # ★ needs_check/no_match/high_margin을 빼먹으면 필터 켠 채로 다운로드해도 전체가 그대로 나가는
+        #   버그가 있었음(2026-08-20 발견 — 미매칭 검색인데 W코드 아닌 상품까지 섞여 나옴). get_my_products와
+        #   동일 필터를 적용해 화면에 보이는 것과 다운로드가 항상 일치하도록 함.
         if request.query_params.get('export'):
             import csv as _csv
             from django.http import StreamingHttpResponse
-            from django.db.models import Q
+            from django.db.models import Q, F
             from apps.cpc.models import ElevenMyProduct
             qs = ElevenMyProduct.objects.select_related('account')
             if account_id:
@@ -3386,22 +3588,34 @@ class ElevenMyProductListView(views.APIView):
                                | Q(account__login_id__icontains=search) | Q(account__seller_name__icontains=search))
             if focused_only:
                 qs = qs.filter(account__is_focused=True)
+            if needs_check:
+                qs = qs.filter(cost_diff__lt=0)
+            elif no_match:
+                qs = _emp_svc._apply_no_match_filter(
+                    qs.filter(seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중')
+                      .exclude(seller_product_code__regex=r'[가-힣]')
+                )
+            elif high_margin:
+                qs = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
             qs = qs.order_by('account_id', 'product_no')
 
             class _Echo:
                 def write(self, value):
                     return value
 
-            header = ['셀러', '로그인ID', '상품번호', '판매자상품코드', '상품명', '판매가', '재고', '판매상태', '카테고리']
+            header = ['셀러', '로그인ID', '상품번호', '판매자상품코드', '상품명', '판매가', '재고', '판매상태', '카테고리',
+                       '마켓가', '차이', '%']
 
             def _rows():
                 w = _csv.writer(_Echo())
                 yield '﻿' + w.writerow(header)
                 for p in qs.iterator(chunk_size=2000):
+                    pct = round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else ''
                     yield w.writerow([
                         p.account.seller_name, p.account.login_id, p.product_no,
                         p.seller_product_code, p.product_name, p.sale_price,
                         p.stock_quantity, p.status_type, p.category_id,
+                        p.purchase_cost or '', p.cost_diff if p.cost_diff is not None else '', pct,
                     ])
 
             resp = StreamingHttpResponse(_rows(), content_type='text/csv; charset=utf-8')
@@ -3414,6 +3628,8 @@ class ElevenMyProductListView(views.APIView):
             status=status_q, search=search,
             focused_only=focused_only,
             sort=sort, order=order, needs_check=needs_check,
+            no_match=no_match, high_margin=high_margin,
+            min_abs_pct=min_abs_pct,
         )
         return Response(result)
 
@@ -3447,6 +3663,10 @@ class GmarketMyProductListView(views.APIView):
         sort = request.query_params.get('sort') or 'product_no'
         order = request.query_params.get('order') or 'asc'
         needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
+        no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
+        high_margin = request.query_params.get('high_margin') in ('1', 'true', 'True')
+        min_abs_pct_raw = request.query_params.get('min_abs_pct')
+        min_abs_pct = float(min_abs_pct_raw) if min_abs_pct_raw not in (None, '') else None
 
         qs = GmarketMyProduct.objects.select_related('account')
         if account_id:
@@ -3468,8 +3688,33 @@ class GmarketMyProductListView(views.APIView):
         if needs_total is None:
             needs_total = qs.filter(cost_diff__lt=0).count()
             _ncache.set(nc_key, needs_total, 120)
+        # 미매칭 = W코드(오너클랜 소싱)인데 카탈로그에 매칭 실패(purchase_cost NULL). W코드 아닌 상품/한글 섞인 코드는 제외,
+        # 오너클랜 라이브 상태캐시로 품절/단종/미존재 확인된 것도 제외(정상 설명 가능한 결측).
+        from apps.cpc.eleven_my_product_service import _apply_no_match_filter
+        nm_key = f"gmkt_nomatch:{account_id}:{login_id}:{market}:{status_q}:{search}"
+        no_match_total = _ncache.get(nm_key)
+        if no_match_total is None:
+            no_match_total = _apply_no_match_filter(
+                qs.filter(seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중')
+                  .exclude(seller_product_code__regex=r'[가-힣]')
+            ).count()
+            _ncache.set(nm_key, no_match_total, 120)
+        # 고마진 = 판매가가 구매원가의 1.5배 이상 — 단가오류/미갱신 등 확인 필요 신호.
+        from django.db.models import F
+        hm_key = f"gmkt_highmargin:{account_id}:{login_id}:{market}:{status_q}:{search}"
+        high_margin_total = _ncache.get(hm_key)
+        if high_margin_total is None:
+            high_margin_total = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5).count()
+            _ncache.set(hm_key, high_margin_total, 120)
         if needs_check:
             qs = qs.filter(cost_diff__lt=0)
+        elif no_match:
+            qs = _apply_no_match_filter(
+                qs.filter(seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중')
+                  .exclude(seller_product_code__regex=r'[가-힣]')
+            )
+        elif high_margin:
+            qs = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
         # 중복제외: 같은 (계정, 판매자코드)는 1개만(가장 빠른 id) — 같은 상품의 다중 상품번호/마켓 중복 제거.
         # 기존 `id__in=<keep_ids 서브쿼리>`는 48만행 semi-join이 매 페이지 재실행돼 ~353초였음.
         # 제거 대상(loser=그룹 내 min 초과분)은 ~3.9만개뿐 → loser id만 캐시하고 exclude.
@@ -3487,8 +3732,18 @@ class GmarketMyProductListView(views.APIView):
                 _cache.set(sig, loser_ids, 180)
             if loser_ids:
                 qs = qs.exclude(id__in=loser_ids)
-        from django.db.models import F
-        if needs_check and sort not in _GMKT_SORT:
+        from django.db.models import F, ExpressionWrapper, FloatField, Q as _Q
+        from django.db.models.functions import NullIf
+        # cost_pct = 판매가/마켓가*100 — 확인필요/고마진 화면에서 편차 20%+ 만 골라보기용.
+        if needs_check or high_margin or sort == 'cost_pct' or min_abs_pct is not None:
+            qs = qs.annotate(cost_pct_db=ExpressionWrapper(
+                F('sale_price') * 100.0 / NullIf(F('purchase_cost'), 0), output_field=FloatField()))
+            if min_abs_pct is not None:
+                qs = qs.filter(_Q(cost_pct_db__lte=100 - min_abs_pct) | _Q(cost_pct_db__gte=100 + min_abs_pct))
+        if sort == 'cost_pct':
+            nulls = F('cost_pct_db').asc(nulls_last=True) if order == 'asc' else F('cost_pct_db').desc(nulls_last=True)
+            qs = qs.order_by(nulls, '-id')
+        elif needs_check and sort not in _GMKT_SORT:
             qs = qs.order_by(F('cost_diff').asc(nulls_last=True), '-id')   # 확인필요 기본: 역마진 심한 순
         elif sort in ('purchase_cost', 'cost_diff'):
             nulls = F(sort).asc(nulls_last=True) if order == 'asc' else F(sort).desc(nulls_last=True)
@@ -3520,8 +3775,14 @@ class GmarketMyProductListView(views.APIView):
 
         # COUNT(*)는 48만행이라 페이지 이동마다 ~2초 → 필터별 캐시(동기화 때만 변함)
         from django.core.cache import cache as _cache
-        if needs_check:
+        if min_abs_pct is not None and (needs_check or high_margin):
+            total = qs.count()   # pct 필터 추가시 캐시된 총건수(pct 미반영)를 못 씀 — 매번 재계산
+        elif needs_check:
             total = needs_total
+        elif no_match:
+            total = no_match_total
+        elif high_margin:
+            total = high_margin_total
         else:
             cnt_key = f"gmkt_my_count:{account_id}:{login_id}:{market}:{status_q}:{search}:{int(dedup_on)}"
             total = _cache.get(cnt_key)
@@ -3537,10 +3798,57 @@ class GmarketMyProductListView(views.APIView):
             'category_code': p.category_code,
             'synced_at': p.synced_at.isoformat() if p.synced_at else None,
             'purchase_cost': p.purchase_cost, 'cost_diff': p.cost_diff,
+            'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else None,
         } for p in qs[start:start + per_page]]
         return Response({'items': items, 'total': total, 'page': page, 'per_page': per_page,
                          'total_pages': math.ceil(total / per_page) if per_page else 1,
-                         'needs_check_total': needs_total})
+                         'needs_check_total': needs_total, 'no_match_total': no_match_total,
+                         'high_margin_total': high_margin_total})
+
+
+class GmarketSuspendSelectedView(views.APIView):
+    """선택 상품(나의상품 그리드에서 체크한 것) 판매중지 — 지마켓판. ElevenSuspendSelectedView와 동일 패턴.
+    dlwodb777 등 is_test_account=True 계정은 protected_login_ids로 자동 제외(2026-08-20 등록)."""
+    def post(self, request):
+        import json, subprocess
+        from apps.cpc.models import GmarketMyProduct, protected_login_ids
+
+        ids = [int(i) for i in (request.data.get('ids') or []) if str(i).isdigit()]
+        if not ids:
+            return Response({'error': 'ids(선택 상품 id 목록) 필수'}, status=400)
+
+        rows = list(GmarketMyProduct.objects.filter(id__in=ids).select_related('account')
+                    .values('account__login_id', 'product_no'))
+        protected = protected_login_ids('gmarket')
+        acc_map = {}
+        skipped_protected = set()
+        for r in rows:
+            eid = r['account__login_id']
+            if eid in protected:
+                skipped_protected.add(eid)
+                continue
+            acc_map.setdefault(eid, []).append(str(r['product_no']))
+
+        if not acc_map:
+            msg = '⛔ 선택 상품이 없거나 전부 보호 계정입니다.'
+            if skipped_protected:
+                msg += f' [제외: {", ".join(skipped_protected)}]'
+            return Response({'status': 'blocked', 'message': msg}, status=400)
+
+        targets_json = json.dumps(acc_map)
+        args = f"manage.py delete_loss_gmarket --targets-json '{targets_json}' --stop-only --real"
+        script = f'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 {args} >> /tmp/delete_loss_gmarket.log 2>&1'
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        total = sum(len(v) for v in acc_map.values())
+        msg = f'🛑 선택상품 판매중지 시작 — {len(acc_map)}계정 총 {total}개(지마켓 동시크롤 금지로 순차 처리). 진행상황은 /tmp/delete_loss_gmarket.log 확인.'
+        if skipped_protected:
+            msg += f' [제외: {", ".join(skipped_protected)}]'
+        return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
 
 
 class GmarketCrawlStatusView(views.APIView):

@@ -13,6 +13,9 @@ class Command(BaseCommand):
         parser.add_argument('--stop-only', action='store_true', help='판매중지만(삭제 안 함)')
         parser.add_argument('--product-nos', nargs='*', dest='product_nos',
                             help='상품번호 지정 삭제(나의상품 선택삭제용). --eid 필수.')
+        parser.add_argument('--targets-json', dest='targets_json', default=None,
+                            help='다계정 일괄 지정(나의상품 선택). {"eid1":["pno",...], "eid2":[...]} JSON. '
+                                 'run_delete가 계정별로 순차 처리 + 락 1회 획득(11번가 delete_loss_products와 동일 패턴).')
 
     def handle(self, *args, **o):
         from apps.cpc.views import _gmkt_product_rows
@@ -24,6 +27,23 @@ class Command(BaseCommand):
 
         mode = 'stop_only' if o.get('stop_only') else ('real' if o['real'] else 'validate')
         protected = protected_login_ids('gmarket')
+
+        # 다계정 지정상품(나의상품 선택 — 확인필요/고마진 등에서 여러 계정 상품 한 번에)
+        if o.get('targets_json'):
+            import json
+            acc_map = json.loads(o['targets_json'])
+            skipped_accs = [eid for eid in acc_map if eid in protected]
+            targets = [{'login_id': eid, 'product_no': str(p), 'seller_code': '', 'status': ''}
+                       for eid, pnos in acc_map.items() if eid not in protected for p in pnos]
+            if skipped_accs:
+                self.stdout.write(f'⛔ 테스트/타사 계정 제외: {", ".join(skipped_accs)}')
+            self.stdout.write(f'다계정 지정상품 {len(targets)}개 / {len(acc_map) - len(skipped_accs)}계정 (mode={mode})')
+            if not targets:
+                self.stdout.write('대상 없음 — 종료')
+                return
+            res = run_delete(targets, mode=mode, log_fn=lambda m: self.stdout.write(m))
+            self.stdout.write(str(res))
+            return
 
         # 상품번호 지정 삭제(나의상품 선택삭제) — CLI 직접 호출 등 API뷰를 거치지 않는 경로 대비 이중 방어
         if o.get('product_nos'):

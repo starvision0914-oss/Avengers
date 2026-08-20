@@ -14,6 +14,23 @@ from . import eleven_block_guard as guard
 
 logger = logging.getLogger(__name__)
 
+# 오너클랜 라이브 상태캐시(OwnerclanLiveStatus)로 "진짜 미매칭(존재 자체가 불확실)"과
+# "가격만 안 채워진 실제 상품"을 구분한다. 미매칭 = 오너클랜에 이 코드가 실제로 있는지조차
+# 확인이 안 된 것(아직 라이브검증 안 함) 또는 검색해도 안 나오는 것(NOT_FOUND)뿐이다.
+# available/soldout/unavailable/discontinued로 확인된 코드는 로컬 가격DB(purchase_cost) 유무와
+# 무관하게 "실존이 증명된 진짜 오너클랜 상품"이므로 더 이상 미매칭이 아니다 — 로컬에만 가격이
+# 없는 것뿐이라 필요한 조치는 판매중지가 아니라 가격 동기화(2026-08-20, 사용자 지적으로 재정의).
+def _apply_no_match_filter(qs, code_field='seller_product_code'):
+    from django.db.models import Q
+    from django.db.models.expressions import RawSQL
+    return qs.annotate(
+        _live_status=RawSQL(
+            f"SELECT status FROM ownerclan_live_status "
+            f"WHERE product_code = REGEXP_REPLACE({code_field}, '^(WDM_|AUTO_)', '') LIMIT 1",
+            [],
+        )
+    ).filter(Q(_live_status__isnull=True) | Q(_live_status='NOT_FOUND'))
+
 ELEVEN_API_URL = 'https://openapi.11st.co.kr/openapi/OpenApiService.tmall'
 
 # 11번가 OpenAPI 차단 회피 — 매우 보수적인 페이싱
@@ -337,8 +354,11 @@ _SORT_MAP = {
 
 
 def get_my_products(account_id=None, page=1, per_page=50, status=None, search=None,
-                    focused_only=False, sort=None, order='asc', needs_check=False):
+                    focused_only=False, sort=None, order='asc', needs_check=False,
+                    no_match=False, high_margin=False, min_abs_pct=None):
     from django.core.cache import cache
+    from django.db.models import ExpressionWrapper, FloatField, Q
+    from django.db.models.functions import NullIf
     qs = ElevenMyProduct.objects.select_related('account').all()
     if account_id:
         qs = qs.filter(account_id=account_id)
@@ -354,19 +374,56 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
         )
         qs = qs.filter(account_id__in=focused_ids)
 
+    from django.db.models import F
+
     # 확인필요 = 역마진(구매원가>판매가 → cost_diff<0). 현재 필터 기준 건수(배지표시용, 캐시).
     nc_key = f"emp_needs:{account_id}:{status}:{search}:{int(bool(focused_only))}"
     needs_total = cache.get(nc_key)
     if needs_total is None:
         needs_total = qs.filter(cost_diff__lt=0).count()
         cache.set(nc_key, needs_total, 120)
+    # 미매칭 = W코드(오너클랜 소싱)인데 카탈로그에 매칭 실패(purchase_cost NULL). W코드 아닌 상품/한글 섞인 코드는 제외.
+    # 라이브 상태캐시(OwnerclanLiveStatus)로 재확인해 품절/단종/미존재로 "확인된" 코드는 정상 설명 가능한
+    # 결측이므로 빼고, 미확인/available(진짜 데이터갭)만 남긴다. status_type='판매중'만 — 이미 판매중지/삭제된
+    # 건 조치할 필요가 없어 카운트에서 제외(2026-08-20 사용자 확인).
+    nm_key = f"emp_nomatch:{account_id}:{status}:{search}:{int(bool(focused_only))}"
+    no_match_total = cache.get(nm_key)
+    if no_match_total is None:
+        no_match_total = _apply_no_match_filter(
+            qs.filter(seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중')
+              .exclude(seller_product_code__regex=r'[가-힣]')
+        ).count()
+        cache.set(nm_key, no_match_total, 120)
+    # 고마진 = 판매가가 구매원가의 1.5배 이상 — 단가오류/미갱신 등 확인 필요 신호.
+    hm_key = f"emp_highmargin:{account_id}:{status}:{search}:{int(bool(focused_only))}"
+    high_margin_total = cache.get(hm_key)
+    if high_margin_total is None:
+        high_margin_total = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5).count()
+        cache.set(hm_key, high_margin_total, 120)
 
     if needs_check:
         # 확인필요만 보기 — 역마진 행만, 가장 심한(음수 큰) 순으로 맨 위에.
         qs = qs.filter(cost_diff__lt=0)
+    elif no_match:
+        qs = _apply_no_match_filter(
+            qs.filter(seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중')
+              .exclude(seller_product_code__regex=r'[가-힣]')
+        )
+    elif high_margin:
+        qs = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
 
-    from django.db.models import F
-    if needs_check and not sort:
+    # cost_pct = 판매가/마켓가*100 (100=원가와동일, 낮을수록 역마진 심함, 높을수록 고마진 심함).
+    # 확인필요/고마진 화면에서 편차 20%+ 만 골라보기용. min_abs_pct 지정 시 |cost_pct-100| >= 임계값만 남김.
+    if needs_check or high_margin or sort == 'cost_pct' or min_abs_pct is not None:
+        qs = qs.annotate(cost_pct_db=ExpressionWrapper(
+            F('sale_price') * 100.0 / NullIf(F('purchase_cost'), 0), output_field=FloatField()))
+        if min_abs_pct is not None:
+            qs = qs.filter(Q(cost_pct_db__lte=100 - min_abs_pct) | Q(cost_pct_db__gte=100 + min_abs_pct))
+
+    if sort == 'cost_pct':
+        nulls = F('cost_pct_db').asc(nulls_last=True) if order == 'asc' else F('cost_pct_db').desc(nulls_last=True)
+        qs = qs.order_by(nulls, '-id')
+    elif needs_check and not sort:
         qs = qs.order_by(F('cost_diff').asc(nulls_last=True), '-id')   # 기본: 역마진 심한 순(맨 위)
     elif sort in ('purchase_cost', 'cost_diff'):
         # 구매원가/차이는 비정규화 컬럼(인덱스)로 정렬 — 매칭없음(NULL)은 항상 맨 뒤.
@@ -382,8 +439,14 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
         qs = qs.order_by('-synced_at', '-id')
     # COUNT(*)는 45만행 인덱스 카운트라 4~10초로 페이지 이동마다 병목 → 필터별 캐시.
     # 데이터는 동기화(크롤) 때만 변하므로 120초 TTL이면 충분(총개수는 페이징 표시용).
-    if needs_check:
+    if min_abs_pct is not None and (needs_check or high_margin):
+        total = qs.count()   # pct 필터 추가시 캐시된 총건수(pct 미반영)를 못 씀 — 매번 재계산
+    elif needs_check:
         total = needs_total
+    elif no_match:
+        total = no_match_total
+    elif high_margin:
+        total = high_margin_total
     else:
         count_key = f"emp_count:{account_id}:{status}:{search}:{int(bool(focused_only))}"
         total = cache.get(count_key)
@@ -399,6 +462,8 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
         'items': serialized,
         'total': total,
         'needs_check_total': needs_total,   # 확인필요(역마진) 건수 — 필터 on/off 무관 항상 제공
+        'no_match_total': no_match_total,
+        'high_margin_total': high_margin_total,
         'page': page,
         'per_page': per_page,
         'total_pages': (total + per_page - 1) // per_page if total > 0 else 0,
@@ -408,7 +473,8 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
 def _attach_purchase_cost(serialized):
     """마켓가(예비상품 ownerclan market_price=마켓실제판매가)를 11번가 판매자코드(seller_product_code=ownerclan product_code)로 매칭해 주입.
     - purchase_cost: ownerclan.market_price (마켓가). 사용자 요청대로 마켓가 기준.
-    - cost_diff: 판매가 - 마켓가"""
+    - cost_diff: 판매가 - 마켓가
+    - cost_pct: 판매가/마켓가 * 100 (100=원가와 동일, <100=역마진, >100=마진)"""
     codes = [s['seller_product_code'] for s in serialized if s.get('seller_product_code')]
     cost_map = {}
     if codes:
@@ -421,10 +487,12 @@ def _attach_purchase_cost(serialized):
         if not pc:   # 0 또는 미존재 → 데이터 없음
             s['purchase_cost'] = None
             s['cost_diff'] = None
+            s['cost_pct'] = None
             continue
         s['purchase_cost'] = pc
         sp = s.get('sale_price')
         s['cost_diff'] = (sp - pc) if sp is not None else None
+        s['cost_pct'] = round(sp / pc * 100, 1) if sp is not None else None
 
 
 def refresh_purchase_costs(codes=None):
@@ -444,14 +512,14 @@ def refresh_purchase_costs(codes=None):
             # 전체
             c.execute("""
                 UPDATE eleven_my_product e
-                JOIN ownerclan_product o ON o.product_code = e.seller_product_code
+                JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(e.seller_product_code, '^(WDM_|AUTO_)', '')
                 SET e.purchase_cost = NULLIF(o.market_price, 0)
                 WHERE e.seller_product_code <> ''
             """)
             updated = c.rowcount
             c.execute("""
                 UPDATE eleven_my_product e
-                LEFT JOIN ownerclan_product o ON o.product_code = e.seller_product_code
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(e.seller_product_code, '^(WDM_|AUTO_)', '')
                 SET e.purchase_cost = NULL
                 WHERE e.purchase_cost IS NOT NULL
                   AND (e.seller_product_code = '' OR o.product_code IS NULL OR o.market_price = 0)
@@ -464,9 +532,9 @@ def refresh_purchase_costs(codes=None):
             ph = ','.join(['%s'] * len(chunk))
             c.execute(f"""
                 UPDATE eleven_my_product e
-                LEFT JOIN ownerclan_product o ON o.product_code = e.seller_product_code
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(e.seller_product_code, '^(WDM_|AUTO_)', '')
                 SET e.purchase_cost = NULLIF(o.market_price, 0)
-                WHERE e.seller_product_code IN ({ph})
+                WHERE REGEXP_REPLACE(e.seller_product_code, '^(WDM_|AUTO_)', '') IN ({ph})
             """, chunk)
             updated += c.rowcount
         return updated
@@ -486,14 +554,14 @@ def refresh_gmarket_purchase_costs(codes=None):
         if code_list is None:
             c.execute("""
                 UPDATE gmarket_my_product g
-                JOIN ownerclan_product o ON o.product_code = g.seller_product_code
+                JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(g.seller_product_code, '^(WDM_|AUTO_)', '')
                 SET g.purchase_cost = NULLIF(o.market_price, 0)
                 WHERE g.seller_product_code <> ''
             """)
             updated = c.rowcount
             c.execute("""
                 UPDATE gmarket_my_product g
-                LEFT JOIN ownerclan_product o ON o.product_code = g.seller_product_code
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(g.seller_product_code, '^(WDM_|AUTO_)', '')
                 SET g.purchase_cost = NULL
                 WHERE g.purchase_cost IS NOT NULL
                   AND (g.seller_product_code = '' OR o.product_code IS NULL OR o.market_price = 0)
@@ -505,9 +573,50 @@ def refresh_gmarket_purchase_costs(codes=None):
             ph = ','.join(['%s'] * len(chunk))
             c.execute(f"""
                 UPDATE gmarket_my_product g
-                LEFT JOIN ownerclan_product o ON o.product_code = g.seller_product_code
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(g.seller_product_code, '^(WDM_|AUTO_)', '')
                 SET g.purchase_cost = NULLIF(o.market_price, 0)
-                WHERE g.seller_product_code IN ({ph})
+                WHERE REGEXP_REPLACE(g.seller_product_code, '^(WDM_|AUTO_)', '') IN ({ph})
+            """, chunk)
+            updated += c.rowcount
+        return updated
+
+
+def refresh_smartstore_purchase_costs(codes=None):
+    """smartstore_product.purchase_cost 를 예비상품(ownerclan) 마켓가로 갱신 — 11번가/지마켓과 동일 패턴(set-based JOIN).
+    - codes=None: 전체 갱신
+    - codes=[...]: 해당 예비상품 코드와 매칭되는 행만 갱신"""
+    from django.db import connection
+    code_list = None
+    if codes is not None:
+        code_list = [c for c in {str(x).strip() for x in codes} if c]
+        if not code_list:
+            return 0
+    with connection.cursor() as c:
+        if code_list is None:
+            c.execute("""
+                UPDATE smartstore_product s
+                JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(s.seller_management_code, '^(WDM_|AUTO_)', '')
+                SET s.purchase_cost = NULLIF(o.market_price, 0)
+                WHERE s.seller_management_code <> ''
+            """)
+            updated = c.rowcount
+            c.execute("""
+                UPDATE smartstore_product s
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(s.seller_management_code, '^(WDM_|AUTO_)', '')
+                SET s.purchase_cost = NULL
+                WHERE s.purchase_cost IS NOT NULL
+                  AND (s.seller_management_code = '' OR o.product_code IS NULL OR o.market_price = 0)
+            """)
+            return updated
+        updated = 0
+        for i in range(0, len(code_list), 5000):
+            chunk = code_list[i:i + 5000]
+            ph = ','.join(['%s'] * len(chunk))
+            c.execute(f"""
+                UPDATE smartstore_product s
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(s.seller_management_code, '^(WDM_|AUTO_)', '')
+                SET s.purchase_cost = NULLIF(o.market_price, 0)
+                WHERE REGEXP_REPLACE(s.seller_management_code, '^(WDM_|AUTO_)', '') IN ({ph})
             """, chunk)
             updated += c.rowcount
         return updated

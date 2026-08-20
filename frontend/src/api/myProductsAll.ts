@@ -19,6 +19,7 @@ export interface MyProductAllItem {
   synced_at: string | null;
   purchase_cost: number | null;      // 11번가만
   cost_diff: number | null;          // 11번가만
+  cost_pct?: number | null;          // 판매가/마켓가*100 (11번가·지마켓만)
 }
 
 export interface MyProductAllResponse {

@@ -115,6 +115,13 @@ def _download_daily(driver, login_id, ad_type, year, month, log_fn):
         _log(log_fn, f'  [{login_id}/{ad_type}] 조회 실패')
         return None
     time.sleep(8)
+    # 광고 집행 자체가 없는 계정은 '검색결과 : 총 0건'으로 정상 표시 → 다운로드해도 0바이트라
+    # 항상 '다운로드 실패'로 오판됐었다(2026-08-20 확인). 업로드할 데이터가 없을 뿐 정상 상태.
+    import re
+    from selenium.webdriver.common.by import By
+    if re.search(r'총\s*0\s*건', driver.find_element(By.TAG_NAME, 'body').text):
+        _log(log_fn, f'  [{login_id}/{ad_type}] 일자별 광고 집행 0건(정상)')
+        return None
     f = _do_download(driver, cfg)
     if not f or os.path.getsize(f) < 100:
         _log(log_fn, f'  [{login_id}/{ad_type}] ❌ 일자별 다운로드 실패')

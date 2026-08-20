@@ -98,6 +98,13 @@ class SmartStoreProduct(models.Model):
     product_image_url = models.TextField(blank=True, default='')
     ownerclan_soldout = models.BooleanField(default=False, help_text='오너클랜 품절 여부 (W코드 자동처리 대상)')
     synced_at = models.DateTimeField(auto_now=True)
+    purchase_cost = models.IntegerField(null=True, blank=True, db_index=True)
+    cost_diff = models.GeneratedField(
+        expression=models.F('sale_price') - models.F('purchase_cost'),
+        output_field=models.IntegerField(),
+        db_persist=True,
+        db_index=True,
+    )
 
     class Meta:
         db_table = 'smartstore_product'

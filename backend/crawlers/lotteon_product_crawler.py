@@ -202,6 +202,7 @@ def _upsert_products(account, rows, log_fn=None):
             product_name=(r.get('pdNm') or '')[:500],
             sale_price=r.get('slPrc') or 0,
             status_code=r.get('slStatCd') or '',
+            seller_product_code=str(r.get('epdNo') or ''),
             category_path=(r.get('dcatNmPath') or '')[:300],
             synced_at=now,
         ))
@@ -209,7 +210,7 @@ def _upsert_products(account, rows, log_fn=None):
         return 0
     LotteonMyProduct.objects.bulk_create(
         objs, update_conflicts=True,
-        update_fields=['product_name', 'sale_price', 'status_code', 'category_path', 'synced_at'],
+        update_fields=['product_name', 'sale_price', 'status_code', 'seller_product_code', 'category_path', 'synced_at'],
     )
     return len(objs)
 

@@ -1,4 +1,5 @@
 - [서버 IP](project_server_ip.md) — 현재 단일 호스트 IP는 192.168.45.100 (2026-06-12 사용자 확정). 직전 192.168.1.16, 폐기 192.168.2.16
+- [지마켓 dlwod777 수동관리](project_gmarket_dlwod777_manual_only.md) — 상품 모두 삭제하고 직접 올린 것만 남김, 삭제/판매중지 자동화 금지(직접 관리, 2026-08-20)
 - [한글 영타 입력](feedback_korean_qwerty_input.md) — 사용자가 한글을 영문QWERTY로 그대로 침(rmflrh=그리고). 두벌식 디코딩해 이해, 변환기 ~/qwerty2hangul.py
 - [PUBLIC 공유폴더 참조자료](reference_public_share.md) — /home/rejoice888/PUBLIC에 참조 자료를 보관, 작업 시 참조
 - [ai100 이전 프로젝트](reference_ai100.md) — betona1/ai100 이전 프로젝트 소스, 현재 /tmp/ai100에 위치

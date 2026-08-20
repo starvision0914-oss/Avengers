@@ -152,6 +152,7 @@ export default function OwnerclanCrawlerPage() {
   const [weeklyFiles, setWeeklyFiles] = useState<WeeklyPopularFile[]>([]);
   const [weeklyBusy, setWeeklyBusy] = useState(false);
   const [weeklyMsg, setWeeklyMsg] = useState('');
+  const [weeklyHistoryOpen, setWeeklyHistoryOpen] = useState(false);   // 이력은 기본 접힘, 최종 다운로드 시각만 메인에 표시
 
   const loadWeekly = useCallback(() => {
     api.get('/ownerclan/weekly-popular/').then(r => {
@@ -329,9 +330,16 @@ export default function OwnerclanCrawlerPage() {
           <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
             <TrendingUp size={15} className="text-[#dc2626]" />
             <span className="text-[15px] font-bold text-[#222]">주간 인기 상품 (db저장창고)</span>
-            <span className="text-[13px] text-[#999]">매일 09:00 자동 저장 · 계정 무관 사이트 전체 랭킹</span>
+            <span className="text-[13px] text-[#999]">
+              매일 09:00 자동 저장 · 계정 무관 사이트 전체 랭킹
+              {weeklyFiles[0] && <> · 최종 다운로드: <span className="font-semibold text-[#333]">{new Date(weeklyFiles[0].saved_at * 1000).toLocaleString('ko-KR')}</span></>}
+            </span>
             <span className="ml-auto flex items-center gap-2">
               {weeklyMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{weeklyMsg}</span>}
+              <button onClick={() => setWeeklyHistoryOpen(o => !o)}
+                className="flex items-center gap-1 px-3 py-1 text-[13px] font-semibold text-[#555] bg-[#f3f4f6] rounded hover:bg-[#e5e7eb]">
+                {weeklyHistoryOpen ? '이력 접기' : `이력 보기 (${weeklyFiles.length})`}
+              </button>
               <button onClick={handleWeeklyRun} disabled={weeklyBusy}
                 className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
                 style={{ background: weeklyBusy ? '#aaa' : '#dc2626' }}>
@@ -340,6 +348,7 @@ export default function OwnerclanCrawlerPage() {
               </button>
             </span>
           </div>
+          {weeklyHistoryOpen && (
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-[15px]">
               <thead>
@@ -375,6 +384,7 @@ export default function OwnerclanCrawlerPage() {
               </tbody>
             </table>
           </div>
+          )}
         </div>
 
         {/* ── 계정별 현황 테이블 ── */}

@@ -301,6 +301,22 @@ class OwnerclanApiAccount(models.Model):
         return self.login_id
 
 
+class OwnerclanLiveStatus(models.Model):
+    """W코드(오너클랜 상품코드)별 오너클랜 실제 판매상태 캐시 — 가격데이터(OwnerclanProduct/예비상품)와 무관하게
+    나의상품(지마켓/11번가/스마트스토어) 전체 W코드를 주5일(월~금) 순환으로 라이브 조회해 채운다.
+    품절/미존재 여부만 확인하는 용도라 market_price 등 가격 필드는 없음."""
+    product_code = models.CharField(max_length=64, unique=True)
+    status = models.CharField(max_length=20)   # available/soldout/unavailable/discontinued/NOT_FOUND
+    checked_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'ownerclan_live_status'
+        indexes = [models.Index(fields=['status']), models.Index(fields=['checked_at'])]
+
+    def __str__(self):
+        return f'{self.product_code}:{self.status}'
+
+
 class OwnerclanTask(models.Model):
     task_type = models.CharField(max_length=30)
     status = models.CharField(max_length=10, default='pending')

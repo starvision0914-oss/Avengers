@@ -24,6 +24,7 @@ export interface St11SellerRow {
   products?: number;
   product_limit?: number;
   available?: number;
+  banned?: number;
   overdue?: number;
   undelivered?: number;
   draft?: number;
@@ -55,6 +56,7 @@ export interface St11TotalsSummary {
   products: number;
   product_limit: number;
   available: number;
+  banned: number;
   sales: number;
   cost: number;
   server_fee: number;
