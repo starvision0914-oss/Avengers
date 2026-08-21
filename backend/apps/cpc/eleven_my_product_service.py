@@ -9,10 +9,70 @@ from bs4 import BeautifulSoup
 from django.db.models import Max
 from django.utils import timezone
 
-from .models import CrawlerAccount, ElevenMyProduct
+from .models import CrawlerAccount, ElevenMyProduct, GmarketMyProduct
 from . import eleven_block_guard as guard
 
 logger = logging.getLogger(__name__)
+
+
+def get_all_l_codes(status_filter=True):
+    """전 플랫폼(11번가/지마켓/스마트스토어) 판매중 판매자코드 중 LCE_SX_/LCE_MX_ 접두인 것에서
+    L코드(L+7자리)만 추출해 중복없이 반환. status_filter=False면 상태 무관 전체."""
+    import re
+    from apps.smartstore.models import SmartStoreProduct
+
+    l_re = re.compile(r'^LCE_(?:SX|MX)_(L\d{7})', re.IGNORECASE)
+    codes = set()
+    sources = [
+        (ElevenMyProduct, 'seller_product_code', '판매중'),
+        (GmarketMyProduct, 'seller_product_code', '판매중'),
+        (SmartStoreProduct, 'seller_management_code', 'SALE'),
+    ]
+    for model, field, status_val in sources:
+        qs = model.objects.filter(**{f'{field}__istartswith': 'LCE_'})
+        if status_filter:
+            qs = qs.filter(status_type=status_val)
+        for c in qs.values_list(field, flat=True).distinct().iterator():
+            m = l_re.match((c or '').strip())
+            if m:
+                codes.add(m.group(1))
+    return codes
+
+
+L_CODE_RE = __import__('re').compile(r'^LCE_(?:SX|MX)_(L\d{7})', __import__('re').IGNORECASE)
+
+
+def get_lcode_soldout_rows(model, code_field, product_no_field, status_field, status_val,
+                            account_id=None, search=None, search_fields=None, return_objects=False):
+    """L코드(도매마트) 상태가 품절(soldout)로 확인된 상품의 (login_id, product_no) 목록
+    (return_objects=True면 모델 인스턴스 리스트).
+    LCodeStatus는 check_domemart_lcodes 백그라운드 크롤러가 순차 채워가는 중(2026-08-21 시점 전체의
+    일부만 확인됨) — 아직 확인 안 된 코드는 soldout으로 간주하지 않는다(오탐 방지, 확인된 것만 대상)."""
+    from apps.cpc.models import LCodeStatus
+    soldout_codes = set(LCodeStatus.objects.filter(status='soldout').values_list('l_code', flat=True))
+    if not soldout_codes:
+        return []
+
+    qs = model.objects.select_related('account').filter(
+        **{f'{code_field}__istartswith': 'LCE_', status_field: status_val}
+    )
+    if account_id:
+        qs = qs.filter(account_id=int(account_id))
+    if search and search_fields:
+        from django.db.models import Q
+        cond = Q()
+        for f in search_fields:
+            cond |= Q(**{f'{f}__icontains': search})
+        qs = qs.filter(cond)
+
+    rows = []
+    for obj in qs.iterator(chunk_size=2000):
+        code = getattr(obj, code_field) or ''
+        m = L_CODE_RE.match(code.strip())
+        if m and m.group(1) in soldout_codes:
+            rows.append(obj if return_objects else (obj.account.login_id, getattr(obj, product_no_field)))
+    return rows
+
 
 # 오너클랜 라이브 상태캐시(OwnerclanLiveStatus)로 "진짜 미매칭(존재 자체가 불확실)"과
 # "가격만 안 채워진 실제 상품"을 구분한다. 미매칭 = 오너클랜에 이 코드가 실제로 있는지조차
@@ -355,7 +415,7 @@ _SORT_MAP = {
 
 def get_my_products(account_id=None, page=1, per_page=50, status=None, search=None,
                     focused_only=False, sort=None, order='asc', needs_check=False,
-                    no_match=False, high_margin=False, min_abs_pct=None):
+                    no_match=False, high_margin=False, min_abs_pct=None, needs_check_pct=10):
     from django.core.cache import cache
     from django.db.models import ExpressionWrapper, FloatField, Q
     from django.db.models.functions import NullIf
@@ -374,43 +434,51 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
         )
         qs = qs.filter(account_id__in=focused_ids)
 
-    from django.db.models import F
+    from django.db.models import F, Q
 
-    # 확인필요 = 역마진(구매원가>판매가 → cost_diff<0). 현재 필터 기준 건수(배지표시용, 캐시).
-    nc_key = f"emp_needs:{account_id}:{status}:{search}:{int(bool(focused_only))}"
+    needs_check_pct = min(max(needs_check_pct or 10, 1), 99)
+    needs_check_mult = (100 - needs_check_pct) / 100.0
+
+    # 확인필요 = 역마진(나의상품 판매가가 예비상품 마켓가보다 needs_check_pct%+ 낮음, 기본 10%). 배지표시용, 캐시.
+    # (2026-08-21 재정의 — 이전엔 cost_diff<0(단 1원 차이도 포함)이라 노이즈가 많았음. %는 사용자가 조정 가능)
+    nc_key = f"emp_needs:{account_id}:{status}:{search}:{int(bool(focused_only))}:{needs_check_pct}"
     needs_total = cache.get(nc_key)
     if needs_total is None:
-        needs_total = qs.filter(cost_diff__lt=0).count()
+        needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult).count()
         cache.set(nc_key, needs_total, 120)
-    # 미매칭 = W코드(오너클랜 소싱)인데 카탈로그에 매칭 실패(purchase_cost NULL). W코드 아닌 상품/한글 섞인 코드는 제외.
-    # 라이브 상태캐시(OwnerclanLiveStatus)로 재확인해 품절/단종/미존재로 "확인된" 코드는 정상 설명 가능한
-    # 결측이므로 빼고, 미확인/available(진짜 데이터갭)만 남긴다. status_type='판매중'만 — 이미 판매중지/삭제된
-    # 건 조치할 필요가 없어 카운트에서 제외(2026-08-20 사용자 확인).
+    # 미매칭 = W코드(오너클랜 소싱)인데 예비상품 카탈로그에 그 코드 자체가 없음(purchase_cost NULL).
+    # W코드 아닌 상품/한글 섞인 코드는 제외. status_type='판매중'만 — 이미 판매중지/삭제된 건 조치할 필요가
+    # 없어 카운트에서 제외. (2026-08-21 재정의 — 오너클랜 라이브 상태로 품절/단종 걸러내던 로직 제거:
+    # 사용자 확인 결과 "카탈로그에 코드 자체가 없는 것"이 정의라 라이브 상태와 무관해야 함. 전체 오너클랜
+    # DB를 다 받으면 이 리스트는 0건이 되어야 하는 게 검증 기준)
     nm_key = f"emp_nomatch:{account_id}:{status}:{search}:{int(bool(focused_only))}"
     no_match_total = cache.get(nm_key)
     if no_match_total is None:
-        no_match_total = _apply_no_match_filter(
-            qs.filter(seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중')
+        no_match_total = (
+            qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
               .exclude(seller_product_code__regex=r'[가-힣]')
         ).count()
         cache.set(nm_key, no_match_total, 120)
-    # 고마진 = 판매가가 구매원가의 1.5배 이상 — 단가오류/미갱신 등 확인 필요 신호.
+    # 고단가 = 판매가 60만원 이상 이거나, 예비상품 마켓가보다 50%+ 비쌈 — 단가오류/미갱신 등 확인 필요 신호.
+    # (2026-08-21 재정의 — 절대금액 기준 추가: 미매칭이라 마켓가를 모르는 고가 상품도 이 필터로 걸리게 함)
     hm_key = f"emp_highmargin:{account_id}:{status}:{search}:{int(bool(focused_only))}"
     high_margin_total = cache.get(hm_key)
     if high_margin_total is None:
-        high_margin_total = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5).count()
+        high_margin_total = qs.filter(
+            Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
+        ).count()
         cache.set(hm_key, high_margin_total, 120)
 
     if needs_check:
-        # 확인필요만 보기 — 역마진 행만, 가장 심한(음수 큰) 순으로 맨 위에.
-        qs = qs.filter(cost_diff__lt=0)
+        # 확인필요만 보기 — 역마진 needs_check_pct%+ 행만, 가장 심한 순으로 맨 위에.
+        qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
     elif no_match:
-        qs = _apply_no_match_filter(
-            qs.filter(seller_product_code__startswith='W', purchase_cost__isnull=True, status_type='판매중')
+        qs = (
+            qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
               .exclude(seller_product_code__regex=r'[가-힣]')
         )
     elif high_margin:
-        qs = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
+        qs = qs.filter(Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5))
 
     # cost_pct = 판매가/마켓가*100 (100=원가와동일, 낮을수록 역마진 심함, 높을수록 고마진 심함).
     # 확인필요/고마진 화면에서 편차 20%+ 만 골라보기용. min_abs_pct 지정 시 |cost_pct-100| >= 임계값만 남김.
@@ -457,6 +525,7 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
     items = list(qs[offset:offset + per_page])
     serialized = [_serialize(p) for p in items]
     _attach_purchase_cost(serialized)
+    _attach_l_status(serialized)
 
     return {
         'items': serialized,
@@ -468,6 +537,33 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
         'per_page': per_page,
         'total_pages': (total + per_page - 1) // per_page if total > 0 else 0,
     }
+
+
+_L_CODE_RE = None
+
+
+def _attach_l_status(serialized, code_field='seller_product_code'):
+    """도매마트 L코드(LCE_SX_/LCE_MX_ 접두) 상품에 조회된 판매중/품절 상태를 주입.
+    페이지당 최대 수십 건이라 매번 재조회해도 부담 없음(전체 16만건 스캔 아님)."""
+    import re
+    global _L_CODE_RE
+    if _L_CODE_RE is None:
+        _L_CODE_RE = re.compile(r'^LCE_(?:SX|MX)_(L\d{7})')
+    from .models import LCodeStatus
+
+    code_map = {}
+    for item in serialized:
+        m = _L_CODE_RE.match(item.get(code_field) or '')
+        if m:
+            code_map[item['id']] = m.group(1)
+    if not code_map:
+        return
+    statuses = dict(LCodeStatus.objects.filter(l_code__in=set(code_map.values())).values_list('l_code', 'status'))
+    for item in serialized:
+        lc = code_map.get(item['id'])
+        if lc:
+            item['l_code'] = lc
+            item['l_status'] = statuses.get(lc)
 
 
 def _attach_purchase_cost(serialized):

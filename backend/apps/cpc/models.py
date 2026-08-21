@@ -645,6 +645,27 @@ class GmarketCostHistory(models.Model):
         ]
 
 
+class GmarketManualCost(models.Model):
+    """지마켓 계정별 수동 비용 입력 — 광고센터 외부(바이럴 등) 비용을 순수익 계산에 반영.
+    GmarketCostHistory는 크롤러가 기간 삭제후 재삽입(멱등)이라 수동행이 지워짐 — 별도 테이블로 분리."""
+    seller_id = models.CharField(max_length=50, db_index=True)   # 계정 login_id
+    use_date = models.DateField(db_index=True)
+    amount = models.IntegerField(default=0)
+    label = models.CharField(max_length=100, blank=True, default='바이럴')
+    memo = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'gmarket_manual_cost'
+        ordering = ['-use_date', '-id']
+        indexes = [
+            models.Index(fields=['seller_id', 'use_date']),
+        ]
+
+    def __str__(self):
+        return f'{self.seller_id} {self.use_date} {self.label} {self.amount:,}원'
+
+
 class GmarketAdGroupPerf(models.Model):
     """지마켓 CPC 광고그룹별 성과 — ESM 광고센터(ad.esmplus.com/cpc/bidmng/bidmanagement)
     #tbGroupAdStateList(일반)/#tbSmartGroupAdStateList(간편) 그리드에서 수집.
@@ -921,3 +942,18 @@ class ProductCodeArchive(models.Model):
         unique_together = ('platform', 'product_no')
         indexes = [models.Index(fields=['platform', 'product_no']),
                    models.Index(fields=['seller_code'])]
+
+
+class LCodeStatus(models.Model):
+    """LCE_SX_/LCE_MX_ 접두 판매자코드에서 추출한 L코드(예: L7645951)의 도매마트(domemart.co.kr)
+    실제 판매상태 캐시. 대량(16만+)이라 한 번에 다 못 돌리고 매번 이어서(체크포인트) 처리한다."""
+    l_code = models.CharField(max_length=20, unique=True)
+    status = models.CharField(max_length=20)   # in_stock / soldout / not_found
+    checked_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'l_code_status'
+        indexes = [models.Index(fields=['status']), models.Index(fields=['checked_at'])]
+
+    def __str__(self):
+        return f'{self.l_code}:{self.status}'

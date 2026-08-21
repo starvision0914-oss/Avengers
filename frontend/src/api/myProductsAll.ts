@@ -29,6 +29,21 @@ export interface MyProductAllResponse {
   per_page: number;
   total_pages: number;
   needs_check_total: number | null;
+  no_match_total: number | null;
+}
+
+export async function exportAllMyProducts(
+  status?: string, search?: string,
+  needsCheck?: boolean, noMatch?: boolean, needsCheckPct?: number,
+): Promise<Blob> {
+  const params: Record<string, string | number> = { export: '1' };
+  if (status) params.status = status;
+  if (search) params.search = search;
+  if (needsCheck) params.needs_check = '1';
+  if (noMatch) params.no_match = '1';
+  if (needsCheckPct != null) params.needs_check_pct = needsCheckPct;
+  const resp = await api.get('/cpc/my-products/', { params, responseType: 'blob' });
+  return resp.data as Blob;
 }
 
 export async function fetchAllMyProducts(
@@ -40,12 +55,16 @@ export async function fetchAllMyProducts(
   order?: 'asc' | 'desc',
   needsCheck?: boolean,
   dedup?: boolean,
+  noMatch?: boolean,
+  needsCheckPct?: number,
 ): Promise<MyProductAllResponse> {
   const { data } = await api.get<MyProductAllResponse>('/cpc/my-products/', {
     params: {
       page, per_page: perPage, status, search, sort, order,
       needs_check: needsCheck ? 1 : undefined,
       dedup: dedup ? 1 : undefined,
+      no_match: noMatch ? 1 : undefined,
+      needs_check_pct: needsCheckPct,
     },
   });
   return data;

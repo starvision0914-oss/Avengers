@@ -4,14 +4,15 @@ import toast from 'react-hot-toast';
 import {
   fetchElevenMyProducts, fetchElevenMyAccounts, syncElevenMyProducts,
   exportElevenMyProducts, triggerIntegratedSync, triggerProductRecrawl, suspendSoldoutProducts,
-  suspendSelectedProducts, suspendAllNoMatchProducts,
+  suspendSelectedProducts, suspendAllNoMatchProducts, downloadWCodes,
+  startLCodeCheck, stopLCodeCheck, fetchLCodeStatus, type LCodeStatusSummary,
   type ElevenAccountSummary,
 } from '../../api/elevenMy';
 import { stopElevenCrawl, stopGmarketCrawl } from '../../api/crawler';
 import { fetchGmarketMyProducts, fetchGmarketMyAccounts, exportGmarketMyProducts, suspendSelectedGmarketProducts, suspendAllNoMatchGmarketProducts } from '../../api/gmarketMy';
 import { getAccounts as getSmartstoreAccounts, getProducts as getSmartstoreProducts, downloadProductExcel as downloadSmartstoreExcel, suspendAllNoMatchProducts as suspendAllNoMatchSmartstoreProducts } from '../../api/smartstore';
 import { fetchLotteonMyAccounts, fetchLotteonMyProducts } from '../../api/lotteonMy';
-import { fetchAllMyProducts, type MyProductAllItem } from '../../api/myProductsAll';
+import { fetchAllMyProducts, exportAllMyProducts, type MyProductAllItem } from '../../api/myProductsAll';
 import api from '../../api/client';
 import { useTheme } from '../../hooks/useTheme';
 import ElevenAccountSummaryCards from './ElevenAccountSummaryCards';
@@ -101,12 +102,11 @@ export default function ElevenMyProductsPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [needsCheck, setNeedsCheck] = useState(false);          // 확인필요(역마진)만 보기
   const [needsCheckTotal, setNeedsCheckTotal] = useState(0);    // 확인필요 건수(배지)
+  const [needsCheckPct, setNeedsCheckPct] = useState(10);       // 확인필요 기준 — 마켓가 대비 몇 % 이상 저가일 때 역마진으로 볼지(기본 10%)
   const [noMatch, setNoMatch] = useState(false);                // 미매칭(오너클랜 W코드 없음)만 보기
   const [noMatchTotal, setNoMatchTotal] = useState(0);
   const [highMargin, setHighMargin] = useState(false);          // 고마진(1.5배 이상)만 보기
   const [highMarginTotal, setHighMarginTotal] = useState(0);
-  const [pctFilterOn, setPctFilterOn] = useState(false);        // 확인필요/고마진에서 판매가/마켓가 편차 20%+ 만 보기
-  const [minAbsPct, setMinAbsPct] = useState(20);
   const [suspendingSelected, setSuspendingSelected] = useState(false);
   const [allAccounts, setAllAccounts] = useState(true);         // 전체 계정 보기(집중관리 외 비집중 포함) — 기본 ON
   const [dedup, setDedup] = useState(false);                    // 지마켓 중복(같은 판매자코드) 제외
@@ -145,12 +145,14 @@ export default function ElevenMyProductsPage() {
     setLoading(true);
     try {
       if (platform === 'all') {
-        const r = await fetchAllMyProducts(page, perPage, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, dedup);
+        const r = await fetchAllMyProducts(page, perPage, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, dedup, noMatch, needsCheckPct);
         setItems(r.items);
         setTotal(r.total);
         setTotalPages(r.total_pages);
+        setNoMatchTotal(r.no_match_total ?? 0);
+        setNeedsCheckTotal(r.needs_check_total ?? 0);
       } else if (platform === 'gmarket') {
-        const r = await fetchGmarketMyProducts(page, perPage, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup, needsCheck, noMatch, highMargin, pctFilterOn && (needsCheck || highMargin) ? minAbsPct : undefined);
+        const r = await fetchGmarketMyProducts(page, perPage, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup, needsCheck, noMatch, highMargin, undefined, needsCheckPct);
         setItems(r.items.map(p => ({
           ...p, platform: 'gmarket', category: p.category_code, is_focused: null,
           status_label: p.status_type,
@@ -165,6 +167,7 @@ export default function ElevenMyProductsPage() {
         const r = await getSmartstoreProducts({
           account_id: accountId, page, per_page: perPage, status: ssStatus, search: search || undefined,
           needs_check: needsCheck ? '1' : undefined, no_match: noMatch ? '1' : undefined, high_margin: highMargin ? '1' : undefined,
+          needs_check_pct: needsCheckPct,
         });
         const ssLoginById = new Map(accounts.map((a: any) => [a.account_id, a.login_id]));
         setItems(r.items.map(p => ({
@@ -190,7 +193,7 @@ export default function ElevenMyProductsPage() {
         setTotal(r.total);
         setTotalPages(r.total_pages);
       } else {
-        const r = await fetchElevenMyProducts(page, perPage, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, pctFilterOn && (needsCheck || highMargin) ? minAbsPct : undefined);
+        const r = await fetchElevenMyProducts(page, perPage, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, undefined, needsCheckPct);
         setItems(r.items.map(p => ({
           ...p, platform: '11st', category: p.category_id, market: null, status_label: p.status_type,
         })) as any);
@@ -205,7 +208,7 @@ export default function ElevenMyProductsPage() {
     } finally {
       setLoading(false);
     }
-  }, [platform, page, perPage, accountId, status, search, sortKey, sortOrder, needsCheck, noMatch, highMargin, allAccounts, dedup, accounts, pctFilterOn, minAbsPct]);
+  }, [platform, page, perPage, accountId, status, search, sortKey, sortOrder, needsCheck, noMatch, highMargin, allAccounts, dedup, accounts, needsCheckPct]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -383,18 +386,46 @@ export default function ElevenMyProductsPage() {
 
   // 미매칭 전체(판매중만) 판매중지 — 선택 없이 현재 필터(계정/검색) 기준 서버가 전체 계산해 처리(11번가/지마켓/스마트스토어)
   const [suspendingAllNoMatch, setSuspendingAllNoMatch] = useState(false);
-  const suspendAllNoMatchAction = async () => {
+  const suspendAllNoMatchAction = async (kind: 'no_match' | 'needs_check' | 'lcode_soldout' = 'no_match') => {
+    const kindLabel = kind === 'needs_check' ? `확인필요(역마진 ${needsCheckPct}%+)` : kind === 'lcode_soldout' ? 'L코드 품절' : '미매칭';
+    const kindTotal = kind === 'needs_check' ? needsCheckTotal : kind === 'lcode_soldout' ? (lCodeStatus?.soldout_target_count ?? 0) : noMatchTotal;
+    const pct = kind === 'needs_check' ? needsCheckPct : undefined;
+    // L코드 품절은 플랫폼 무관(3사 통합) — 어느 탭에 있든 항상 전체쇼핑몰 경로로 처리
+    if (platform === 'all' || kind === 'lcode_soldout') {
+      const countNote = kind === 'lcode_soldout' ? `약 ${fmt(kindTotal)}건` : '정확한 건수는 플랫폼별로 서버에서 처리 시 계산됩니다';
+      const msg = `전체 쇼핑몰(11번가+지마켓+스마트스토어)의 ${kindLabel}(판매중) 상품 전체를 판매중지합니다.\n`
+        + `(${countNote}) 계속할까요?`;
+      if (!window.confirm(msg)) return;
+      setSuspendingAllNoMatch(true);
+      const tid = toast.loading(`전체 쇼핑몰 ${kindLabel} 판매중지 시작 중...`);
+      const results = await Promise.allSettled([
+        suspendAllNoMatchProducts(undefined, search || undefined, kind, pct),
+        suspendAllNoMatchGmarketProducts(undefined, search || undefined, kind, pct),
+        suspendAllNoMatchSmartstoreProducts(undefined, search || undefined, kind, pct),
+      ]);
+      const labels = ['11번가', '지마켓', '스마트스토어'];
+      const lines = results.map((r, i) => {
+        if (r.status === 'rejected') return `${labels[i]}: 실패(${r.reason?.response?.data?.error || r.reason?.message || '오류'})`;
+        const v = r.value;
+        return v.status === 'started' ? `${labels[i]}: ${v.message || '시작됨'}` : `${labels[i]}: ${v.message || v.error || '시작 실패'}`;
+      });
+      const anyOk = results.some(r => r.status === 'fulfilled' && r.value.status === 'started');
+      if (anyOk) toast.success(lines.join('\n'), { id: tid, duration: 10000 });
+      else toast.error(lines.join('\n'), { id: tid, duration: 10000 });
+      setSuspendingAllNoMatch(false);
+      return;
+    }
     const label = platform === 'gmarket' ? '지마켓' : platform === 'smartstore' ? '스마트스토어' : '11번가';
-    const msg = `현재 필터 기준 ${label} 미매칭(판매중) 상품 전체(약 ${fmt(noMatchTotal)}건)를 판매중지합니다. 계속할까요?`;
+    const msg = `현재 필터 기준 ${label} ${kindLabel}(판매중) 상품 전체(약 ${fmt(kindTotal)}건)를 판매중지합니다. 계속할까요?`;
     if (!window.confirm(msg)) return;
     setSuspendingAllNoMatch(true);
-    const tid = toast.loading('미매칭 전체 판매중지 시작 중...');
+    const tid = toast.loading(`${kindLabel} 전체 판매중지 시작 중...`);
     try {
       const r = platform === 'gmarket'
-        ? await suspendAllNoMatchGmarketProducts(accountId, search || undefined)
+        ? await suspendAllNoMatchGmarketProducts(accountId, search || undefined, kind, pct)
         : platform === 'smartstore'
-        ? await suspendAllNoMatchSmartstoreProducts(accountId, search || undefined)
-        : await suspendAllNoMatchProducts(accountId, search || undefined);
+        ? await suspendAllNoMatchSmartstoreProducts(accountId, search || undefined, kind, pct)
+        : await suspendAllNoMatchProducts(accountId, search || undefined, kind, pct);
       if (r.status === 'started') {
         toast.success(r.message || '시작됨', { id: tid, duration: 8000 });
       } else {
@@ -404,6 +435,64 @@ export default function ElevenMyProductsPage() {
       toast.error(`시작 실패: ${e.response?.data?.message || e.response?.data?.error || e.message}`, { id: tid });
     } finally {
       setSuspendingAllNoMatch(false);
+    }
+  };
+
+  // 나의상품(전체 플랫폼) 판매중 W코드 목록 다운로드 — 오너클랜 등에 대량조회 붙여넣기용, 15만개씩 분할
+  const [downloadingWCodes, setDownloadingWCodes] = useState<number | null>(null);
+  const downloadWCodesBatch = async (batch: number) => {
+    setDownloadingWCodes(batch);
+    const tid = toast.loading(`W코드 배치${batch} 추출 중...`);
+    try {
+      const blob = await downloadWCodes(true, batch, 150000);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `w_codes_batch${batch}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`배치${batch} 다운로드 완료`, { id: tid });
+    } catch (e: any) {
+      toast.error(`다운로드 실패: ${e.response?.data?.error || e.message}`, { id: tid });
+    } finally {
+      setDownloadingWCodes(null);
+    }
+  };
+
+  // 도매마트 L코드(LCE_SX_/LCE_MX_ 상품) 판매중/품절 조회 — 16만개+라 백그라운드에서 계속 이어서 처리.
+  const [lCodeStatus, setLCodeStatus] = useState<LCodeStatusSummary | null>(null);
+  const [lCodeBusy, setLCodeBusy] = useState(false);
+  const loadLCodeStatus = useCallback(async () => {
+    try { setLCodeStatus(await fetchLCodeStatus()); } catch { /* noop */ }
+  }, []);
+  useEffect(() => {
+    loadLCodeStatus();
+    const t = setInterval(loadLCodeStatus, 600000);
+    return () => clearInterval(t);
+  }, [loadLCodeStatus]);
+  const handleStartLCodeCheck = async () => {
+    setLCodeBusy(true);
+    try {
+      const r = await startLCodeCheck();
+      toast.success(r.message || '시작됨');
+      await loadLCodeStatus();
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || e.message);
+    } finally {
+      setLCodeBusy(false);
+    }
+  };
+  const handleStopLCodeCheck = async () => {
+    if (!window.confirm('실행 중인 L코드 조회를 중지할까요?')) return;
+    setLCodeBusy(true);
+    try {
+      const r = await stopLCodeCheck();
+      toast.success(r.message || '중지됨');
+      await loadLCodeStatus();
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || e.message);
+    } finally {
+      setLCodeBusy(false);
     }
   };
 
@@ -520,10 +609,10 @@ export default function ElevenMyProductsPage() {
       let fetched: MyProductAllItem[];
       let respTotal: number;
       if (platform === 'all') {
-        const resp = await fetchAllMyProducts(1, MAX_SELECT, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, dedup);
+        const resp = await fetchAllMyProducts(1, MAX_SELECT, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, dedup, noMatch, needsCheckPct);
         fetched = resp.items; respTotal = resp.total;
       } else if (platform === 'gmarket') {
-        const resp = await fetchGmarketMyProducts(1, MAX_SELECT, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup, needsCheck, noMatch, highMargin, pctFilterOn && (needsCheck || highMargin) ? minAbsPct : undefined);
+        const resp = await fetchGmarketMyProducts(1, MAX_SELECT, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup, needsCheck, noMatch, highMargin, undefined, needsCheckPct);
         fetched = resp.items.map(p => ({ ...p, platform: 'gmarket' as const, category: p.category_code, is_focused: null, status_label: p.status_type })) as any;
         respTotal = resp.total;
       } else if (platform === 'smartstore') {
@@ -531,6 +620,7 @@ export default function ElevenMyProductsPage() {
         const resp = await getSmartstoreProducts({
           account_id: accountId, page: 1, per_page: MAX_SELECT, status: ssStatus, search: search || undefined,
           needs_check: needsCheck ? '1' : undefined, no_match: noMatch ? '1' : undefined, high_margin: highMargin ? '1' : undefined,
+          needs_check_pct: needsCheckPct,
         });
         const ssLoginById = new Map(accounts.map((a: any) => [a.account_id, a.login_id]));
         fetched = resp.items.map(p => ({
@@ -548,7 +638,7 @@ export default function ElevenMyProductsPage() {
         fetched = resp.items.map(p => ({ ...p, platform: 'lotteon' as const, is_focused: null, market: null, purchase_cost: null, cost_diff: null })) as any;
         respTotal = resp.total;
       } else {
-        const resp = await fetchElevenMyProducts(1, MAX_SELECT, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, pctFilterOn && (needsCheck || highMargin) ? minAbsPct : undefined);
+        const resp = await fetchElevenMyProducts(1, MAX_SELECT, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, undefined, needsCheckPct);
         fetched = resp.items.map(p => ({ ...p, platform: '11st' as const, category: p.category_id, market: null, status_label: p.status_type })) as any;
         respTotal = resp.total;
       }
@@ -600,10 +690,21 @@ export default function ElevenMyProductsPage() {
   };
   // 현재 필터(계정/상태/검색)에 맞는 '전체' 상품을 CSV로 다운로드 — 선택 불필요 (플랫폼 단일 선택 시에만 가능)
   const downloadAllExcel = async () => {
-    if (downloading || platform === 'all' || platform === 'lotteon') return;
+    if (downloading || platform === 'lotteon') return;
     setDownloading(true);
     const tid = toast.loading(`전체 상품 다운로드 중... (${fmt(total)}건)`);
     try {
+      if (platform === 'all') {
+        const blob = await exportAllMyProducts(status || undefined, search || undefined, needsCheck, noMatch, needsCheckPct);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `나의상품_전체쇼핑몰_${new Date().toLocaleDateString('sv')}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        toast.success(`전체 ${fmt(total)}건 엑셀(CSV) 다운로드`, { id: tid });
+        return;
+      }
       if (platform === 'smartstore') {
         const ssStatus = status ? SS_STATUS_REVERSE[status] : undefined;
         await downloadSmartstoreExcel({
@@ -614,8 +715,8 @@ export default function ElevenMyProductsPage() {
         return;
       }
       const blob = platform === 'gmarket'
-        ? await exportGmarketMyProducts(accountId, undefined, status || undefined, search || undefined, dedup, needsCheck, noMatch, highMargin)
-        : await exportElevenMyProducts(accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, !allAccounts);
+        ? await exportGmarketMyProducts(accountId, undefined, status || undefined, search || undefined, dedup, needsCheck, noMatch, highMargin, needsCheckPct)
+        : await exportElevenMyProducts(accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, !allAccounts, needsCheckPct);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -784,24 +885,42 @@ export default function ElevenMyProductsPage() {
             </label>
           )}
 
-          {(platform === '11st' || platform === 'gmarket' || platform === 'all') && (
+          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore' || platform === 'all') && (
             <button
               onClick={() => { setNeedsCheck(v => !v); setNoMatch(false); setHighMargin(false); setPage(1); }}
-              title="구매원가가 판매가보다 높은(역마진) 상품 — 11번가·지마켓·스마트스토어 해당. 단위 불일치/원가 오류 등 확인 필요."
+              title="판매가가 예비상품 마켓가보다 아래 %+ 낮은(역마진) 상품 — 11번가·지마켓·스마트스토어 해당."
               className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[12px] font-semibold ${
                 needsCheck
                   ? 'bg-red-600 text-white border-red-600'
                   : `${inputBg} ${needsCheckTotal > 0 ? 'text-red-500 border-red-400' : ''}`
               }`}
             >
-              ⚠ 확인필요{(platform === '11st' || platform === 'gmarket' || platform === 'smartstore') && needsCheckTotal > 0 ? ` (${fmt(needsCheckTotal)})` : ''}
+              ⚠ 확인필요{needsCheckTotal > 0 ? ` (${fmt(needsCheckTotal)})` : ''}
             </button>
           )}
 
-          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore') && (
+          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore' || platform === 'all') && needsCheck && (
+            <label
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[12px] font-semibold ${inputBg}`}
+              title="마켓가 대비 몇 % 이상 싸게 팔면 확인필요(역마진)로 볼지 기준"
+            >
+              마켓가보다
+              <input
+                type="number"
+                min={1}
+                max={99}
+                value={needsCheckPct}
+                onChange={e => { setNeedsCheckPct(Math.min(Math.max(Number(e.target.value) || 1, 1), 99)); setPage(1); }}
+                className={`w-14 px-1 py-0.5 rounded border text-[12px] ${dark ? 'bg-[#0f1117] border-[#2a2b35] text-white' : 'bg-white border-gray-300 text-gray-900'}`}
+              />
+              % 이상 저가
+            </label>
+          )}
+
+          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore' || platform === 'all') && (
             <button
               onClick={() => { setNoMatch(v => !v); setNeedsCheck(false); setHighMargin(false); setPage(1); }}
-              title="판매자코드는 있는데 오너클랜 W코드 카탈로그에서 매칭되는 상품을 찾지 못함 — 품절/단종 후보"
+              title="나의상품에는 W코드가 있는데 예비상품(오너클랜) 카탈로그에는 그 코드가 없는 상품"
               className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[12px] font-semibold ${
                 noMatch
                   ? 'bg-orange-600 text-white border-orange-600'
@@ -826,32 +945,48 @@ export default function ElevenMyProductsPage() {
             </button>
           )}
 
-          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore') && (needsCheck || highMargin) && (
-            <label
-              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[12px] font-semibold cursor-pointer ${pctFilterOn ? 'bg-indigo-600 border-indigo-600 text-white' : inputBg}`}
-              title="판매가/마켓가 편차가 지정한 % 이상인 상품만 표시"
-            >
-              <input type="checkbox" checked={pctFilterOn} onChange={e => { setPctFilterOn(e.target.checked); setPage(1); }} />
-              편차
-              <input
-                type="number"
-                value={minAbsPct}
-                onChange={e => { setMinAbsPct(Number(e.target.value) || 0); setPage(1); }}
-                onClick={e => e.stopPropagation()}
-                className={`w-12 px-1 py-0.5 rounded border text-[12px] ${dark ? 'bg-[#0f1117] border-[#2a2b35] text-white' : 'bg-white border-gray-300 text-gray-900'}`}
-              />
-              % 이상
-            </label>
-          )}
 
           {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore') && noMatch && noMatchTotal > 0 && (
             <button
-              onClick={suspendAllNoMatchAction}
+              onClick={() => suspendAllNoMatchAction('no_match')}
               disabled={suspendingAllNoMatch}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
               title="선택 없이, 현재 필터의 미매칭(판매중) 상품 전체를 서버에서 한 번에 판매중지"
             >
               🛑 미매칭 전체 판매중지 (약 {fmt(noMatchTotal)})
+            </button>
+          )}
+
+          {platform === 'all' && noMatch && (
+            <button
+              onClick={() => suspendAllNoMatchAction('no_match')}
+              disabled={suspendingAllNoMatch}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
+              title="선택 없이, 11번가+지마켓+스마트스토어 미매칭(판매중) 상품 전체를 각 플랫폼 서버에서 한 번에 판매중지"
+            >
+              🛑 전체쇼핑몰 미매칭 판매중지 (약 {fmt(noMatchTotal)})
+            </button>
+          )}
+
+          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore') && needsCheck && needsCheckTotal > 0 && (
+            <button
+              onClick={() => suspendAllNoMatchAction('needs_check')}
+              disabled={suspendingAllNoMatch}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
+              title="선택 없이, 현재 필터의 확인필요(마켓가 대비 10%+ 저가, 판매중) 상품 전체를 서버에서 한 번에 판매중지"
+            >
+              🛑 확인필요 전체 판매중지 (약 {fmt(needsCheckTotal)})
+            </button>
+          )}
+
+          {platform === 'all' && needsCheck && (
+            <button
+              onClick={() => suspendAllNoMatchAction('needs_check')}
+              disabled={suspendingAllNoMatch}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
+              title="선택 없이, 11번가+지마켓+스마트스토어 확인필요(역마진, 판매중) 상품 전체를 각 플랫폼 서버에서 한 번에 판매중지"
+            >
+              🛑 전체쇼핑몰 확인필요 판매중지 (약 {fmt(needsCheckTotal)})
             </button>
           )}
 
@@ -917,6 +1052,52 @@ export default function ElevenMyProductsPage() {
             {selecting ? '선택 중…' : `최대 ${fmt(MAX_SELECT)}개 선택`}
           </button>
 
+          <button
+            onClick={() => downloadWCodesBatch(1)}
+            disabled={downloadingWCodes !== null}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-40"
+            title="나의상품(전체 플랫폼) 판매중 W코드 중 예비상품에 없는 것만, 최신 데이터로 새로 추출해서 앞 15만개 다운로드(오너클랜 대량조회 붙여넣기용)"
+          >
+            {downloadingWCodes === 1 ? '추출 중…' : 'W코드 배치1(15만)'}
+          </button>
+          <button
+            onClick={() => downloadWCodesBatch(2)}
+            disabled={downloadingWCodes !== null}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-40"
+            title="같은 목록의 나머지(15만개 이후)"
+          >
+            {downloadingWCodes === 2 ? '추출 중…' : 'W코드 배치2(나머지)'}
+          </button>
+
+          <button
+            onClick={lCodeStatus?.running ? handleStopLCodeCheck : handleStartLCodeCheck}
+            disabled={lCodeBusy}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white disabled:opacity-40 ${
+              lCodeStatus?.running ? 'bg-rose-700 hover:bg-rose-800' : 'bg-amber-600 hover:bg-amber-700'
+            }`}
+            title="도매마트(domemart.co.kr)에서 L코드(LCE_SX_/LCE_MX_ 상품) 판매중/품절 상태를 하나씩 조회. 16만개+라 백그라운드로 계속 이어서 처리(눌러도 이미 확인한 건 건너뜀)."
+          >
+            {lCodeStatus?.running
+              ? `⛔ L코드 조회 중지 (${fmt(lCodeStatus.checked)}/${fmt(lCodeStatus.total)})`
+              : `L코드 확인 시작${lCodeStatus ? ` (${fmt(lCodeStatus.checked)}/${fmt(lCodeStatus.total)})` : ''}`}
+          </button>
+          {lCodeStatus && lCodeStatus.checked > 0 && (
+            <span className={`text-[11px] ${text3}`}>
+              판매중 {fmt(lCodeStatus.in_stock)} · 품절 {fmt(lCodeStatus.soldout)} · 미확인코드 {fmt(lCodeStatus.not_found)}
+            </span>
+          )}
+
+          {lCodeStatus && lCodeStatus.soldout_target_count > 0 && (
+            <button
+              onClick={() => suspendAllNoMatchAction('lcode_soldout')}
+              disabled={suspendingAllNoMatch}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
+              title={`도매마트에서 품절로 확인된 L코드(LCE_SX_/LCE_MX_) 상품을 11번가·지마켓·스마트스토어에서 한 번에 판매중지(지금까지 확인된 것만 대상, 계속 늘어남). 11번가 ${fmt(lCodeStatus.soldout_target_by_platform?.eleven ?? 0)} · 지마켓 ${fmt(lCodeStatus.soldout_target_by_platform?.gmarket ?? 0)} · 스마트스토어 ${fmt(lCodeStatus.soldout_target_by_platform?.smartstore ?? 0)}`}
+            >
+              🛑 L코드 품절 판매중지 (약 {fmt(lCodeStatus.soldout_target_count)})
+            </button>
+          )}
+
           {selProd.size > 0 && (
             <>
               <button
@@ -963,9 +1144,9 @@ export default function ElevenMyProductsPage() {
 
           <button
             onClick={downloadAllExcel}
-            disabled={downloading || platform === 'all' || platform === 'lotteon'}
+            disabled={downloading || platform === 'lotteon'}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-teal-600 hover:bg-teal-700 text-white disabled:opacity-40"
-            title={platform === 'all' ? '전체 다운로드는 플랫폼을 선택한 뒤 가능합니다' : platform === 'lotteon' ? '롯데ON은 전체 다운로드 미지원 — "최대 N개 선택" 후 선택 다운로드를 이용하세요' : '현재 필터(계정/상태/검색)에 맞는 전체 상품을 CSV로 다운로드 (선택 불필요)'}
+            title={platform === 'all' ? '11번가+지마켓+스마트스토어 통합(쿠팡/롯데온 제외) 현재 필터 전체를 CSV로 다운로드' : platform === 'lotteon' ? '롯데ON은 전체 다운로드 미지원 — "최대 N개 선택" 후 선택 다운로드를 이용하세요' : '현재 필터(계정/상태/검색)에 맞는 전체 상품을 CSV로 다운로드 (선택 불필요)'}
           >
             <Download size={13} /> {downloading ? '다운로드 중…' : `전체 엑셀 다운로드 (${fmt(total)})`}
           </button>
@@ -1178,7 +1359,21 @@ export default function ElevenMyProductsPage() {
                           {p.status_label || p.status_type || '-'}
                         </span>
                       </td>
-                      <td className={`px-3 py-1.5 font-mono text-[10px] ${text3}`}>{p.seller_product_code || '-'}</td>
+                      <td className={`px-3 py-1.5 font-mono text-[10px] ${text3}`}>
+                        {p.seller_product_code || '-'}
+                        {(p as any).l_status && (
+                          <span
+                            className={`ml-1.5 px-1 py-0.5 rounded text-[9px] font-bold ${
+                              (p as any).l_status === 'in_stock' ? 'bg-emerald-500/20 text-emerald-500'
+                              : (p as any).l_status === 'soldout' ? 'bg-red-500/20 text-red-500'
+                              : 'bg-gray-500/20 text-gray-400'
+                            }`}
+                            title="도매마트 조회 결과"
+                          >
+                            {(p as any).l_status === 'in_stock' ? '판매중' : (p as any).l_status === 'soldout' ? '품절' : '미확인'}
+                          </span>
+                        )}
+                      </td>
                       <td className={`px-3 py-1.5 font-mono text-[10px] ${text3}`}>{p.category || '-'}</td>
                       <td className={`px-3 py-1.5 text-right text-[10px] ${text3}`}>
                         {p.synced_at ? new Date(p.synced_at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}

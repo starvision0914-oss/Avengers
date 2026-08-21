@@ -163,6 +163,11 @@ export async function fetchUploadTask(taskId: number): Promise<UploadTaskStatus>
   return data;
 }
 
+export async function fetchRunningUploadTask(): Promise<UploadTaskStatus | null> {
+  const { data } = await api.get<UploadTaskStatus & { task_id: number | null }>(`${base}/upload/`, { params: WS() });
+  return data.task_id != null ? data : null;
+}
+
 export async function uploadCsv(file: File, onProgress?: (pct: number) => void): Promise<{ updated: number }> {
   const form = new FormData();
   form.append('file', file);

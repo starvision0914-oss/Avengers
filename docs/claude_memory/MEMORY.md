@@ -118,3 +118,4 @@
 - [부동산 제목 스타일 확정](feedback_realestate_title_style.md) — 검색어 일치형 유지(클릭유도형 제안 금지), 클릭률보다 구매의도 높은 트래픽·CPC 우선
 - [WebSearch 막혀도 트렌드 RSS는 가능](feedback_trends_rss_bypass.md) — curl로 구글트렌드 RSS 직접 조회하면 세션한도 무관, 뉴스스니펫 포함. 스니펫에 없는 사실은 창작 금지
 - [11번가 전략설정 캠페인 조회 레이스](project_11st_ad_strategy_campaign_race.md) — 캠페인 생성 직후 조회하면 11번가서버 반영지연으로 0개. list_campaigns 재시도(8초×2) 추가·pm2 재시작(2026-08-12)
+- [지마켓 상품별광고비 락충돌 전체스킵](project_gmarket_ad_report_lock_collision.md) — 08:01 간편ON과 08:20 상품별광고비 크론 겹침→락대기 30분초과시 25계정 전부 "실패" 표시(개별실패 아님). 조치 보류(지켜보기), 재크롤 버튼으로 해결

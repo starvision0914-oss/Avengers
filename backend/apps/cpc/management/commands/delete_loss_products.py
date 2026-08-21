@@ -27,12 +27,18 @@ class Command(BaseCommand):
         parser.add_argument('--targets-json', dest='targets_json', default=None,
                             help='다계정 일괄 지정(나의상품 선택). {"eid1":["pno",...], "eid2":[...]} JSON. '
                                  '한 프로세스가 계정을 순차 처리 + 락 1회 획득 → 계정간 동시실행 락충돌 방지.')
+        parser.add_argument('--targets-file', dest='targets_file', default=None,
+                            help='--targets-json과 동일 내용을 파일로 전달(대량일 때 OS 인자길이 한도 회피용).')
 
     def handle(self, *args, **o):
         from apps.cpc.views import _eleven_product_rows, _active_eids
         from apps.cpc.models import protected_login_ids
         mode = 'real' if o['real'] else o['mode']
         protected = protected_login_ids('11st')
+
+        if o.get('targets_file') and not o.get('targets_json'):
+            with open(o['targets_file'], 'r', encoding='utf-8') as f:
+                o['targets_json'] = f.read()
 
         if o.get('stop_only'):
             from crawlers.eleven_suspend_only import suspend_only

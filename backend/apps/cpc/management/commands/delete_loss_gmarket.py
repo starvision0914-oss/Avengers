@@ -16,6 +16,8 @@ class Command(BaseCommand):
         parser.add_argument('--targets-json', dest='targets_json', default=None,
                             help='다계정 일괄 지정(나의상품 선택). {"eid1":["pno",...], "eid2":[...]} JSON. '
                                  'run_delete가 계정별로 순차 처리 + 락 1회 획득(11번가 delete_loss_products와 동일 패턴).')
+        parser.add_argument('--targets-file', dest='targets_file', default=None,
+                            help='--targets-json과 동일 내용을 파일로 전달(대량일 때 OS 인자길이 한도 회피용).')
 
     def handle(self, *args, **o):
         from apps.cpc.views import _gmkt_product_rows
@@ -24,6 +26,10 @@ class Command(BaseCommand):
 
         class _Req:
             def __init__(self, p): self.query_params = p
+
+        if o.get('targets_file') and not o.get('targets_json'):
+            with open(o['targets_file'], 'r', encoding='utf-8') as f:
+                o['targets_json'] = f.read()
 
         mode = 'stop_only' if o.get('stop_only') else ('real' if o['real'] else 'validate')
         protected = protected_login_ids('gmarket')

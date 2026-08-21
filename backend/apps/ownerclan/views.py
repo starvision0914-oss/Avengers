@@ -1,4 +1,5 @@
 import io
+import os
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -16,6 +17,18 @@ class _WorkspaceMixin:
         super().initial(request, *args, **kwargs)
 
 
+def _pid_alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return False
+
+
 class OwnerClanProductUploadView(_WorkspaceMixin, APIView):
     permission_classes = [IsAuthenticated]
 
@@ -28,10 +41,19 @@ class OwnerClanProductUploadView(_WorkspaceMixin, APIView):
             task_type='ownerclan_upload', status__in=('pending', 'running')
         ).first()
         if running:
-            return Response({
-                'error': '이미 업로드 처리 중입니다.',
-                'task_id': running.id,
-            }, status=409)
+            # 워커 프로세스가 죽었는데 DB에는 running으로 남는 좀비 케이스 자동 해제
+            # (2026-08-21 task 43 — pid 사망 확인했지만 status는 running으로 남아 새 업로드를 영구 차단했던 사고 재발방지)
+            if not _pid_alive(running.pid):
+                running.status = 'error'
+                rd = running.result_data or {}
+                rd['error'] = f'stuck(running) → 좀비 자동감지·해제 (pid {running.pid} 사망)'
+                running.result_data = rd
+                running.save(update_fields=['status', 'result_data'])
+            else:
+                return Response({
+                    'error': '이미 업로드 처리 중입니다.',
+                    'task_id': running.id,
+                }, status=409)
 
         try:
             result = services.upload_excel_async(f, workspace=request.query_params.get('workspace') or 'reserve')
@@ -42,7 +64,24 @@ class OwnerClanProductUploadView(_WorkspaceMixin, APIView):
     def get(self, request):
         task_id = request.query_params.get('task_id')
         if not task_id:
-            return Response({'error': 'task_id required'}, status=400)
+            # task_id 없이 조회 시 — 현재 실행 중인 업로드가 있으면 알려줌(페이지 진입 즉시 진행률 표시용)
+            running = OwnerclanTask.objects.filter(
+                task_type='ownerclan_upload', status__in=('pending', 'running')
+            ).order_by('-id').first()
+            if running and not _pid_alive(running.pid):
+                running.status = 'error'
+                rd = running.result_data or {}
+                rd['error'] = f'stuck(running) → 좀비 자동감지·해제 (pid {running.pid} 사망)'
+                running.result_data = rd
+                running.save(update_fields=['status', 'result_data'])
+                running = None
+            if not running:
+                return Response({'task_id': None})
+            return Response({
+                'task_id': running.id,
+                'status': running.status,
+                'result_data': running.result_data,
+            })
         try:
             task = OwnerclanTask.objects.get(pk=int(task_id))
         except OwnerclanTask.DoesNotExist:

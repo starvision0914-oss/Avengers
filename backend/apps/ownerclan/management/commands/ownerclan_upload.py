@@ -40,13 +40,17 @@ class Command(BaseCommand):
             result = _process_upload(file_path, task)
             task.result_data = result
             task.status = 'done'
-            # 예비상품 적재 직후 11번가/지마켓 나의상품 '구매원가/차이' 정렬값 자동 갱신 (업로드된 코드만, 빠름)
+            # 예비상품 적재 직후 11번가/지마켓/스마트스토어 나의상품 '구매원가/차이' 정렬값 자동 갱신 (업로드된 코드만, 빠름)
             try:
-                from apps.cpc.eleven_my_product_service import refresh_purchase_costs, refresh_gmarket_purchase_costs
+                from apps.cpc.eleven_my_product_service import (
+                    refresh_purchase_costs, refresh_gmarket_purchase_costs, refresh_smartstore_purchase_costs,
+                )
                 n = refresh_purchase_costs(codes=result.get('codes'))
                 result['purchase_cost_refreshed'] = n
                 gn = refresh_gmarket_purchase_costs(codes=result.get('codes'))
                 result['gmarket_purchase_cost_refreshed'] = gn
+                sn = refresh_smartstore_purchase_costs(codes=result.get('codes'))
+                result['smartstore_purchase_cost_refreshed'] = sn
             except Exception:
                 result['purchase_cost_refreshed'] = f'skip: {traceback.format_exc().splitlines()[-1]}'
         except Exception:

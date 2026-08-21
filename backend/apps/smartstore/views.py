@@ -249,7 +249,6 @@ class ProductListView(APIView):
     def get(self, request):
         from django.core.cache import cache
         from django.db.models import F
-        from apps.cpc.eleven_my_product_service import _apply_no_match_filter
 
         account_id = request.query_params.get('account_id', '0')
         page = int(request.query_params.get('page', 1))
@@ -260,6 +259,9 @@ class ProductListView(APIView):
         needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
         no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
         high_margin = request.query_params.get('high_margin') in ('1', 'true', 'True')
+        needs_check_pct_raw = request.query_params.get('needs_check_pct')
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 10
+        needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
 
         qs = SmartStoreProduct.objects.select_related('account')
         if account_id and account_id != '0':
@@ -271,37 +273,39 @@ class ProductListView(APIView):
         if ownerclan_soldout is not None:
             qs = qs.filter(ownerclan_soldout=ownerclan_soldout == '1')
 
-        # 확인필요/미매칭/고마진 — 11번가/지마켓과 동일 패턴(W코드+구매원가 매칭, status_type=SALE만).
-        nc_key = f"ss_needs:{account_id}:{status}:{search}"
+        # 확인필요/미매칭/고단가 — 11번가/지마켓과 동일 패턴(W코드+구매원가 매칭, status_type=SALE만).
+        # (2026-08-21 재정의: 확인필요=마켓가 대비 10%+ 낮음, 미매칭=카탈로그에 코드 자체가 없음(라이브상태 무관),
+        #  고단가=60만원 이상 또는 마켓가 대비 50%+ 비쌈)
+        nc_key = f"ss_needs:{account_id}:{status}:{search}:{needs_check_pct}"
         needs_total = cache.get(nc_key)
         if needs_total is None:
-            needs_total = qs.filter(cost_diff__lt=0).count()
+            needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult).count()
             cache.set(nc_key, needs_total, 120)
         nm_key = f"ss_nomatch:{account_id}:{status}:{search}"
         no_match_total = cache.get(nm_key)
         if no_match_total is None:
-            no_match_total = _apply_no_match_filter(
-                qs.filter(seller_management_code__startswith='W', purchase_cost__isnull=True, status_type='SALE')
-                  .exclude(seller_management_code__regex=r'[가-힣]'),
-                code_field='seller_management_code',
+            no_match_total = (
+                qs.filter(seller_management_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='SALE')
+                  .exclude(seller_management_code__regex=r'[가-힣]')
             ).count()
             cache.set(nm_key, no_match_total, 120)
         hm_key = f"ss_highmargin:{account_id}:{status}:{search}"
         high_margin_total = cache.get(hm_key)
         if high_margin_total is None:
-            high_margin_total = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5).count()
+            high_margin_total = qs.filter(
+                Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
+            ).count()
             cache.set(hm_key, high_margin_total, 120)
 
         if needs_check:
-            qs = qs.filter(cost_diff__lt=0)
+            qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
         elif no_match:
-            qs = _apply_no_match_filter(
-                qs.filter(seller_management_code__startswith='W', purchase_cost__isnull=True, status_type='SALE')
-                  .exclude(seller_management_code__regex=r'[가-힣]'),
-                code_field='seller_management_code',
+            qs = (
+                qs.filter(seller_management_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='SALE')
+                  .exclude(seller_management_code__regex=r'[가-힣]')
             )
         elif high_margin:
-            qs = qs.filter(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
+            qs = qs.filter(Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5))
 
         if needs_check and not no_match and not high_margin:
             total = needs_total
@@ -335,6 +339,8 @@ class ProductListView(APIView):
                 'cost_diff': p.cost_diff,
                 'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else None,
             })
+        from apps.cpc.eleven_my_product_service import _attach_l_status
+        _attach_l_status(data, code_field='seller_management_code')
 
         return Response({
             'items': data,
@@ -478,30 +484,50 @@ class SuspendPreviewView(APIView):
 
 
 class SuspendAllNoMatchView(APIView):
-    """미매칭 전체(SALE만) 판매중지 — 지마켓/11번가 SuspendAllNoMatchView와 동일 개념.
-    선택 없이 서버가 현재 no_match 조건(W코드+구매원가매칭실패+SALE, 라이브상태 확인반영)에
-    해당하는 상품 전체를 계산해 처리. 셀레니움이 아니라 네이버 API 직접호출이라 백그라운드
-    스레드로 실행(계정별 순차, 락 불필요 — 지마켓/11번가 크롤과 독립적으로 동시 실행 가능)."""
+    """미매칭/확인필요(역마진) 전체(SALE만) 판매중지 — 지마켓/11번가 SuspendAllNoMatchView와 동일 개념.
+    선택 없이 서버가 현재 조건(kind='no_match': W코드+카탈로그에 코드자체 없음 / kind='needs_check': 마켓가
+    대비 10%+ 저가)에 해당하는 SALE 상품 전체를 계산해 처리. 셀레니움이 아니라 네이버 API 직접호출이라
+    백그라운드 스레드로 실행(계정별 순차, 락 불필요 — 지마켓/11번가 크롤과 독립적으로 동시 실행 가능)."""
     LOG_FILE = '/tmp/suspend_smartstore_nomatch.log'
 
     def post(self, request):
-        from apps.cpc.eleven_my_product_service import _apply_no_match_filter
         import threading, time
+        from django.db.models import F
 
+        kind = request.data.get('kind') or 'no_match'
         account_id = request.data.get('account_id')
         search = request.data.get('search')
-        qs = SmartStoreProduct.objects.select_related('account').filter(
-            seller_management_code__startswith='W', purchase_cost__isnull=True, status_type='SALE',
-        ).exclude(seller_management_code__regex=r'[가-힣]')
-        qs = _apply_no_match_filter(qs, code_field='seller_management_code')
-        if account_id:
-            qs = qs.filter(account_id=int(account_id))
-        if search:
-            qs = qs.filter(Q(name__icontains=search) | Q(seller_management_code__icontains=search))
+        pct_raw = request.data.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 10
+        mult = (100 - min(max(pct, 1), 99)) / 100.0
 
-        targets = list(qs)
+        if kind == 'lcode_soldout':
+            from apps.cpc.eleven_my_product_service import get_lcode_soldout_rows
+            targets = get_lcode_soldout_rows(
+                SmartStoreProduct, 'seller_management_code', 'product_no', 'status_type', 'SALE',
+                account_id=account_id, search=search, search_fields=['name', 'seller_management_code'],
+                return_objects=True,
+            )
+            label = 'L코드 품절'
+        else:
+            if kind == 'needs_check':
+                qs = SmartStoreProduct.objects.select_related('account').filter(
+                    purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * mult, status_type='SALE',
+                )
+                label = f'확인필요(역마진 {pct}%+)'
+            else:
+                qs = SmartStoreProduct.objects.select_related('account').filter(
+                    seller_management_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='SALE',
+                ).exclude(seller_management_code__regex=r'[가-힣]')
+                label = '미매칭'
+            if account_id:
+                qs = qs.filter(account_id=int(account_id))
+            if search:
+                qs = qs.filter(Q(name__icontains=search) | Q(seller_management_code__icontains=search))
+            targets = list(qs)
+
         if not targets:
-            return Response({'status': 'blocked', 'message': '⛔ 미매칭(SALE) 대상이 없습니다.'}, status=400)
+            return Response({'status': 'blocked', 'message': f'⛔ {label}(SALE) 대상이 없습니다.'}, status=400)
 
         store_groups = {}
         for t in targets:
@@ -510,7 +536,7 @@ class SuspendAllNoMatchView(APIView):
         def _run():
             from .services.naver_api import _get_access_token, suspend_product_api
             with open(self.LOG_FILE, 'a') as log:
-                log.write(f'\n{time.strftime("%F %T")} 미매칭 전체 판매중지 시작 — {len(targets)}건 / {len(store_groups)}스토어\n')
+                log.write(f'\n{time.strftime("%F %T")} {label} 전체 판매중지 시작 — {len(targets)}건 / {len(store_groups)}스토어\n')
                 success = fail = 0
                 for sid, group in store_groups.items():
                     acc = group['account']
@@ -542,7 +568,7 @@ class SuspendAllNoMatchView(APIView):
         for t in targets:
             name = t.account.display_name or t.account.store_name
             by_store[name] = by_store.get(name, 0) + 1
-        msg = (f'🛑 미매칭 전체 판매중지 시작 — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
+        msg = (f'🛑 {label} 전체 판매중지 시작 — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
                f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
         return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
 

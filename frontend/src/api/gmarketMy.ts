@@ -47,7 +47,7 @@ export async function fetchGmarketMyProducts(
   page = 1, perPage = 50, accountId?: number, market?: string,
   status?: string, search?: string, sort?: string, order: 'asc' | 'desc' = 'asc',
   dedup = false, needsCheck = false, noMatch = false, highMargin = false,
-  minAbsPct?: number,
+  minAbsPct?: number, needsCheckPct?: number,
 ): Promise<GmarketMyListResponse> {
   const params: Record<string, string | number> = { page, per_page: perPage };
   if (accountId) params.account_id = accountId;
@@ -60,6 +60,7 @@ export async function fetchGmarketMyProducts(
   if (noMatch) params.no_match = 1;
   if (highMargin) params.high_margin = 1;
   if (minAbsPct != null) params.min_abs_pct = minAbsPct;
+  if (needsCheckPct != null) params.needs_check_pct = needsCheckPct;
   const { data } = await api.get<GmarketMyListResponse>(`${base}/products/`, { params });
   return data;
 }
@@ -71,17 +72,19 @@ export async function suspendSelectedGmarketProducts(ids: number[]): Promise<{ s
 }
 
 /** 미매칭 전체(판매중만) 판매중지 — 선택 없이 서버가 현재 필터 기준 전체를 계산해 처리(지마켓). */
-export async function suspendAllNoMatchGmarketProducts(accountId?: number, search?: string): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+export async function suspendAllNoMatchGmarketProducts(accountId?: number, search?: string, kind?: 'no_match' | 'needs_check' | 'lcode_soldout', pct?: number): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
   const body: Record<string, unknown> = {};
   if (accountId) body.account_id = accountId;
   if (search) body.search = search;
+  if (kind) body.kind = kind;
+  if (pct != null) body.pct = pct;
   const { data } = await api.post('/cpc/gmarket-my/suspend-all-no-match/', body);
   return data;
 }
 
 export async function exportGmarketMyProducts(
   accountId?: number, market?: string, status?: string, search?: string, dedup = false,
-  needsCheck?: boolean, noMatch?: boolean, highMargin?: boolean,
+  needsCheck?: boolean, noMatch?: boolean, highMargin?: boolean, needsCheckPct?: number,
 ): Promise<Blob> {
   const params: Record<string, string | number> = { export: 1 };
   if (accountId) params.account_id = accountId;
@@ -92,6 +95,7 @@ export async function exportGmarketMyProducts(
   if (needsCheck) params.needs_check = 1;
   if (noMatch) params.no_match = 1;
   if (highMargin) params.high_margin = 1;
+  if (needsCheckPct != null) params.needs_check_pct = needsCheckPct;
   const resp = await api.get(`${base}/products/`, { params, responseType: 'blob' });
   return resp.data as Blob;
 }

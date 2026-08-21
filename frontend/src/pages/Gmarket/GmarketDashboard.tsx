@@ -340,13 +340,83 @@ const TYPE_COLOR: Record<string, { bg: string; text: string }> = {
   서버비용:  { bg: '#f3e5f5', text: '#7b1fa2' },
 };
 
+function ManualCostSection({ seller, onChanged }: { seller: string; onChanged: () => void }) {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [date, setDate] = useState(todayStrKST());
+  const [amount, setAmount] = useState('');
+  const [label, setLabel] = useState('바이럴');
+  const [saving, setSaving] = useState(false);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    api.get('/cpc/gmarket/manual-cost/', { params: { seller_id: seller } })
+      .then(r => setItems(r.data.items || [])).catch(() => setItems([])).finally(() => setLoading(false));
+  }, [seller]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const add = async () => {
+    const amt = Number(amount);
+    if (!date || !amt) { alert('날짜와 금액을 입력하세요.'); return; }
+    setSaving(true);
+    try {
+      await api.post('/cpc/gmarket/manual-cost/', { seller_id: seller, use_date: date, amount: amt, label });
+      setAmount('');
+      reload();
+      onChanged();
+    } catch {
+      alert('등록 실패');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (id: number) => {
+    if (!confirm('이 수동 비용 항목을 삭제할까요?')) return;
+    await api.delete('/cpc/gmarket/manual-cost/', { params: { id } });
+    reload();
+    onChanged();
+  };
+
+  return (
+    <div className="border-t px-5 py-3 bg-[#fffdf5]">
+      <div className="text-[12px] font-bold mb-2 text-[#b45309]">💸 수동 비용 추가 (광고센터 외부 — 바이럴 등, 광고비합계·순수익에 자동 반영)</div>
+      <div className="flex items-center gap-2 mb-2">
+        <input type="date" value={date} onChange={e => setDate(e.target.value)}
+          className="border rounded px-2 py-1 text-[12px]" />
+        <input type="number" placeholder="금액" value={amount} onChange={e => setAmount(e.target.value)}
+          className="border rounded px-2 py-1 text-[12px] w-28" />
+        <input type="text" placeholder="구분(예: 바이럴)" value={label} onChange={e => setLabel(e.target.value)}
+          className="border rounded px-2 py-1 text-[12px] w-32" />
+        <button onClick={add} disabled={saving}
+          className="text-[12px] px-3 py-1 bg-orange-500 text-white rounded disabled:opacity-50">
+          {saving ? '추가 중…' : '+ 추가'}
+        </button>
+      </div>
+      {!loading && items.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {items.map(it => (
+            <span key={it.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-white border border-orange-200">
+              {it.use_date} · {it.label} · {fmt(it.amount)}원
+              <button onClick={() => remove(it.id)} className="text-[#c00] hover:text-red-700 ml-1" title="삭제"><X size={11} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CostModal({ seller, type, from, to, onClose }: { seller: string; type?: string; from: string; to: string; onClose: () => void }) {
   const [d, setD] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => {
+  const load = useCallback(() => {
+    setLoading(true);
     api.get('/cpc/gmarket/ad-daily/', { params: { seller_id: seller, date_from: from, date_to: to } })
       .then(r => setD(r.data)).catch(() => setD(null)).finally(() => setLoading(false));
   }, [seller, from, to]);
+  useEffect(() => { load(); }, [load]);
 
   const rows = type ? (d?.rows || []).filter((x: any) => x.transaction_type === type) : (d?.rows || []);
   const filteredTotal = rows.reduce((s: number, x: any) => s + x.amount, 0);
@@ -375,6 +445,7 @@ function CostModal({ seller, type, from, to, onClose }: { seller: string; type?:
           )}
           <button onClick={onClose} className="ml-auto text-[#888] hover:text-black"><X size={18} /></button>
         </div>
+        <ManualCostSection seller={seller} onChanged={load} />
         <div className="flex-1 overflow-auto">
           <table className="w-full text-[12px]">
             <thead className="bg-[#f7f7f7] text-[#666] sticky top-0"><tr>

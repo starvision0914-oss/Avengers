@@ -3,7 +3,7 @@ import { Sun, Moon, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   fetchProducts, fetchStats,
-  uploadExcel, uploadCsv, uploadSoldoutTxt, syncProducts,
+  uploadExcel, uploadCsv, uploadSoldoutTxt, syncProducts, fetchRunningUploadTask,
   downloadProductExcel, downloadDbCsv, fetchWCodes,
   deleteAllProducts, deleteProductsByIds, dedupeByName, setOwnerclanWorkspace,
   type OwnerclanProductItem, type ProductStats, type UploadTaskStart,
@@ -186,6 +186,14 @@ export default function OwnerclanProductsPage({ workspace = 'reserve' }: { works
     filterDebounceRef.current = setTimeout(() => setPage(1), 0);
   }, [filter]);
 
+  // 페이지 진입 시 이미 실행 중인 업로드가 있으면 자동으로 진행률 표시(다른 탭/이전 세션에서 시작한 것 포함)
+  useEffect(() => {
+    fetchRunningUploadTask().then((t) => {
+      if (t?.task_id != null) setUploadTaskId(t.task_id);
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // 업로드 task가 done 되면 자동 새로고침
   useEffect(() => {
     if (uploadTask?.status === 'done') {
@@ -207,7 +215,13 @@ export default function OwnerclanProductsPage({ workspace = 'reserve' }: { works
       setUploadTaskId(res.task_id);
       toast.success('업로드 시작 — 진행률을 표시합니다', { id: tid });
     } catch (e: any) {
-      toast.error(`업로드 실패: ${e.response?.data?.error || e.message}`, { id: tid });
+      const runningTaskId = e.response?.status === 409 ? e.response?.data?.task_id : null;
+      if (runningTaskId) {
+        setUploadTaskId(runningTaskId);
+        toast(`다른 업로드가 이미 진행 중입니다 — 그 진행 상황을 표시합니다`, { id: tid, icon: '⏳' });
+      } else {
+        toast.error(`업로드 실패: ${e.response?.data?.error || e.message}`, { id: tid });
+      }
     } finally {
       setBusy(false);
       setTimeout(() => setUploadPct(null), 500);

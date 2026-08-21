@@ -157,16 +157,19 @@ export async function getProducts(params: {
   needs_check?: string | number;
   no_match?: string | number;
   high_margin?: string | number;
+  needs_check_pct?: string | number;
 }): Promise<ProductListResponse> {
   const { data } = await api.get<ProductListResponse>('/smartstore/products/', { params });
   return data;
 }
 
 /** 미매칭 전체(SALE만) 판매중지 — 선택 없이 서버가 현재 필터 기준 전체를 계산해 처리(스마트스토어). */
-export async function suspendAllNoMatchProducts(account_id?: number, search?: string): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+export async function suspendAllNoMatchProducts(account_id?: number, search?: string, kind?: 'no_match' | 'needs_check' | 'lcode_soldout', pct?: number): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
   const body: Record<string, unknown> = {};
   if (account_id) body.account_id = account_id;
   if (search) body.search = search;
+  if (kind) body.kind = kind;
+  if (pct != null) body.pct = pct;
   const { data } = await api.post('/smartstore/products/suspend-all-no-match/', body);
   return data;
 }
