@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, ShoppingBag, Wallet, Megaphone, Package, X } from 'lucide-react';
+import { RefreshCw, ShoppingBag, Wallet, Megaphone, Package, X, XCircle } from 'lucide-react';
 import api from '../../api/client';
 import DateNavigator from '../../components/cpc/DateNavigator';
 import DateRangePicker from '../../components/cpc/DateRangePicker';
@@ -8,6 +8,7 @@ import PeriodSelector from '../../components/cpc/PeriodSelector';
 import { ymd } from '../../utils/format';
 import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
 import { resolveRange, yesterdayStr } from '../../utils/periodRange';
+import PlatformStatusBreakdown from '../../components/PlatformStatusBreakdown';
 
 // KST 기준 오늘
 function todayStrKST(): string {
@@ -112,6 +113,16 @@ export default function GmarketDashboard() {
     setTimeout(() => setRecrawling(false), 3000);
     loadCstat();
   };
+  const [stopping, setStopping] = useState(false);
+  const stopRecrawl = async () => {
+    if (!confirm('실행 중인 상품별 광고비 수집을 강제중지할까요? (진행 중인 계정까지만 처리 후 중단)')) return;
+    setStopping(true);
+    try {
+      await api.post('/cpc/gmarket/recrawl-stop/');
+    } catch { /* noop */ }
+    setTimeout(() => setStopping(false), 3000);
+    loadCstat();
+  };
 
   const acc = (r: Row, k: string): number | string =>
     k === 'ad_only' ? (r.cpc_spend || 0) + (r.ai_spend || 0)
@@ -185,6 +196,12 @@ export default function GmarketDashboard() {
               <span className="text-green-700">완료 {cstat.done}/{cstat.total}</span>
               {cstat.failed?.length > 0 && <span className="text-red-600 font-bold">· 실패 {cstat.failed.length}계정</span>}
               {cstat.running && <span className="text-orange-600 inline-flex items-center gap-1"><RefreshCw size={12} className="animate-spin" />수집 중</span>}
+              {cstat.running && (
+                <button onClick={stopRecrawl} disabled={stopping}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-[#666] text-white font-semibold disabled:opacity-50">
+                  <XCircle size={12} /> 강제중지
+                </button>
+              )}
               {cstat.failed?.length > 0 && (
                 <button onClick={recrawlFailed} disabled={recrawling || cstat.running}
                   className="ml-auto inline-flex items-center gap-1 px-3 py-1.5 rounded bg-red-600 text-white font-semibold disabled:opacity-50">
@@ -233,6 +250,8 @@ export default function GmarketDashboard() {
           <Card icon={<ShoppingBag size={18} />} color="#555" label="주문 수" value={`${fmt(t?.orders || 0)}건`} />
           <Card icon={<Package size={18} />} color="#e08000" label="등록가능수량 합계" value={`${fmt(t?.max_item_count || 0)}개`} />
         </div>
+
+        <PlatformStatusBreakdown platform="gmarket" />
 
         <div className="bg-white border border-[#e0e0e0] rounded-lg overflow-auto">
           <table className="w-full text-[12px]">

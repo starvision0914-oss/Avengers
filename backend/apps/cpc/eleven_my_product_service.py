@@ -44,12 +44,12 @@ L_CODE_RE = __import__('re').compile(r'^LCE_(?:SX|MX)_(L\d{7})', __import__('re'
 
 def get_lcode_soldout_rows(model, code_field, product_no_field, status_field, status_val,
                             account_id=None, search=None, search_fields=None, return_objects=False):
-    """L코드(도매마트) 상태가 품절(soldout)로 확인된 상품의 (login_id, product_no) 목록
-    (return_objects=True면 모델 인스턴스 리스트).
-    LCodeStatus는 check_domemart_lcodes 백그라운드 크롤러가 순차 채워가는 중(2026-08-21 시점 전체의
-    일부만 확인됨) — 아직 확인 안 된 코드는 soldout으로 간주하지 않는다(오탐 방지, 확인된 것만 대상)."""
+    """L코드(도매마트)가 품절(soldout) 또는 미확인(not_found — 도매마트에서 검색 자체가 안 됨,
+    코드가 없어졌을 가능성)로 확인된 상품의 (login_id, product_no) 목록(return_objects=True면 모델 인스턴스 리스트).
+    아직 도매마트 조회 자체를 안 한 코드(LCodeStatus에 없음)는 대상이 아니다 — '조회했는데 없거나 품절'만 대상
+    (오탐 방지, 확인된 것만 대상, 2026-08-22 미확인 포함으로 확장)."""
     from apps.cpc.models import LCodeStatus
-    soldout_codes = set(LCodeStatus.objects.filter(status='soldout').values_list('l_code', flat=True))
+    soldout_codes = set(LCodeStatus.objects.filter(status__in=['soldout', 'not_found']).values_list('l_code', flat=True))
     if not soldout_codes:
         return []
 

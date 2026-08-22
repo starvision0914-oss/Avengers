@@ -90,7 +90,9 @@ class Command(BaseCommand):
                     break
                 if done % 25 == 0:
                     self.stdout.write(f'{done}/{len(pending)} 진행 중...')
-                time.sleep(random.uniform(1.0, 2.0))
+                # check_code 내부에서 이미 페이지 전환(staleness) 대기로 실제 응답시간만큼 소모하므로
+                # 여기서는 결과 확인 후 다음 검색 전 최소한의 텀만(2026-08-22 3차 최적화).
+                time.sleep(random.uniform(0.2, 0.4))
         finally:
             driver.quit()
 

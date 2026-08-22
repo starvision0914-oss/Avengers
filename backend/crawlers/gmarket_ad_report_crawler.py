@@ -327,6 +327,8 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
     if not ok:
         _log(log_fn, f'⏭️ 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}
+    guard.clear_adreport_stop(platform='gmarket')   # 새 실행 시작 — 묵은 중지플래그 제거
+    guard.set_adreport_busy('지마켓상품광고비', platform='gmarket')
 
     all_accts = list(CrawlerAccount.objects.filter(platform='gmarket', is_active=True).order_by('display_order', 'login_id'))
     # 공유ESM 서브계정 login_id 맵: master_login_id → [sub_login_id, ...]
@@ -346,6 +348,8 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
     driver = None
     try:
         for a in accts:
+            if guard.is_adreport_stop(platform='gmarket'):
+                _log(log_fn, '🛑 강제중지 요청 — 중단'); break
             blocked, _, _ = guard.is_blocked(platform='gmarket')
             if blocked:
                 _log(log_fn, '⛔ 차단 감지 — 중단'); break
@@ -442,6 +446,14 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                                     _log(log_fn, f'  [{sub_lid}] 상품 {overlap:.0%} 겹치지만 광고비 다름(마스터 {master_cost:,}/서브 {sub_cost:,}) → 정상 유지')
                     summary[sub_lid] = sub_res
                 summary[a.login_id] = acct_res
+                # 광고 미집행(0건)이면 GmarketProductAdCost에 저장할 행이 없어 '오늘 수집됨'이
+                # 확인 안 되고 대시보드에서 계속 실패로 오표시됨 — 완료 사실 자체를 로그로 남겨둔다.
+                try:
+                    from apps.cpc.models import CrawlerLog
+                    CrawlerLog.objects.create(platform='gmarket', account_id=a.login_id, level='info',
+                                               message='상품별광고비 수집 완료(광고 미집행 포함)')
+                except Exception:
+                    pass
             finally:
                 if driver:
                     try: driver.quit()
@@ -510,6 +522,8 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                         except Exception: pass
                         driver = None
     finally:
+        guard.clear_adreport_busy(platform='gmarket')
+        guard.clear_adreport_stop(platform='gmarket')
         guard.release_global_lock(platform='gmarket')
         try: stop_display()
         except Exception: pass

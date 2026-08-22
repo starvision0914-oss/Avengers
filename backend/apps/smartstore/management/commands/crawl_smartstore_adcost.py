@@ -45,6 +45,8 @@ class Command(BaseCommand):
         parser.add_argument('--account-id', type=int, default=None)
         parser.add_argument('--billing-only', action='store_true', default=False,
                             help='billing 스크랩 계정만 처리')
+        parser.add_argument('--with-gsheet', action='store_true',
+                            help='수집 직후 같은 실행에서 일자별 CPC를 구글시트에도 업로드')
 
     def handle(self, *args, **options):
         from apps.cpc import eleven_block_guard as guard
@@ -164,3 +166,9 @@ class Command(BaseCommand):
 
         if not billing_accounts and not api_accounts:
             self.stdout.write('광고비 수집 대상 계정 없음 (naver_ad_account_id 또는 naver_ad_customer_id 필요)')
+
+        if options['with_gsheet']:
+            from crawlers.naver_daily_gsheet import run_all_accounts as daily_gsheet_upload
+            self.stdout.write('\n일자별 구글시트 업로드 중...')
+            res = daily_gsheet_upload(log_fn=lambda m: self.stdout.write(m))
+            self.stdout.write(f'일자별 구글시트 업로드 완료: {res}')

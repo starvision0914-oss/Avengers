@@ -7,7 +7,11 @@ LOG=/tmp/cron_11st_status_orch.log
 PER_TIMEOUT=300      # 1차: 계정당 5분(=1분×5회 폴링 상당)
 RETRY_TIMEOUT=420    # 2차: 7분(서버 엑셀 생성 완료됐을 가능성↑)
 
-ACCTS=$(/usr/bin/python3 -c "import os,django;os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings');django.setup();from apps.cpc.models import CrawlerAccount as C;print(' '.join(a.login_id for a in C.objects.filter(platform='11st',is_active=True) if a.login_id!='tmxkzhfldk8'))" 2>/dev/null)
+# '실패'(connect_fail_count 3회 도달) 상태는 재로그인 자체를 스킵해서 영구 잠김됨 —
+# 매일 시작 전 한 번 초기화해 오늘 밤 다시 시도할 기회를 준다(3회 다시 실패하면 당일 다시 '실패'로 재설정, 안전).
+/usr/bin/python3 -c "import os,django;os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings');django.setup();from apps.cpc.models import CrawlerAccount as C;n=C.objects.filter(platform='11st',is_active=True,crawling_status='실패').update(crawling_status='정상',connect_fail_count=0);print(f'[ORCH] 실패상태 {n}계정 초기화')" >> "$LOG" 2>&1
+
+ACCTS=$(/usr/bin/python3 -c "import os,django;os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings');django.setup();from apps.cpc.models import CrawlerAccount as C;print(' '.join(a.login_id for a in C.objects.filter(platform='11st',is_active=True)))" 2>/dev/null)
 N=$(echo $ACCTS | wc -w)
 echo "[ORCH] 11번가 판매상태 대상 ${N}계정 시작 $(date '+%F %T')" >> "$LOG"
 

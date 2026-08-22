@@ -10,6 +10,8 @@ import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoAlertPresentException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 from crawlers.browser import create_driver
 
@@ -45,21 +47,31 @@ def do_login(driver):
 
 
 def check_code(driver, code, retries=2):
-    """반환: {'code','count','has_soldout_word'} 또는 {'code','error':True}"""
+    """반환: {'code','count','has_soldout_word'} 또는 {'code','error':True}
+    검색창(mall_keyword)은 검색결과 페이지(mall.php)에도 그대로 남아있어(실측 2026-08-22)
+    매번 홈으로 돌아갈 필요 없이 결과 페이지에서 바로 이어서 검색 가능 — 최초 1회/재로그인 후에만 홈 이동."""
     for attempt in range(retries):
         try:
-            driver.get(HOME_URL)
-            time.sleep(random.uniform(0.8, 1.5))
-            if is_logged_out(driver):
-                logger.info('로그아웃 감지 — 재로그인')
-                do_login(driver)
+            fields = driver.find_elements(By.NAME, 'mall_keyword')
+            if not fields or is_logged_out(driver):
+                if is_logged_out(driver):
+                    logger.info('로그아웃 감지 — 재로그인')
+                    do_login(driver)
                 driver.get(HOME_URL)
-                time.sleep(1.5)
-            el = driver.find_element(By.XPATH, SEARCH_XPATH)
+                time.sleep(random.uniform(0.8, 1.5))
+                fields = driver.find_elements(By.NAME, 'mall_keyword')
+            el = fields[0]
             el.clear()
             el.send_keys(code)
             el.send_keys(Keys.RETURN)
-            time.sleep(random.uniform(1.5, 2.5))
+            # staleness_of: 옛 검색창 DOM이 사라지는(=새 페이지로 실제 전환된) 순간을 감지.
+            # page_source 길이비교보다 가볍고(전체 HTML 전송 불필요) 우연히 길이가 같아
+            # 오탐할 위험도 없음 — 서버렌더링(mall.php)이라 전환 즉시 새 본문도 이미 완성돼있음.
+            # 검증(2026-08-22): 여러 코드에서 count/품절 값 fast=safe 완전 일치 확인.
+            try:
+                WebDriverWait(driver, 3, poll_frequency=0.1).until(EC.staleness_of(el))
+            except Exception:
+                pass
             body_text = driver.find_element(By.TAG_NAME, 'body').text
             if is_logged_out(driver) or ('아이디' in body_text[:50] and '비밀번호' in body_text[:80]):
                 logger.info('%s: 검색중 로그아웃됨 — 재시도', code)

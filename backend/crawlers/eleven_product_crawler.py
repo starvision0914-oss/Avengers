@@ -81,7 +81,8 @@ PRODUCT_TABLE_HEADERS = ('상품번호', '상품명', '판매가', '재고')
 
 # 페이싱 (광고비 크롤러와 동일 톤 — 보수적)
 # 등록상품 크롤 제외 계정 (빈 계정 — 등록상품 0개라 11번가 대량엑셀이 생성 안 됨)
-PRODUCT_EXCLUDE = {'tmxkzhfldk8'}  # 스타코3
+PRODUCT_EXCLUDE = set()  # 스타코3(tmxkzhfldk8)는 등록상품 0개로 알려져 있었으나 실제로는 2,000개
+                          # 보유 중인 것으로 확인돼(2026-08-22) 제외 목록에서 해제
 
 INTER_ACCOUNT_SLEEP = (30.0, 90.0)
 PAGE_NAV_SLEEP = (2.0, 5.0)

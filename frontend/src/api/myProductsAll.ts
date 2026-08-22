@@ -69,3 +69,15 @@ export async function fetchAllMyProducts(
   });
   return data;
 }
+
+export interface MyProductsStatusSummary {
+  labels: Record<string, string>;
+  total: number;
+  by_category: Record<string, number>;
+  by_platform: Record<string, Record<string, number>>;
+}
+
+export async function fetchMyProductsStatusSummary(): Promise<MyProductsStatusSummary> {
+  const { data } = await api.get<MyProductsStatusSummary>('/cpc/my-products/status-summary/');
+  return data;
+}

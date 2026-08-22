@@ -4,7 +4,7 @@ import datetime
 import io
 from datetime import date
 
-from django.db.models import Sum, Count, Q, Max
+from django.db.models import Sum, Count, Q, Max, F
 from django.http import HttpResponse
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -354,6 +354,36 @@ class ProductListView(APIView):
         })
 
 
+class PriceMatchPreviewView(APIView):
+    """확인필요(역마진)+고단가 상품의 판매가를 예비상품 마켓가(purchase_cost, 이미 오너클랜 마켓가로
+    동기화돼 있음)로 맞추면 몇 개가 얼마→얼마로 바뀌는지 미리보기(실제 변경 없음, 2026-08-22)."""
+    def get(self, request):
+        pct_raw = request.query_params.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 10
+        mult = (100 - min(max(pct, 1), 99)) / 100.0
+
+        qs = (SmartStoreProduct.objects.select_related('account')
+              .filter(status_type='SALE', purchase_cost__gt=0)
+              .filter(Q(sale_price__lte=F('purchase_cost') * mult) |
+                      Q(sale_price__gte=F('purchase_cost') * 1.5) |
+                      Q(sale_price__gte=600000))
+              .order_by('-id'))
+
+        total = qs.count()
+        rows = []
+        for p in qs[:500]:
+            rows.append({
+                'id': p.id,
+                'account_name': p.account.display_name or p.account.store_name,
+                'product_no': p.product_no,
+                'name': p.name,
+                'current_price': p.sale_price,
+                'target_price': p.purchase_cost,
+                'diff': p.purchase_cost - p.sale_price,
+            })
+        return Response({'total': total, 'rows': rows, 'preview_limit': 500})
+
+
 # ──── 상품 동기화 (네이버 커머스 API) ────
 
 class ProductSyncView(APIView):
@@ -381,11 +411,12 @@ class ProductStatsView(APIView):
     def get(self, request):
         account_id = request.query_params.get('account_id', '0')
 
-        # 전체 또는 단일 계정
+        # 전체 또는 단일 계정 (DELETED=크롤 3일+ 누락 추정삭제 — 대시보드엔 안 보이게 제외.
+        # 상품번호→판매자코드 매핑은 ProductCodeArchive 보존고에 영구보관되므로 데이터 유실 아님)
         if account_id and account_id != '0':
-            qs = SmartStoreProduct.objects.filter(account_id=account_id)
+            qs = SmartStoreProduct.objects.filter(account_id=account_id).exclude(status_type='DELETED')
             stats = qs.values('status_type').annotate(cnt=Count('id'))
-            total = qs.count()
+            total = qs.filter(status_type='SALE').count()   # 등록상품(헤드라인)=판매중만
             last_synced = qs.aggregate(ls=Max('synced_at'))['ls']
             by_status = {r['status_type']: r['cnt'] for r in stats}
             return Response({
@@ -395,15 +426,15 @@ class ProductStatsView(APIView):
             })
 
         # 전체 계정 합산
-        qs = SmartStoreProduct.objects.all()
+        qs = SmartStoreProduct.objects.exclude(status_type='DELETED')
         stats = qs.values('status_type').annotate(cnt=Count('id'))
-        total = qs.count()
         by_status = {r['status_type']: r['cnt'] for r in stats}
+        total = by_status.get('SALE', 0)   # 등록상품(헤드라인)=판매중만
 
-        # 계정별 상세
+        # 계정별 상세 (등록상품=판매중만)
         account_map = {a.id: a.display_name or a.store_name
                        for a in SmartStoreAccount.objects.filter(is_active=True)}
-        by_account_raw = SmartStoreProduct.objects.values('account_id').annotate(
+        by_account_raw = qs.filter(status_type='SALE').values('account_id').annotate(
             cnt=Count('id'), last_synced=Max('synced_at')
         )
         by_account = []
@@ -508,7 +539,7 @@ class SuspendAllNoMatchView(APIView):
                 account_id=account_id, search=search, search_fields=['name', 'seller_management_code'],
                 return_objects=True,
             )
-            label = 'L코드 품절'
+            label = 'L코드 품절/미확인'
         else:
             if kind == 'needs_check':
                 qs = SmartStoreProduct.objects.select_related('account').filter(
@@ -552,7 +583,7 @@ class SuspendAllNoMatchView(APIView):
                         continue
                     for item in group['items']:
                         try:
-                            suspend_product_api(item.product_no, token)
+                            suspend_product_api(item.channel_product_no, token)
                             SmartStoreProduct.objects.filter(pk=item.pk).update(status_type='SUSPENSION')
                             success += 1
                         except Exception as e:
@@ -569,6 +600,77 @@ class SuspendAllNoMatchView(APIView):
             name = t.account.display_name or t.account.store_name
             by_store[name] = by_store.get(name, 0) + 1
         msg = (f'🛑 {label} 전체 판매중지 시작 — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
+               f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
+
+
+class PriceMatchApplyView(APIView):
+    """확인필요(역마진, 마켓가 대비 pct%+ 저가) 상품의 판매가를 예비상품 마켓가(purchase_cost)로 실제 변경.
+    SuspendAllNoMatchView와 동일한 백그라운드 스레드·계정순차·1건당1초 패턴(2026-08-22, 사용자 요청)."""
+    LOG_FILE = '/tmp/price_match_smartstore.log'
+
+    def post(self, request):
+        import threading, time
+        from django.db.models import F
+
+        account_id = request.data.get('account_id')
+        search = request.data.get('search')
+        pct_raw = request.data.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 20
+        mult = (100 - min(max(pct, 1), 99)) / 100.0
+
+        qs = SmartStoreProduct.objects.select_related('account').filter(
+            purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * mult, status_type='SALE',
+        )
+        if account_id:
+            qs = qs.filter(account_id=int(account_id))
+        if search:
+            qs = qs.filter(Q(name__icontains=search) | Q(seller_management_code__icontains=search))
+        targets = list(qs)
+
+        if not targets:
+            return Response({'status': 'blocked', 'message': f'⛔ 확인필요(역마진 {pct}%+, SALE) 대상이 없습니다.'}, status=400)
+
+        store_groups = {}
+        for t in targets:
+            store_groups.setdefault(t.account_id, {'account': t.account, 'items': []})['items'].append(t)
+
+        def _run():
+            from .services.naver_api import _get_access_token, update_price_api
+            with open(self.LOG_FILE, 'a') as log:
+                log.write(f'\n{time.strftime("%F %T")} 단가 마켓가 맞춤 시작(역마진 {pct}%+) — {len(targets)}건 / {len(store_groups)}스토어\n')
+                success = fail = 0
+                for sid, group in store_groups.items():
+                    acc = group['account']
+                    if not acc.commerce_api_key or not acc.commerce_secret_key:
+                        fail += len(group['items'])
+                        log.write(f'  [{acc.store_name}] API키 미등록 — {len(group["items"])}건 스킵\n')
+                        continue
+                    try:
+                        token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
+                    except Exception as e:
+                        fail += len(group['items'])
+                        log.write(f'  [{acc.store_name}] 토큰 발급 실패: {e}\n')
+                        continue
+                    for item in group['items']:
+                        try:
+                            update_price_api(item.channel_product_no, item.purchase_cost, token)
+                            SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=item.purchase_cost)
+                            success += 1
+                        except Exception as e:
+                            fail += 1
+                            log.write(f'  [{acc.store_name}] {item.product_no} 실패: {e}\n')
+                        time.sleep(1)
+                    log.flush()
+                log.write(f'{time.strftime("%F %T")} 완료 — 성공 {success} / 실패 {fail}\n')
+
+        threading.Thread(target=_run, daemon=True).start()
+
+        by_store = {}
+        for t in targets:
+            name = t.account.display_name or t.account.store_name
+            by_store[name] = by_store.get(name, 0) + 1
+        msg = (f'💰 단가 마켓가 맞춤 시작(역마진 {pct}%+) — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
                f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
         return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
 
@@ -639,17 +741,29 @@ class ProductExcelView(APIView):
         except ImportError:
             return Response({'error': 'openpyxl 설치 필요'}, status=500)
 
+        from django.db.models import F
+
         account_ids = request.query_params.getlist('account_ids')
         statuses = request.query_params.getlist('statuses')
         w_only = request.query_params.get('w_only') == '1'
+        no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
+        needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
+        needs_check_pct_raw = request.query_params.get('needs_check_pct')
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 10
+        needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
 
         qs = SmartStoreProduct.objects.select_related('account').order_by('account__store_name', '-id')
         if account_ids:
             qs = qs.filter(account_id__in=account_ids)
         if statuses:
             qs = qs.filter(status_type__in=statuses)
-        if w_only:
-            qs = qs.filter(seller_management_code__startswith='W')
+        if no_match:
+            qs = (qs.filter(seller_management_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='SALE')
+                    .exclude(seller_management_code__regex=r'[가-힣]'))
+        elif needs_check:
+            qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_type='SALE')
+        elif w_only:
+            qs = qs.filter(seller_management_code__iregex=r'^(WDM_|AUTO_)?W')
 
         wb = openpyxl.Workbook()
         ws = wb.active

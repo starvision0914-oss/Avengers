@@ -128,6 +128,10 @@ def _result_count(driver):
         return -1
 
 
+CHUNK_SIZE = 200  # 한 번에 검색+전체선택하는 상품번호 개수 — 너무 크면 가상그리드가 다 못 띄워
+                   # '클릭은 성공했지만 실제론 일부만 처리'되는 문제가 있어 나눠 처리(2026-08-22, 사용자 지정).
+
+
 def run_delete(targets, mode='validate', log_fn=None):
     """targets: [{login_id, product_no, seller_code, status}]. mode: validate(기본) | real | stop_only(판매중지만, 삭제안함)."""
     from apps.cpc.models import CrawlerAccount, GmarketLossDeleted, GmarketMyProduct
@@ -190,13 +194,17 @@ def run_delete(targets, mode='validate', log_fn=None):
                     continue
 
                 # === 1) 판매중지: 입력+확인 → 조회 → 전체선택 → 판매상태변경→판매중지 ===
-                okp, verified = _paste_and_search(d, nums, log_fn)
-                if not verified:
-                    summary['failed'] += 1
-                    continue
-                cnt = _result_count(d)
-                _log(log_fn, f'  조회 결과행(근사): {cnt}')
+                # 한 번에 너무 많은 상품번호(수백~수천)를 검색하면 가상그리드가 다 못 띄운 채로
+                # 전체선택→판매중지 클릭만 '성공'해버려 실제론 일부만 처리되는 문제가 있었다
+                # (2026-08-22 발견 — 31,593개 지정 중 2,741개만 실제 처리됨).
+                # → CHUNK_SIZE 단위로 나눠 검색·처리하고, 청크별로 실제 처리 개수를 집계한다.
                 if mode == 'validate':
+                    okp, verified = _paste_and_search(d, nums[:CHUNK_SIZE], log_fn)
+                    if not verified:
+                        summary['failed'] += 1
+                        continue
+                    cnt = _result_count(d)
+                    _log(log_fn, f'  조회 결과행(근사, 첫 배치): {cnt}')
                     sa, _ = _find(d, XP_SELECT_ALL, 3)
                     sc, _ = _find(d, XP_STATUS_CHANGE, 3)
                     de, _ = _find(d, XP_DELETE, 3)
@@ -206,58 +214,77 @@ def run_delete(targets, mode='validate', log_fn=None):
                     continue
 
                 # ---- real / stop_only 모드 (판매중지는 공통, 삭제는 real만) ----
-                _click(d, XP_SELECT_ALL, '전체선택', log_fn)
-                time.sleep(1)
-                stopped = False
-                if _click(d, XP_STATUS_CHANGE, '판매 상태 변경', log_fn):
-                    time.sleep(1)
-                    stopped = _click(d, XP_STOPSELL, '판매중지', log_fn)
-                    _clear_popups(d, log_fn)
-                    time.sleep(2)
+                chunks = [nums[i:i + CHUNK_SIZE] for i in range(0, len(nums), CHUNK_SIZE)]
+                acc_stopped = 0
+                acc_deleted = 0
+                acc_marked = 0
+                acc_fail_chunks = 0
+                for ci, chunk in enumerate(chunks, 1):
+                    _log(log_fn, f'  [{eid}] 배치 {ci}/{len(chunks)} ({len(chunk)}개)')
+                    okp, verified = _paste_and_search(d, chunk, log_fn)
+                    if not verified:
+                        acc_fail_chunks += 1
+                        continue
+                    cnt = _result_count(d)
+                    _log(log_fn, f'    조회 결과행(근사): {cnt}')
 
-                if mode == 'stop_only':
-                    # 클릭체인(전체선택→판매상태변경→판매중지)이 전부 성공했으면 판매중지 완료로 간주.
-                    # (그리드 셀렉터가 가상그리드라 재조회 문구 파싱은 부정확할 수 있어 클릭성공 여부로 판단)
-                    _log(log_fn, f'  판매중지 {"성공" if stopped else "실패(버튼 못 찾음)"}')
-                    if stopped:
-                        # DB(GmarketMyProduct) 비고 즉시 갱신 — 다음날 야간크롤 전까지
-                        # 비고가 낡은 '판매중' 그대로 남지 않도록.
-                        for t in items:
-                            pn = ''.join(ch for ch in str(t.get('product_no', '')) if ch.isdigit())
-                            if pn:
+                    _click(d, XP_SELECT_ALL, '전체선택', log_fn)
+                    time.sleep(1)
+                    stopped = False
+                    if _click(d, XP_STATUS_CHANGE, '판매 상태 변경', log_fn):
+                        time.sleep(1)
+                        stopped = _click(d, XP_STOPSELL, '판매중지', log_fn)
+                        _clear_popups(d, log_fn)
+                        time.sleep(2)
+
+                    if mode == 'stop_only':
+                        _log(log_fn, f'    판매중지 {"성공" if stopped else "실패(버튼 못 찾음)"}')
+                        if stopped:
+                            for pn in chunk:
                                 GmarketMyProduct.objects.filter(
                                     account=acc, product_no=pn).update(status_type='판매중지')
-                        summary.setdefault('stopped', 0)
-                        summary['stopped'] += len(nums)
+                            acc_stopped += len(chunk)
+                        else:
+                            acc_fail_chunks += 1
+                        continue
+
+                    # === real 모드: 재조회 → 전체선택 → 삭제 → 잔여검증 (청크 단위) ===
+                    _paste_and_search(d, chunk, log_fn)
+                    _click(d, XP_SELECT_ALL, '전체선택(삭제전)', log_fn)
+                    time.sleep(1)
+                    if _click(d, XP_DELETE, '삭제', log_fn):
+                        _clear_popups(d, log_fn)
+                        time.sleep(2)
+                    _paste_and_search(d, chunk, log_fn)
+                    remaining = _result_count(d)
+                    deleted_ok = (remaining == 0)
+                    _log(log_fn, f'    잔여검증: {remaining}행 → 삭제{"성공" if deleted_ok else "미완(보류)"}')
+                    if deleted_ok:
+                        for pn in chunk:
+                            GmarketLossDeleted.objects.get_or_create(
+                                login_id=eid, product_no=pn,
+                                defaults={'seller_code': ''})
+                            acc_marked += 1
+                        acc_deleted += len(chunk)
                     else:
-                        summary['failed'] += 1
-                    results.append({'login_id': eid, 'stopped': stopped})
+                        acc_fail_chunks += 1
+
+                if mode == 'stop_only':
+                    summary.setdefault('stopped', 0)
+                    summary['stopped'] += acc_stopped
+                    if acc_fail_chunks:
+                        summary['failed'] += acc_fail_chunks
+                    results.append({'login_id': eid, 'stopped': acc_stopped, 'requested': len(nums),
+                                    'failed_batches': acc_fail_chunks})
                     summary['accounts'] += 1
                     continue
 
-                # === 2) 재조회 → 전체선택 → 삭제 (real 모드만) ===
-                okp2, _ = _paste_and_search(d, nums, log_fn)
-                _click(d, XP_SELECT_ALL, '전체선택(삭제전)', log_fn)
-                time.sleep(1)
-                if _click(d, XP_DELETE, '삭제', log_fn):
-                    _clear_popups(d, log_fn)
-                    time.sleep(2)
-
-                # === 3) 잔여검증: 재조회해서 0이면 성공 ===
-                _paste_and_search(d, nums, log_fn)
-                remaining = _result_count(d)
-                deleted_ok = (remaining == 0)
-                _log(log_fn, f'  잔여검증: {remaining}행 → 삭제{"성공" if deleted_ok else "미완(보류)"}')
-                if deleted_ok:
-                    for t in items:
-                        pn = ''.join(ch for ch in str(t.get('product_no', '')) if ch.isdigit())
-                        if pn:
-                            GmarketLossDeleted.objects.get_or_create(
-                                login_id=eid, product_no=pn,
-                                defaults={'seller_code': t.get('seller_code') or ''})
-                            summary['marked'] += 1
-                    summary['deleted'] += len(nums)
-                results.append({'login_id': eid, 'deleted': deleted_ok, 'remaining': remaining})
+                summary['deleted'] += acc_deleted
+                summary['marked'] += acc_marked
+                if acc_fail_chunks:
+                    summary['failed'] += acc_fail_chunks
+                results.append({'login_id': eid, 'deleted': acc_deleted, 'requested': len(nums),
+                                'failed_batches': acc_fail_chunks})
                 summary['accounts'] += 1
             finally:
                 if d:

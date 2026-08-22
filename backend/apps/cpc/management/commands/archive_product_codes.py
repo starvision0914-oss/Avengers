@@ -72,5 +72,12 @@ class Command(BaseCommand):
         g = list(GmarketMyProduct.objects.exclude(seller_product_code='')
                  .values_list('account__login_id', 'product_no', 'seller_product_code', 'product_name'))
         ng = _upsert([('gmarket', a, p, s, nm) for a, p, s, nm in g], source='crawl')
+
+        from apps.smartstore.models import SmartStoreProduct
+        s = list(SmartStoreProduct.objects.exclude(seller_management_code='')
+                 .values_list('account__login_id', 'product_no', 'seller_management_code', 'name'))
+        ns = _upsert([('smartstore', a, p, sc, nm) for a, p, sc, nm in s], source='crawl')
+
         from apps.cpc.models import ProductCodeArchive
-        self.stdout.write(f'스냅샷 보존: 11번가 {ne}건 / 지마켓 {ng}건 | 보존고 총 {ProductCodeArchive.objects.count()}건')
+        self.stdout.write(f'스냅샷 보존: 11번가 {ne}건 / 지마켓 {ng}건 / 스마트스토어 {ns}건 | '
+                          f'보존고 총 {ProductCodeArchive.objects.count()}건')

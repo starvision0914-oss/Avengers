@@ -16,6 +16,7 @@ logger = logging.getLogger('smartstore')
 NAVER_TOKEN_URL = 'https://api.commerce.naver.com/external/v1/oauth2/token'
 NAVER_PRODUCTS_URL = 'https://api.commerce.naver.com/external/v1/products/search'
 NAVER_PRODUCT_URL = 'https://api.commerce.naver.com/external/v2/products/origin-products/{origin_product_no}'
+NAVER_CHANNEL_PRODUCT_URL = 'https://api.commerce.naver.com/external/v2/products/channel-products/{channel_product_no}'
 NAVER_ORDER_STATUS_URL = 'https://api.commerce.naver.com/external/v1/pay-order/seller/product-orders/last-changed-statuses'
 
 
@@ -214,16 +215,62 @@ def sync_sales_api(account, start_date: date, end_date: date) -> dict:
     return {'saved': saved, 'store_name': account.display_name}
 
 
-def suspend_product_api(origin_product_no: str, token: str):
-    """상품을 SUSPENSION 상태로 변경"""
-    url = NAVER_PRODUCT_URL.format(origin_product_no=origin_product_no)
+def suspend_product_api(channel_product_no: str, token: str):
+    """상품을 SUSPENSION 상태로 변경.
+    channel-products 엔드포인트 사용 필수(2026-08-22) — origin-products로 originProduct만 PUT하면
+    필수 동반 필드(smartstoreChannelProduct) 누락 + seoInfo 금지단어/unitCapacity.unitPriceYn 누락으로
+    400 Bad Request 대량 발생(apply_ss_products.py에서 검증된 정상 패턴을 이식)."""
+    url = NAVER_CHANNEL_PRODUCT_URL.format(channel_product_no=channel_product_no)
     headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
 
     get_resp = requests.get(url, headers=headers, timeout=30)
     get_resp.raise_for_status()
-    product = get_resp.json()['originProduct']
-    product['statusType'] = 'SUSPENSION'
+    data = get_resp.json()
+    op = data.get('originProduct', {})
+    op['statusType'] = 'SUSPENSION'
 
-    put_resp = requests.put(url, json={'originProduct': product}, headers=headers, timeout=30)
+    # seoInfo에 금지단어가 있으면 PUT 400 → 제거
+    op.get('detailAttribute', {}).pop('seoInfo', None)
+    # unitCapacity.unitPriceYn 누락/null이면 PUT 400 → false로 보정
+    da = op.setdefault('detailAttribute', {})
+    unit_cap = da.get('unitCapacity')
+    if unit_cap is None:
+        da['unitCapacity'] = {'unitPriceYn': False}
+    elif 'unitPriceYn' not in unit_cap:
+        unit_cap['unitPriceYn'] = False
+
+    put_resp = requests.put(
+        url,
+        json={'originProduct': op, 'smartstoreChannelProduct': data.get('smartstoreChannelProduct', {})},
+        headers=headers, timeout=30,
+    )
+    put_resp.raise_for_status()
+    return put_resp.json()
+
+
+def update_price_api(channel_product_no: str, new_price: int, token: str):
+    """상품 판매가(salePrice)를 변경. suspend_product_api와 동일 GET→보정→PUT 패턴 재사용."""
+    url = NAVER_CHANNEL_PRODUCT_URL.format(channel_product_no=channel_product_no)
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+    get_resp = requests.get(url, headers=headers, timeout=30)
+    get_resp.raise_for_status()
+    data = get_resp.json()
+    op = data.get('originProduct', {})
+    op['salePrice'] = int(new_price)
+
+    op.get('detailAttribute', {}).pop('seoInfo', None)
+    da = op.setdefault('detailAttribute', {})
+    unit_cap = da.get('unitCapacity')
+    if unit_cap is None:
+        da['unitCapacity'] = {'unitPriceYn': False}
+    elif 'unitPriceYn' not in unit_cap:
+        unit_cap['unitPriceYn'] = False
+
+    put_resp = requests.put(
+        url,
+        json={'originProduct': op, 'smartstoreChannelProduct': data.get('smartstoreChannelProduct', {})},
+        headers=headers, timeout=30,
+    )
     put_resp.raise_for_status()
     return put_resp.json()

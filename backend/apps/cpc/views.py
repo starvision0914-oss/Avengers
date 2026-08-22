@@ -754,6 +754,22 @@ class ElevenSummaryView(views.APIView):
         for ofs in ElevenSellerOfficeStat.objects.filter(id__in=office_latest_ids).select_related('account'):
             office_map[ofs.account.login_id] = ofs
 
+        # 상품수/판매금지 — 셀러오피스 페이지는 자동 갱신 크론이 없어 며칠씩 묵는 경우가 있고,
+        # 반대로 나의상품(ElevenMyProduct)도 계정별 상품수집이 계속 실패하면(예: 실제 상품 0개라
+        # 엑셀생성이 안 끝나는 계정) 마지막 성공 시점 그대로 오래 묵을 수 있다.
+        # → 두 데이터 중 "실제로 더 최근에 수집된 쪽"을 골라 쓴다(synced_at vs collected_at 비교).
+        from .models import ElevenMyProduct as _EMP
+        myprod_counts = {}
+        myprod_synced = {}
+        for r in (_EMP.objects.filter(account__platform='11st')
+                  .values('account__login_id', 'status_type')
+                  .annotate(c=Count('id'), latest=Max('synced_at'))):
+            lid = r['account__login_id']
+            d = myprod_counts.setdefault(lid, {})
+            d[r['status_type']] = r['c']
+            if r['latest'] and (lid not in myprod_synced or r['latest'] > myprod_synced[lid]):
+                myprod_synced[lid] = r['latest']
+
         # 계정별 N+1 제거: 최신잔액 + CPC증감을 루프 전 일괄 집계
         _acct_ids = [a.login_id for a in accounts]
         _bal_ids = list(ElevenCostHistory.objects.filter(seller_id__in=_acct_ids)
@@ -866,10 +882,7 @@ class ElevenSummaryView(views.APIView):
                 seller['cash'] = ofs.cash
                 seller['point'] = ofs.point
                 seller['ad_balance'] = ofs.ad_balance
-                seller['products'] = ofs.products
                 seller['product_limit'] = ofs.product_limit
-                seller['available'] = ofs.available
-                seller['banned'] = ofs.banned
                 seller['overdue'] = ofs.overdue
                 seller['undelivered'] = ofs.undelivered
                 seller['draft'] = ofs.draft
@@ -877,14 +890,33 @@ class ElevenSummaryView(views.APIView):
                 seller['shipping'] = ofs.shipping
                 seller['inquiry'] = ofs.inquiry
                 seller['office_collected_at'] = ofs.collected_at.isoformat() if ofs.collected_at else None
-                total_cash += ofs.cash
-                total_point += ofs.point
-                total_products += ofs.products
-                total_limit += ofs.product_limit
-                total_available += ofs.available
-                total_banned += ofs.banned
-                if ofs.collected_at and (not last_collected_at or ofs.collected_at > last_collected_at):
-                    last_collected_at = ofs.collected_at
+
+            # 상품수/판매금지 — 나의상품·셀러오피스 중 더 최근에 실제로 수집된 쪽을 사용
+            mp = myprod_counts.get(sid)
+            mp_time = myprod_synced.get(sid)
+            ofs_time = ofs.collected_at if ofs else None
+            use_mp = mp is not None and (not ofs_time or (mp_time and mp_time > ofs_time))
+            if mp or ofs:
+                if use_mp:
+                    live_products = mp.get('판매중', 0)
+                    live_banned = mp.get('판매금지', 0)
+                else:
+                    live_products = ofs.products
+                    live_banned = ofs.banned
+                limit = ofs.product_limit if ofs else 0
+                live_available = max(limit - live_products, 0) if limit else (ofs.available if ofs else 0)
+                seller['products'] = live_products
+                seller['banned'] = live_banned
+                seller['available'] = live_available
+                total_products += live_products
+                total_available += live_available
+                total_banned += live_banned
+                if ofs:
+                    total_cash += ofs.cash
+                    total_point += ofs.point
+                    total_limit += ofs.product_limit
+                    if ofs.collected_at and (not last_collected_at or ofs.collected_at > last_collected_at):
+                        last_collected_at = ofs.collected_at
 
             sellers.append(seller)
             total_cpc += cpc
@@ -2046,7 +2078,7 @@ class ElevenSuspendAllNoMatchView(views.APIView):
                 ElevenMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중',
                 account_id=account_id, search=search, search_fields=['product_name', 'seller_product_code'],
             )]
-            label = 'L코드 품절'
+            label = 'L코드 품절/미확인'
         else:
             if kind == 'needs_check':
                 qs = ElevenMyProduct.objects.filter(
@@ -2098,11 +2130,20 @@ class ElevenSuspendAllNoMatchView(views.APIView):
 
 
 class GmarketSuspendAllNoMatchView(views.APIView):
-    """지마켓 미매칭/확인필요(역마진)/L코드품절 전체(판매중만) 판매중지 — ElevenSuspendAllNoMatchView와 동일 패턴."""
+    """지마켓 미매칭/확인필요(역마진)/L코드품절 전체(판매중만) 판매중지 — ElevenSuspendAllNoMatchView와 동일 패턴.
+    run_delete 내부 guard.preflight가 동시실행을 막긴 하지만, 이미 실행 중일 때도 뷰는 무조건
+    '시작됨'을 반환해 버튼을 눌러도 실제로는 아무 진행 없이 조용히 거부되는 것처럼 보였다
+    (2026-08-22 — 버튼 누를 때마다 처음부터 다시 도는 것처럼 느껴진 원인). 여기서 먼저 확인하고 막는다."""
     def post(self, request):
         import json, subprocess
         from django.db.models import F
         from apps.cpc.models import GmarketMyProduct, protected_login_ids
+
+        pid, busy = _crawl_lock_busy(GMARKET_CRAWL_LOCKFILE)
+        if busy:
+            return Response({'status': 'blocked',
+                              'message': f'⛔ 이미 다른 지마켓 작업이 실행 중입니다(PID {pid}) — 끝난 뒤 다시 시도하세요.'},
+                             status=409)
 
         kind = request.data.get('kind') or 'no_match'
         account_id = request.data.get('account_id')
@@ -2116,7 +2157,7 @@ class GmarketSuspendAllNoMatchView(views.APIView):
                 GmarketMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중',
                 account_id=account_id, search=search, search_fields=['product_name', 'seller_product_code'],
             )]
-            label = 'L코드 품절'
+            label = 'L코드 품절/미확인'
         else:
             if kind == 'needs_check':
                 qs = GmarketMyProduct.objects.filter(
@@ -3910,22 +3951,28 @@ class GmarketSuspendSelectedView(views.APIView):
 
 
 class GmarketCrawlStatusView(views.APIView):
-    """지마켓 상품별광고비(ad_report) 수집 상태 — 오늘 갱신/미갱신 계정 + 최근 에러(원인)."""
+    """지마켓 상품별광고비(ad_report) 수집 상태 — 오늘 갱신/미갱신 계정 + 최근 에러(원인).
+    running: 재크롤은 백엔드 스레드로 돌아 ps로 못 잡으므로 파일마커(guard.adreport_busy_info) 기준."""
     def get(self, request):
         from apps.cpc.models import GmarketProductAdCost as G, CrawlerAccount, CrawlerLog
+        from apps.cpc import eleven_block_guard as guard
         from django.db.models import Max
         from datetime import timedelta
-        import subprocess
         today = timezone.localdate()
         kst = timezone.get_current_timezone()
         masters = [a.login_id for a in CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
                    if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
         last = {r['login_id']: r['m'] for r in
                 G.objects.filter(login_id__in=masters).values('login_id').annotate(m=Max('collected_at'))}
+        # 광고 미집행(0건) 계정은 저장할 행이 없어 collected_at이 안 남는다 — 완료 로그로도 확인.
+        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+        checked_today = set(CrawlerLog.objects.filter(
+            platform='gmarket', account_id__in=masters, created_at__gte=today_start,
+            message__contains='상품별광고비 수집 완료').values_list('account_id', flat=True))
         done, failed = [], []
         for m in masters:
             lm = last.get(m)
-            if lm and lm.astimezone(kst).date() == today:
+            if (lm and lm.astimezone(kst).date() == today) or m in checked_today:
                 done.append(m)
             else:
                 failed.append({'login_id': m,
@@ -3936,14 +3983,10 @@ class GmarketCrawlStatusView(views.APIView):
                  'at': l.created_at.astimezone(kst).strftime('%H:%M')}
                 for l in CrawlerLog.objects.filter(platform='gmarket', level='error', created_at__gte=since)
                 .order_by('-created_at')[:15]]
-        running = False
-        try:
-            running = 'crawl_gmarket_ad_report' in subprocess.run(
-                ['ps', '-eo', 'args'], capture_output=True, text=True).stdout
-        except Exception:
-            pass
+        busy = guard.adreport_busy_info('gmarket')
         return Response({'total': len(masters), 'done': len(done),
-                         'failed': failed, 'errors': errs, 'running': running})
+                         'failed': failed, 'errors': errs, 'running': bool(busy),
+                         'running_since': busy['since'] if busy else None})
 
 
 class GmarketRecrawlView(views.APIView):
@@ -3960,6 +4003,14 @@ class GmarketRecrawlView(views.APIView):
             adrun(login_ids=accounts, with_keywords=with_keywords)
         th.Thread(target=run, daemon=True).start()
         return Response({'status': 'started', 'count': len(accounts), 'accounts': accounts})
+
+
+class GmarketRecrawlStopView(views.APIView):
+    """상품별광고비 재크롤 강제중지 — 실행 중인 크롤이 다음 계정 처리 전에 멈춘다."""
+    def post(self, request):
+        from apps.cpc import eleven_block_guard as guard
+        guard.request_adreport_stop(platform='gmarket')
+        return Response({'status': 'stop_requested'})
 
 
 class GmarketDashboardView(views.APIView):
@@ -4904,6 +4955,63 @@ class MyProductsAllView(views.APIView):
             'needs_check_total': needs_check_total,
             'no_match_total': no_match_total,
         })
+
+
+class MyProductsStatusSummaryView(views.APIView):
+    """나의상품(11번가+지마켓+스마트스토어) 상태별 요약 — 전체/판매중/품절/판매중지/판매대기(승인대기)/판매금지/판매불가.
+    플랫폼마다 상태값 표기가 달라(11st/gmarket은 한글, smartstore는 영문코드) 공통 카테고리로 정규화해 합산.
+    캐시 120초(대량 COUNT 여러 번이라 페이지 반복조회 시 비용 절감)."""
+    def get(self, request):
+        from django.core.cache import cache
+        from .models import ElevenMyProduct, GmarketMyProduct
+        from apps.smartstore.models import SmartStoreProduct
+
+        cache_key = 'myproducts_status_summary_v1'
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
+
+        CATS = ['on_sale', 'soldout', 'stopped', 'pending', 'banned', 'unavailable']
+        LABELS = {
+            'on_sale': '판매중', 'soldout': '품절', 'stopped': '판매중지',
+            'pending': '판매대기(승인대기)', 'banned': '판매금지', 'unavailable': '판매불가',
+        }
+
+        def zero():
+            return {k: 0 for k in CATS}
+
+        by_platform = {'11st': zero(), 'gmarket': zero(), 'smartstore': zero()}
+
+        for r in ElevenMyProduct.objects.values('status_type').annotate(c=Count('id')):
+            m = {'판매중': 'on_sale', '품절': 'soldout', '판매중지': 'stopped', '판매금지': 'banned'}
+            key = m.get(r['status_type'])
+            if key:
+                by_platform['11st'][key] += r['c']
+
+        for r in GmarketMyProduct.objects.exclude(status_type='삭제됨').values('status_type').annotate(c=Count('id')):
+            m = {'판매중': 'on_sale', '판매중지': 'stopped', '판매금지': 'banned', '판매불가': 'unavailable'}
+            key = m.get(r['status_type'])
+            if key:
+                by_platform['gmarket'][key] += r['c']
+
+        for r in SmartStoreProduct.objects.values('status_type').annotate(c=Count('id')):
+            m = {'SALE': 'on_sale', 'OUTOFSTOCK': 'soldout', 'SUSPENSION': 'stopped',
+                 'UNADMISSION': 'pending', 'PROHIBITION': 'banned'}
+            key = m.get(r['status_type'])
+            if key:
+                by_platform['smartstore'][key] += r['c']
+
+        total_by_cat = {k: sum(by_platform[p][k] for p in by_platform) for k in CATS}
+        grand_total = sum(total_by_cat.values())
+
+        result = {
+            'labels': LABELS,
+            'total': grand_total,
+            'by_category': total_by_cat,
+            'by_platform': by_platform,
+        }
+        cache.set(cache_key, result, 120)
+        return Response(result)
 
 
 class GmarketMyAccountsView(views.APIView):

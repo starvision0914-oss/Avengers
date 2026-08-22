@@ -4,6 +4,7 @@ import { useSt11Data } from '../../hooks/useSt11Data';
 import DateNavigator from '../../components/cpc/DateNavigator';
 import DateRangePicker from '../../components/cpc/DateRangePicker';
 import St11SummaryBar from '../../components/st11/St11SummaryBar';
+import PlatformStatusBreakdown from '../../components/PlatformStatusBreakdown';
 import St11SummaryTable from '../../components/st11/St11SummaryTable';
 import St11MobileCard from '../../components/st11/St11MobileCard';
 import St11CostModal from '../../components/st11/St11CostModal';
@@ -249,6 +250,7 @@ export default function St11Dashboard() {
               totals={summary.totals} delta={delta} lastCollected={lastCollected}
               periodMode={periodMode} date={date} onPick={pickPeriod} onRefresh={refresh}
             />
+            <PlatformStatusBreakdown platform="11st" />
 
             {/* 크롤링 현황 바 (한 줄) */}
             {crawlerStats && (

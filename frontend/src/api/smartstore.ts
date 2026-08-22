@@ -275,11 +275,17 @@ export async function downloadProductExcel(params: {
   account_ids?: number[];
   statuses?: string[];
   w_only?: boolean;
+  no_match?: boolean;
+  needs_check?: boolean;
+  needs_check_pct?: number;
 }): Promise<void> {
   const sp = new URLSearchParams();
   params.account_ids?.forEach(id => sp.append('account_ids', String(id)));
   params.statuses?.forEach(s => sp.append('statuses', s));
   if (params.w_only) sp.append('w_only', '1');
+  if (params.no_match) sp.append('no_match', '1');
+  if (params.needs_check) sp.append('needs_check', '1');
+  if (params.needs_check_pct) sp.append('needs_check_pct', String(params.needs_check_pct));
 
   const { data, headers } = await api.get(`/smartstore/products/excel/?${sp.toString()}`, {
     responseType: 'blob',

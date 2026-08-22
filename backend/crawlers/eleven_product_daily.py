@@ -219,18 +219,14 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                 try:
                     driver = _mk_driver()
                     collect_account(driver, a.login_id, a.password_enc, d0, d1, log)
-                    # 같은 세션에서 기간별 보고서+구글시트 (로그인 1회 공유). 당월 광고비 있는 계정만 업로드.
+                    # 같은 세션에서 기간별 보고서+구글시트 (로그인 1회 공유).
+                    # 광고비 0원 계정도 스킵하지 않고 업로드(0으로 표시) — 예전엔 0원이면 건너뛰어서
+                    # 시트에 그 계정 행 자체가 안 남거나 예전 값이 그대로 남아있는 것처럼 보였음(2026-08-22).
                     if with_gsheet and sheet is not None:
                         try:
-                            from apps.cpc.models import St11ProductDaily
-                            from django.db.models import Sum
-                            mc = St11ProductDaily.objects.filter(
-                                eleven_id=a.login_id, stat_date__gte=g_d0, stat_date__lte=g_d1
-                            ).aggregate(c=Sum('cost'))['c'] or 0
-                            if mc > 0:
-                                from .eleven_period_report import collect_period_for_account
-                                collect_period_for_account(driver, a.login_id, a.password_enc,
-                                                           g_period, g_d0, g_d1, sheet, log)
+                            from .eleven_period_report import collect_period_for_account
+                            collect_period_for_account(driver, a.login_id, a.password_enc,
+                                                       g_period, g_d0, g_d1, sheet, log)
                         except Exception as ge:
                             log(f'[{a.login_id}] 구글시트 실패(상품수집은 성공): {str(ge)[:120]}')
                     ok = True

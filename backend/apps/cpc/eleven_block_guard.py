@@ -480,6 +480,92 @@ def clear_adcontrol_busy(platform='gmarket'):
         pass
 
 
+# ===== 상품별광고비(ad_report) 실행중 마커 + 강제중지 플래그 =====
+# 재크롤 버튼은 백엔드 스레드로 돌아 ps로는 못 잡아 대시보드 진행상태가 틀리던 문제 —
+# adcontrol과 동일한 파일마커 방식으로 별도 관리(2026-08-22).
+def _adreport_busy_path(platform='gmarket'):
+    return Path(f'/tmp/avengers_{platform}_adreport.busy')
+
+
+def adreport_busy_info(platform='gmarket', stale_minutes=240):
+    """상품별광고비 크롤 실행중이면 {'pid','name','since'} 반환, 아니면 None.
+    죽은 pid거나 stale_minutes 초과(락대기 최대 3시간+크롤 시간 감안)한 마커는 스테일로 자동 해제."""
+    try:
+        p = _adreport_busy_path(platform)
+        if not p.exists():
+            return None
+        raw = (p.read_text() or '').strip().split('|')
+        pid = int(raw[0]) if raw and raw[0].isdigit() else 0
+        name = raw[1] if len(raw) > 1 else '상품별광고비'
+        since = raw[2] if len(raw) > 2 else ''
+        alive = False
+        if pid:
+            try:
+                import os as _os
+                _os.kill(pid, 0)
+                alive = True
+            except Exception:
+                alive = False
+        too_old = False
+        if since:
+            try:
+                import datetime as _dt
+                from django.utils import timezone as _tz
+                age = (_tz.now() - _dt.datetime.fromisoformat(since)).total_seconds() / 60.0
+                too_old = age > stale_minutes
+            except Exception:
+                too_old = False
+        if (not alive) or too_old:
+            clear_adreport_busy(platform)
+            return None
+        return {'pid': pid, 'name': name, 'since': since}
+    except Exception:
+        return None
+
+
+def set_adreport_busy(name, platform='gmarket'):
+    try:
+        import os as _os
+        from django.utils import timezone as _tz
+        _adreport_busy_path(platform).write_text(f'{_os.getpid()}|{name}|{_tz.now().isoformat()}')
+    except Exception:
+        pass
+
+
+def clear_adreport_busy(platform='gmarket'):
+    try:
+        p = _adreport_busy_path(platform)
+        if p.exists():
+            p.unlink()
+    except Exception:
+        pass
+
+
+def _adreport_stop_path(platform='gmarket'):
+    return Path(f'/tmp/avengers_{platform}_adreport_stop')
+
+
+def request_adreport_stop(platform='gmarket'):
+    """강제중지 요청 — 실행 중인 상품별광고비 크롤이 다음 계정 전에 멈춘다."""
+    try:
+        _adreport_stop_path(platform).write_text('stop')
+    except Exception:
+        pass
+
+
+def is_adreport_stop(platform='gmarket'):
+    return _adreport_stop_path(platform).exists()
+
+
+def clear_adreport_stop(platform='gmarket'):
+    try:
+        p = _adreport_stop_path(platform)
+        if p.exists():
+            p.unlink()
+    except Exception:
+        pass
+
+
 def live_reachable(timeout=10, platform='11st'):
     """해당 플랫폼 사이트에 실제로 닿는지 단건 확인 (HTTP 응답이 오면 도달)."""
     import urllib.request
