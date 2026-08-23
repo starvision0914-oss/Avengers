@@ -120,3 +120,9 @@
 - [11번가 전략설정 캠페인 조회 레이스](project_11st_ad_strategy_campaign_race.md) — 캠페인 생성 직후 조회하면 11번가서버 반영지연으로 0개. list_campaigns 재시도(8초×2) 추가·pm2 재시작(2026-08-12)
 - [지마켓 상품별광고비 락충돌 전체스킵](project_gmarket_ad_report_lock_collision.md) — 08:01 간편ON과 08:20 상품별광고비 크론 겹침→락대기 30분초과시 25계정 전부 "실패" 표시(개별실패 아님). 조치 보류(지켜보기), 재크롤 버튼으로 해결
 - [지마켓 상품별광고비 상태표시 3종 수정](project_gmarket_ad_report_status_fixes.md) — 실행중 ps오판→파일마커, 강제중지 버튼 신설, 광고0원계정 상시"실패"오표시→완료로그 병행판정(2026-08-22)
+- [멈춤보고 전 교차확인](feedback_verify_before_reporting_stopped.md) — 로그파일 mtime만 보고 "멈췄다" 단정 금지, DB최신기록+워치독크론로그까지 교차확인 후 보고(L코드 사례 2026-08-23)
+- [유진대기업 이용정지 제외](project_ss_jujindaegieop_suspended.md) — 계정17 네이버 이용정지로 is_active=False 처리, ID/PW/API키 보존, 해제확인시 재활성화
+- [지마켓 판매중지 로그성공≠실제반영](project_gmarket_suspend_success_not_sticking.md) — 미매칭판매중지 로그엔 ok:True/대량stopped인데 실제DB엔 484건만 반영(잔여34,679건). 근본원인 확정: stop_only모드 재조회검증 없이 클릭성공=성공판정+야간크롤이 매일 진짜상태로 원복
+- [롯데온 미매칭 인프라 구축](project_lotteon_nomatch_suspend.md) — purchase_cost필드+매칭함수+미매칭필터 구축(2026-08-23), 실측 SALE미매칭 0건
+- [롯데온 판매중지는 셀러가 못함](project_lotteon_stp_not_seller_action.md) — 판매중지(STP)=롯데 법령/정책위반 강제조치 전용, 셀러가 쓸수있는 상태변경은 판매중/품절/판매종료 3개뿐(판매중지 옵션 자체가 없음). 실사이트 UI셀렉터 확보완료(2FA 불필요), 목표상태를 품절로 할지 사용자확인 필요
+- [tmxkql111/222 지마켓·롯데온 공용ID](project_lotteon_gmarket_shared_loginid.md) — 이 로그인ID는 두 플랫폼에 다 등록돼있어 오류보고시 플랫폼 헷갈리기 쉬움. 실제 8/23 오류는 롯데온 2FA실패였는데 지마켓으로 오보고한 사례

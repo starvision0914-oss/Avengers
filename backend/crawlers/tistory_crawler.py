@@ -355,7 +355,7 @@ def run_publish(account, title: str, content: str, tags: str = '', category: str
     from apps.cpc import eleven_block_guard as guard
     from .browser import create_driver, stop_display
 
-    ok, reason = guard.preflight('티스토리발행', platform='tistory', wait=True, wait_timeout=1800)
+    ok, reason = guard.preflight('티스토리발행', platform='tistory', wait=True, wait_timeout=10800)
     if not ok:
         if log_fn:
             log_fn(f'⛔ preflight 차단: {reason}')

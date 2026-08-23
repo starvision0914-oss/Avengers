@@ -168,14 +168,26 @@ def _login(driver, login_id, password):
         return False
 
 def _close_popups(driver):
-    for sel in ['.popup-close', '.btn-close', '.layer-close']:
-        for el in driver.find_elements(By.CSS_SELECTOR, sel):
-            try: el.click()
-            except: pass
-    for btn in driver.find_elements(By.TAG_NAME, 'button'):
-        if btn.text.strip() in ('닫기', 'close', '확인'):
-            try: btn.click()
-            except: pass
+    # 팝업 후보 3종(.popup-close 등) 대부분 없음 — implicit_wait(10초, 기본값)가 걸린 채면
+    # find_elements 빈 결과마다 10초씩 헛대기(다른 11번가 크롤에서 실측된 것과 동일 패턴).
+    try:
+        driver.implicitly_wait(0)
+    except Exception:
+        pass
+    try:
+        for sel in ['.popup-close', '.btn-close', '.layer-close']:
+            for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                try: el.click()
+                except: pass
+        for btn in driver.find_elements(By.TAG_NAME, 'button'):
+            if btn.text.strip() in ('닫기', 'close', '확인'):
+                try: btn.click()
+                except: pass
+    finally:
+        try:
+            driver.implicitly_wait(10)
+        except Exception:
+            pass
     try:
         alert = driver.switch_to.alert
         alert.accept()

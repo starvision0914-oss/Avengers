@@ -96,6 +96,7 @@ class LotteonMyProduct(models.Model):
     status_code = models.CharField(max_length=20, blank=True, default='', help_text='slStatCd (SALE 등)')
     seller_product_code = models.CharField(max_length=100, blank=True, default='', help_text='epdNo(판매자내부상품번호) — 화면 그리드 컬럼과 대조 확인(2026-08-20). cmNo는 상품별 값이 아니라 거래처 그룹코드라 오매핑이었음')
     category_path = models.CharField(max_length=300, blank=True, default='', help_text='dcatNmPath')
+    purchase_cost = models.BigIntegerField(null=True, blank=True, help_text='예비상품(오너클랜) 마켓가 — seller_product_code(W코드) 매칭. NULL=카탈로그 미매칭')
     synced_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

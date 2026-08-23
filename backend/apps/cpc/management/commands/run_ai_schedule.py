@@ -132,7 +132,7 @@ class Command(BaseCommand):
         # 19:33 실행이 19시/20시 광고비수집 크론과 겹칠 수 있음(2026-07-05, 30분 대기초과로 스킵된 적 있음)
         # → 무한정 오래 기다리는 대신 30분만 기다리고, 그래도 안 풀리면 포기하고 스킵.
         # 이 경우를 대비해 20:15에 재시도 크론을 별도로 둠(cron_ai_on_retry.sh).
-        ok, reason = guard.preflight('지마켓AI광고ON', platform='gmarket', wait=True, wait_timeout=1800)
+        ok, reason = guard.preflight('지마켓AI광고ON', platform='gmarket', wait=True, wait_timeout=10800)
         if not ok:
             guard.clear_adcontrol_busy('gmarket')
             self._log(f'⏭️ AI ON 건너뜀 — {reason}')

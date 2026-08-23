@@ -47,7 +47,7 @@ def run_combined(action, ai_accounts=None, cpc2_accounts=None, source='schedule'
         _log(log_fn, '⏭️ 이미 광고제어 실행 중 — 중복 방지로 스킵')
         return
 
-    ok, reason = guard.preflight('지마켓광고통합제어', platform='gmarket', wait=True, wait_timeout=1800)
+    ok, reason = guard.preflight('지마켓광고통합제어', platform='gmarket', wait=True, wait_timeout=10800)
     if not ok:
         guard.clear_adcontrol_busy('gmarket')
         _log(log_fn, f'⏭️ 건너뜀 — {reason}')

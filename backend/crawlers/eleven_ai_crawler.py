@@ -97,10 +97,22 @@ def _dismiss_popups(driver):
         alert.accept()
     except NoAlertPresentException:
         pass
-    for sel in ["div.MuiDialog-root button", "div.MuiModal-root button", "button[aria-label='닫기']"]:
-        for el in driver.find_elements(By.CSS_SELECTOR, sel):
-            try: el.click(); time.sleep(0.3)
-            except: pass
+    # 팝업 후보 3종 대부분 없음 — implicit_wait(10초, UC드라이버 경로)가 걸린 채면
+    # find_elements 빈 결과마다 10초씩 헛대기(다른 11번가 크롤에서 실측된 것과 동일 패턴).
+    try:
+        driver.implicitly_wait(0)
+    except Exception:
+        pass
+    try:
+        for sel in ["div.MuiDialog-root button", "div.MuiModal-root button", "button[aria-label='닫기']"]:
+            for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                try: el.click(); time.sleep(0.3)
+                except: pass
+    finally:
+        try:
+            driver.implicitly_wait(10)
+        except Exception:
+            pass
 
 
 def _do_login(driver, login_id, password):

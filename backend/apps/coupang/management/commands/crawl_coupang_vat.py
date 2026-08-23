@@ -32,7 +32,7 @@ class Command(BaseCommand):
         if not accounts:
             return
 
-        ok, reason = guard.preflight('쿠팡부가세수집', platform='coupang', wait=True, wait_timeout=1800)
+        ok, reason = guard.preflight('쿠팡부가세수집', platform='coupang', wait=True, wait_timeout=10800)
         if not ok:
             self.stdout.write(self.style.ERROR(f'[쿠팡] 락 획득 실패: {reason}'))
             return

@@ -46,20 +46,30 @@ def _clear_dl():
 
 def _set_period_thismonth(driver):
     from selenium.webdriver.common.by import By
-    for sel in ['#dvSearchControl i.icon_calendar', 'i.icon_calendar', '#displayDate']:
-        els = driver.find_elements(By.CSS_SELECTOR, sel)
-        if els:
-            driver.execute_script("arguments[0].click();", els[0]); break
-    time.sleep(1.5)
-    pre = driver.find_elements(By.CSS_SELECTOR, "a[data-type='TM']")   # 이번달
-    if pre:
-        driver.execute_script("arguments[0].click();", pre[0]); time.sleep(1)
+    # ★ 셀렉터를 여러 개 순서대로 시도하는데, 앞쪽이 안 맞으면 find_elements 빈 결과가
+    # 전역 implicit_wait(10초)를 매번 다 채운다 — 이 함수 하나가 53초까지 걸렸다
+    # (2026-08-23 실측: 53.3s → 3.1s). 이 요소들은 있으면 즉시 렌더되므로 0으로 낮췄다 복원.
     try:
-        driver.execute_script("CalendarLayer.ApplyCalendarDate();")
-    except Exception:
-        btn = driver.find_elements(By.CSS_SELECTOR, "button.btn_apply")
-        if btn:
-            driver.execute_script("arguments[0].click();", btn[0])
+        driver.implicitly_wait(0)
+        for sel in ['#dvSearchControl i.icon_calendar', 'i.icon_calendar', '#displayDate']:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            if els:
+                driver.execute_script("arguments[0].click();", els[0]); break
+        time.sleep(1.5)
+        pre = driver.find_elements(By.CSS_SELECTOR, "a[data-type='TM']")   # 이번달
+        if pre:
+            driver.execute_script("arguments[0].click();", pre[0]); time.sleep(1)
+        try:
+            driver.execute_script("CalendarLayer.ApplyCalendarDate();")
+        except Exception:
+            btn = driver.find_elements(By.CSS_SELECTOR, "button.btn_apply")
+            if btn:
+                driver.execute_script("arguments[0].click();", btn[0])
+    finally:
+        try:
+            driver.implicitly_wait(10)
+        except Exception:
+            pass
     time.sleep(1.5)
     sd = driver.execute_script("var e=document.getElementById('searchSDT');return e?(e.innerText||e.textContent||''):'';")
     ed = driver.execute_script("var e=document.getElementById('searchEDT');return e?(e.innerText||e.textContent||''):'';")
@@ -196,23 +206,32 @@ def _select_seller_on_page(driver, target_seller, log_fn=None):
     """ESM 광고센터 페이지의 셀러 드롭다운으로 계정 전환 시도. 성공하면 True."""
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import Select
-    for sel_id in ['SellerId', 'sellerId']:
-        els = driver.find_elements(By.ID, sel_id)
-        if not els:
-            continue
+    # 두 후보 id를 순서대로 시도 — 앞쪽이 없는 페이지에서는 find_elements 빈 결과가
+    # implicit_wait(10초)를 그대로 다 먹는다(셀러전환 실패 계정이 유독 느렸던 원인).
+    try:
+        driver.implicitly_wait(0)
+        for sel_id in ['SellerId', 'sellerId']:
+            els = driver.find_elements(By.ID, sel_id)
+            if not els:
+                continue
+            try:
+                sel = Select(els[0])
+                opts = [o.get_attribute('value') for o in sel.options]
+                if target_seller not in opts:
+                    _log(log_fn, f'  셀러 드롭다운에 {target_seller} 없음 (목록: {opts})')
+                    return False
+                sel.select_by_value(target_seller)
+                time.sleep(1)
+                _log(log_fn, f'  셀러 전환 → {target_seller} (#SellerId)')
+                return True
+            except Exception as e:
+                _log(log_fn, f'  셀러 전환 실패 (#{sel_id}): {str(e)[:80]}')
+        return False
+    finally:
         try:
-            sel = Select(els[0])
-            opts = [o.get_attribute('value') for o in sel.options]
-            if target_seller not in opts:
-                _log(log_fn, f'  셀러 드롭다운에 {target_seller} 없음 (목록: {opts})')
-                return False
-            sel.select_by_value(target_seller)
-            time.sleep(1)
-            _log(log_fn, f'  셀러 전환 → {target_seller} (#SellerId)')
-            return True
-        except Exception as e:
-            _log(log_fn, f'  셀러 전환 실패 (#{sel_id}): {str(e)[:80]}')
-    return False
+            driver.implicitly_wait(10)
+        except Exception:
+            pass
 
 
 def crawl_account(driver, login_id, year, month, log_fn=None, sub_login_ids=None, seller_override=None):

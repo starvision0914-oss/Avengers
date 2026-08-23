@@ -404,7 +404,7 @@ def run_vat_accounts(account_filter=None, start_ym=None, end_ym=None, log_fn=Non
     # crawl_gmarket_adcost 등과 진짜 동시 크롬 실행이 됐던 문제(2026-07-22 실측). wait=True로
     # 다른 크롤 끝날 때까지 대기 후 진행(예약 크롤이므로 스킵 대신 대기).
     from apps.cpc import eleven_block_guard as guard
-    ok_lock, reason = guard.preflight('지마켓부가세', platform='gmarket', wait=True, wait_timeout=1800)
+    ok_lock, reason = guard.preflight('지마켓부가세', platform='gmarket', wait=True, wait_timeout=10800)
     if not ok_lock:
         log(f"⛔ preflight 차단: {reason}")
         return {'ok': 0, 'failed': 0, 'total': 0, 'skipped': reason}

@@ -44,6 +44,7 @@ _REACH_URL = {
     'coupang': 'https://www.coupang.com/',
     'smartstore': 'https://smartstore.naver.com/',
     'lotteon': 'https://store.lotteon.com/',
+    'lotteon': 'https://store.lotteon.com/',
     'tistory': 'https://www.tistory.com/',
 }
 
@@ -601,7 +602,7 @@ def notify_problem(name, message):
     _send_telegram_alert(f'🔴 [예약크롤 {name}] {message}')
 
 
-def preflight(name, wait=False, wait_timeout=1800, poll=20, platform='11st'):
+def preflight(name, wait=False, wait_timeout=10800, poll=20, platform='11st'):
     """크롤 시작 전 통합 점검. (ok, reason). 모든 점검은 platform 단위로 분리된다.
     ① 이미 차단 중 → 중단  ② 해당 플랫폼 접속 불가 → 차단설정+중단  ③ 같은 플랫폼 다른 크롤 실행 중 → 중단.
     서로 다른 플랫폼(11st ∥ gmarket)은 각자 락이라 동시 실행 가능.

@@ -557,6 +557,30 @@ def _detect_seller_no(driver, log):
     return None
 
 
+PRODUCT_COUNT_URL = 'https://soffice.11st.co.kr/view/8006'
+TOTAL_COUNT_XPATH = '/html/body/div[3]/div[1]/form/div/div[1]/ul/li[1]/a/em'
+
+
+def _get_total_product_count(driver, log):
+    """'상품조회/수정' 화면의 '전체 상품 수' 탭에서 총 등록상품수를 읽어온다.
+    (2026-08-23: 계정 자체가 11번가에서 제재/삭제되어 전체 0건인데도 대량엑셀 생성을
+    기다리다 매번 시간초과로 실패하던 계정 다수 발견 → 다운로드 전에 미리 걸러냄)
+    조회 실패 시 None(판단불가) 반환 — 오판으로 다운로드를 건너뛰지 않도록 안전장치."""
+    try:
+        driver.get(PRODUCT_COUNT_URL)
+        time.sleep(3)
+        _switch_to_first_iframe(driver)
+        el = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, TOTAL_COUNT_XPATH)))
+        m = re.search(r'([\d,]+)', el.text)
+        if not m:
+            return None
+        return int(m.group(1).replace(',', ''))
+    except Exception as e:
+        log(f'전체 상품수 조회 실패(판단불가, 다운로드 계속): {e}')
+        return None
+
+
 def _excel_download_today(driver, account, log):
     """대량엑셀 생성요청 → 오늘자 '파일 생성 완료' 대기 → 다운로드. 파일경로 반환."""
     sn = _detect_seller_no(driver, log)
@@ -695,6 +719,15 @@ def _extract_and_parse(fp, log):
 def _run_for_account(driver, account, log):
     """단일 계정 처리(대량엑셀 방식). 성공 시 (upserted, total), 실패 시 예외.
     (로그인은 _login_for_account 로 분리 — 호출자가 접속 재시도를 담당)"""
+    total_cnt = _get_total_product_count(driver, log)
+    log(f'전체 상품수: {total_cnt if total_cnt is not None else "판단불가"}')
+    if total_cnt == 0:
+        from apps.cpc.models import ElevenMyProduct
+        log('전체 상품수 0건 → 받을 상품 없음, 다운로드 생략')
+        marked = ElevenMyProduct.objects.filter(account=account).exclude(
+            status_type__in=['판매중지', '판매종료', '품절']).update(status_type='판매중지')
+        log(f'기존 데이터 {marked}건 판매중지로 정정')
+        return marked, 0
     try:
         fp = _excel_download_today(driver, account, log)
     except Exception as e:
@@ -886,6 +919,10 @@ def run_all_accounts(log_fn=None, account_filter=None, only_no_api_key=True, for
             # ── 접속 성공 → 상품 수집 ──
             consecutive_block = 0
             account.reset_connect_fail()
+            try:
+                guard.notify_success(login_id, 'connect')
+            except Exception:
+                pass
             try:
                 upserted, total_found = _run_for_account(driver, account, log)
                 account.fail_count = 0

@@ -14,3 +14,11 @@ class Command(BaseCommand):
             account_filter=options.get('accounts'),
         )
         self.stdout.write(self.style.SUCCESS(f'완료: {result}'))
+
+        # 구매원가(예비상품 마켓가) 비정규화 컬럼 갱신 → 나의상품 미매칭/구매원가 판정용
+        try:
+            from apps.cpc.eleven_my_product_service import refresh_lotteon_purchase_costs
+            n = refresh_lotteon_purchase_costs()
+            self.stdout.write(self.style.SUCCESS(f'구매원가 갱신: {n}건'))
+        except Exception as e:
+            self.stdout.write(self.style.WARNING(f'구매원가 갱신 스킵(오류): {e}'))

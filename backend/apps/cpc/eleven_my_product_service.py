@@ -718,6 +718,48 @@ def refresh_smartstore_purchase_costs(codes=None):
         return updated
 
 
+def refresh_lotteon_purchase_costs(codes=None):
+    """lotteon_my_product.purchase_cost 를 예비상품(ownerclan) 마켓가로 갱신 — 11번가/지마켓/스마트스토어와 동일 패턴(set-based JOIN).
+    seller_product_code(epdNo)=ownerclan.product_code 매칭.
+    - codes=None: 전체 갱신
+    - codes=[...]: 해당 예비상품 코드와 매칭되는 행만 갱신"""
+    from django.db import connection
+    code_list = None
+    if codes is not None:
+        code_list = [c for c in {str(x).strip() for x in codes} if c]
+        if not code_list:
+            return 0
+    with connection.cursor() as c:
+        if code_list is None:
+            c.execute("""
+                UPDATE lotteon_my_product l
+                JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(l.seller_product_code, '^(WDM_|AUTO_)', '')
+                SET l.purchase_cost = NULLIF(o.market_price, 0)
+                WHERE l.seller_product_code <> ''
+            """)
+            updated = c.rowcount
+            c.execute("""
+                UPDATE lotteon_my_product l
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(l.seller_product_code, '^(WDM_|AUTO_)', '')
+                SET l.purchase_cost = NULL
+                WHERE l.purchase_cost IS NOT NULL
+                  AND (l.seller_product_code = '' OR o.product_code IS NULL OR o.market_price = 0)
+            """)
+            return updated
+        updated = 0
+        for i in range(0, len(code_list), 5000):
+            chunk = code_list[i:i + 5000]
+            ph = ','.join(['%s'] * len(chunk))
+            c.execute(f"""
+                UPDATE lotteon_my_product l
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(l.seller_product_code, '^(WDM_|AUTO_)', '')
+                SET l.purchase_cost = NULLIF(o.market_price, 0)
+                WHERE REGEXP_REPLACE(l.seller_product_code, '^(WDM_|AUTO_)', '') IN ({ph})
+            """, chunk)
+            updated += c.rowcount
+        return updated
+
+
 def get_my_product_detail(product_pk):
     try:
         p = ElevenMyProduct.objects.select_related('account').get(pk=product_pk)

@@ -260,7 +260,7 @@ class ProductListView(APIView):
         no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
         high_margin = request.query_params.get('high_margin') in ('1', 'true', 'True')
         needs_check_pct_raw = request.query_params.get('needs_check_pct')
-        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 10
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 20
         needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
 
         qs = SmartStoreProduct.objects.select_related('account')
@@ -749,7 +749,7 @@ class ProductExcelView(APIView):
         no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
         needs_check = request.query_params.get('needs_check') in ('1', 'true', 'True')
         needs_check_pct_raw = request.query_params.get('needs_check_pct')
-        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 10
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 20
         needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
 
         qs = SmartStoreProduct.objects.select_related('account').order_by('account__store_name', '-id')

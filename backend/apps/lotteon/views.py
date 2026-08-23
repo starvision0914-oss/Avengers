@@ -11,6 +11,59 @@ from apps.sales.models import SalesRecord
 LOTTEON_STATUS_MAP = {'SALE': '판매중', 'END': '판매종료', 'SOUT': '품절', 'STP': '판매중지'}
 LOTTEON_STATUS_REVERSE = {v: k for k, v in LOTTEON_STATUS_MAP.items()}
 
+LOTTEON_CRAWL_LOCKFILE = '/tmp/avengers_crawl_chrome_lotteon.lock'
+
+
+class LotteonSuspendAllNoMatchView(views.APIView):
+    """롯데온 미매칭 전체(판매중만) 판매종료 — Gmarket/11번가/스마트스토어 SuspendAllNoMatchView와 동일 개념.
+    단, 롯데온은 "판매중지" 상태를 판매자가 직접 설정할 수 없음(판매자센터 안내: 법령/정책위반 전용,
+    롯데 측 부여) — 판매자가 쓸 수 있는 상태는 판매중/품절/판매종료 3개뿐이고, 판매종료(END)는
+    UI에 명시된 대로 비가역(다시 되돌릴 수 없음). 사용자 확인(2026-08-23) 후 목표상태를 판매종료로 확정."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import subprocess
+        from apps.cpc.views import _write_targets_json_file, _crawl_lock_busy
+
+        pid, busy = _crawl_lock_busy(LOTTEON_CRAWL_LOCKFILE)
+        if busy:
+            return Response({'status': 'blocked',
+                              'message': f'⛔ 이미 다른 롯데온 작업이 실행 중입니다(PID {pid}) — 끝난 뒤 다시 시도하세요.'},
+                             status=409)
+
+        account_id = request.data.get('account_id')
+        search = request.data.get('search')
+
+        qs = LotteonMyProduct.objects.filter(
+            seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_code='SALE',
+        ).exclude(seller_product_code__regex=r'[가-힣]')
+        if account_id:
+            qs = qs.filter(account_id=int(account_id))
+        if search:
+            qs = qs.filter(Q(product_name__icontains=search) | Q(seller_product_code__icontains=search))
+        rows = list(qs.select_related('account').values('account__login_id', 'seller_product_code'))
+
+        acc_map = {}
+        for r in rows:
+            acc_map.setdefault(r['account__login_id'], []).append(r['seller_product_code'])
+
+        if not acc_map:
+            return Response({'status': 'blocked', 'message': '⛔ 미매칭(판매중) 대상이 없습니다.'}, status=400)
+
+        targets_file = _write_targets_json_file(acc_map)
+        script = (f"cd /home/rejoice888/Avengers/backend && /usr/bin/python3 manage.py delete_loss_lotteon "
+                  f"--targets-file '{targets_file}' --real >> /tmp/delete_loss_lotteon.log 2>&1")
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        total = sum(len(v) for v in acc_map.values())
+        msg = (f'🛑 미매칭 전체 판매종료 시작 — {len(acc_map)}계정 총 {total}개(판매중만 대상, 비가역). '
+               f'진행상황은 /tmp/delete_loss_lotteon.log 확인.')
+        return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
+
 
 class LotteonAccountsView(views.APIView):
     permission_classes = [IsAuthenticated]
@@ -38,6 +91,8 @@ class LotteonMyProductListView(views.APIView):
              'login_id': 'account__login_id', 'seller_name': 'account__store_name', 'synced_at': 'synced_at'}
 
     def get(self, request):
+        from django.core.cache import cache
+
         account_id = request.query_params.get('account_id')
         page = int(request.query_params.get('page', 1))
         per_page = int(request.query_params.get('per_page', 50))
@@ -45,6 +100,7 @@ class LotteonMyProductListView(views.APIView):
         search = request.query_params.get('search') or None
         sort = request.query_params.get('sort') or 'synced_at'
         order = request.query_params.get('order') or 'desc'
+        no_match = request.query_params.get('no_match') == '1'
 
         qs = LotteonMyProduct.objects.select_related('account')
         if account_id:
@@ -60,10 +116,27 @@ class LotteonMyProductListView(views.APIView):
             qs = qs.filter(Q(product_name__icontains=search) | Q(pd_no__icontains=search)
                             | Q(seller_product_code__icontains=search) | Q(account__login_id__icontains=search))
 
+        # 미매칭 = W코드(오너클랜 소싱)인데 예비상품 카탈로그에 그 코드 자체가 없음(purchase_cost NULL),
+        # 판매중(SALE)만 — 11번가/지마켓/스마트스토어와 동일 정의(apps/smartstore/views.py 미러링).
+        nm_key = f"lo_nomatch:{account_id}:{status_q}:{search}"
+        no_match_total = cache.get(nm_key)
+        if no_match_total is None:
+            no_match_total = (
+                qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_code='SALE')
+                  .exclude(seller_product_code__regex=r'[가-힣]')
+            ).count()
+            cache.set(nm_key, no_match_total, 120)
+
+        if no_match:
+            qs = (
+                qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_code='SALE')
+                  .exclude(seller_product_code__regex=r'[가-힣]')
+            )
+
         f = self._SORT.get(sort, 'synced_at')
         qs = qs.order_by(('-' if order == 'desc' else '') + f, '-id')
 
-        total = qs.count() if status_allowed else 0
+        total = (no_match_total if no_match else (qs.count() if status_allowed else 0))
         offset = (page - 1) * per_page
         rows = qs[offset:offset + per_page] if status_allowed else []
 
@@ -73,13 +146,14 @@ class LotteonMyProductListView(views.APIView):
             'sale_price': p.sale_price, 'stock_quantity': None,
             'status_type': p.status_code, 'status_label': LOTTEON_STATUS_MAP.get(p.status_code, p.status_code),
             'seller_product_code': p.seller_product_code, 'category': p.category_path,
-            'product_image_url': '',
+            'product_image_url': '', 'purchase_cost': p.purchase_cost,
             'synced_at': p.synced_at.isoformat() if p.synced_at else None,
         } for p in rows]
 
         return Response({
             'items': items, 'total': total, 'page': page, 'per_page': per_page,
             'total_pages': (total + per_page - 1) // per_page if total else 0,
+            'no_match_total': no_match_total,
         })
 
 

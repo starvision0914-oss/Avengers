@@ -22,6 +22,7 @@ export interface LotteonMyListResponse {
   page: number;
   per_page: number;
   total_pages: number;
+  no_match_total: number;
 }
 
 export interface LotteonAccount {
@@ -43,12 +44,14 @@ export async function fetchLotteonMyAccounts(): Promise<LotteonAccount[]> {
 export async function fetchLotteonMyProducts(
   page = 1, perPage = 50, accountId?: number,
   status?: string, search?: string, sort?: string, order: 'asc' | 'desc' = 'asc',
+  noMatch?: boolean,
 ): Promise<LotteonMyListResponse> {
   const params: Record<string, string | number> = { page, per_page: perPage };
   if (accountId) params.account_id = accountId;
   if (status) params.status = status;
   if (search) params.search = search;
   if (sort) { params.sort = sort; params.order = order; }
+  if (noMatch) params.no_match = '1';
   const { data } = await api.get<LotteonMyListResponse>('/lotteon/my/products/', { params });
   return data;
 }

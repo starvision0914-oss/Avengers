@@ -3660,7 +3660,7 @@ class ElevenMyProductListView(views.APIView):
         min_abs_pct_raw = request.query_params.get('min_abs_pct')
         min_abs_pct = float(min_abs_pct_raw) if min_abs_pct_raw not in (None, '') else None
         needs_check_pct_raw = request.query_params.get('needs_check_pct')
-        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 10
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 20
         needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
 
         # 전체 다운로드(export=1): 현재 필터에 맞는 '전체' 상품을 CSV로 스트리밍 (페이지 무관, 선택 무관)
@@ -3762,7 +3762,7 @@ class GmarketMyProductListView(views.APIView):
         min_abs_pct_raw = request.query_params.get('min_abs_pct')
         min_abs_pct = float(min_abs_pct_raw) if min_abs_pct_raw not in (None, '') else None
         needs_check_pct_raw = request.query_params.get('needs_check_pct')
-        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 10
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 20
         needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
 
         qs = GmarketMyProduct.objects.select_related('account')
@@ -3958,21 +3958,23 @@ class GmarketCrawlStatusView(views.APIView):
         from apps.cpc import eleven_block_guard as guard
         from django.db.models import Max
         from datetime import timedelta
-        today = timezone.localdate()
         kst = timezone.get_current_timezone()
         masters = [a.login_id for a in CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
                    if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
         last = {r['login_id']: r['m'] for r in
                 G.objects.filter(login_id__in=masters).values('login_id').annotate(m=Max('collected_at'))}
         # 광고 미집행(0건) 계정은 저장할 행이 없어 collected_at이 안 남는다 — 완료 로그로도 확인.
-        today_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+        # 크론(08:20)이 매일 25계정 다 도는 데 약 1시간 걸림 — '오늘 날짜'로만 판정하면
+        # 크론 시작 전(예: 07:50)에는 어제 데이터/로그밖에 없어 전 계정이 '실패'로 오판된다.
+        # 최근 26시간 이내면 정상으로 인정(다음날 크론까지 여유 포함), 그보다 오래됐으면 진짜 실패.
+        fresh_cutoff = timezone.now() - timedelta(hours=26)
         checked_today = set(CrawlerLog.objects.filter(
-            platform='gmarket', account_id__in=masters, created_at__gte=today_start,
+            platform='gmarket', account_id__in=masters, created_at__gte=fresh_cutoff,
             message__contains='상품별광고비 수집 완료').values_list('account_id', flat=True))
         done, failed = [], []
         for m in masters:
             lm = last.get(m)
-            if (lm and lm.astimezone(kst).date() == today) or m in checked_today:
+            if (lm and lm >= fresh_cutoff) or m in checked_today:
                 done.append(m)
             else:
                 failed.append({'login_id': m,
@@ -4620,7 +4622,7 @@ class MyProductsAllView(views.APIView):
         no_match = request.query_params.get('no_match') in ('1', 'true', 'True')
         dedup_on = request.query_params.get('dedup') in ('1', 'true', 'True')
         needs_check_pct_raw = request.query_params.get('needs_check_pct')
-        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 10
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 20
         needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
         if sort not in self._COMMON_SORT:
             sort = 'synced_at'

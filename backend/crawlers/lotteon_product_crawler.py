@@ -219,7 +219,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
     from apps.cpc import eleven_block_guard as guard
     from apps.lotteon.models import LotteonAccount
 
-    ok, reason = guard.preflight('롯데온상품수집', platform='lotteon')
+    ok, reason = guard.preflight('롯데온상품수집', platform='lotteon', wait=True, wait_timeout=10800)
     if not ok:
         _log(log_fn, f'사전점검 실패 — {reason}')
         return {'error': reason}

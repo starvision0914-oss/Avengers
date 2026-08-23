@@ -102,7 +102,7 @@ export default function ElevenMyProductsPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [needsCheck, setNeedsCheck] = useState(false);          // 확인필요(역마진)만 보기
   const [needsCheckTotal, setNeedsCheckTotal] = useState(0);    // 확인필요 건수(배지)
-  const [needsCheckPct, setNeedsCheckPct] = useState(10);       // 확인필요 기준 — 마켓가 대비 몇 % 이상 저가일 때 역마진으로 볼지(기본 10%)
+  const [needsCheckPct, setNeedsCheckPct] = useState(20);       // 확인필요 기준 — 마켓가 대비 몇 % 이상 저가일 때 역마진으로 볼지(기본 20%, 가격맞추기 실행기준과 통일)
   const [noMatch, setNoMatch] = useState(false);                // 미매칭(오너클랜 W코드 없음)만 보기
   const [noMatchTotal, setNoMatchTotal] = useState(0);
   const [highMargin, setHighMargin] = useState(false);          // 고마진(1.5배 이상)만 보기
@@ -185,13 +185,14 @@ export default function ElevenMyProductsPage() {
         setNoMatchTotal(r.no_match_total ?? 0);
         setHighMarginTotal(r.high_margin_total ?? 0);
       } else if (platform === 'lotteon') {
-        const r = await fetchLotteonMyProducts(page, perPage, accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder);
+        const r = await fetchLotteonMyProducts(page, perPage, accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder, noMatch);
         setItems(r.items.map(p => ({
           ...p, platform: 'lotteon', is_focused: null, market: null,
           purchase_cost: null, cost_diff: null,
         })) as any);
         setTotal(r.total);
         setTotalPages(r.total_pages);
+        setNoMatchTotal(r.no_match_total ?? 0);
       } else {
         const r = await fetchElevenMyProducts(page, perPage, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, undefined, needsCheckPct);
         setItems(r.items.map(p => ({
@@ -938,7 +939,7 @@ export default function ElevenMyProductsPage() {
             </label>
           )}
 
-          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore' || platform === 'all') && (
+          {(platform === '11st' || platform === 'gmarket' || platform === 'smartstore' || platform === 'lotteon' || platform === 'all') && (
             <button
               onClick={() => { setNoMatch(v => !v); setNeedsCheck(false); setHighMargin(false); setPage(1); }}
               title="나의상품에는 W코드가 있는데 예비상품(오너클랜) 카탈로그에는 그 코드가 없는 상품"

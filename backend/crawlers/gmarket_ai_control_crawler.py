@@ -205,7 +205,7 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
             log_fn('⏭️ 이미 광고제어 실행 중 — 중복 방지로 스킵')
         return {'results': [], 'count': 0, 'skipped': '이미 실행 중'}
 
-    ok, reason = guard.preflight('지마켓AI광고제어', platform='gmarket', wait=True, wait_timeout=1800)
+    ok, reason = guard.preflight('지마켓AI광고제어', platform='gmarket', wait=True, wait_timeout=10800)
     if not ok:
         guard.clear_adcontrol_busy('gmarket')
         if log_fn:

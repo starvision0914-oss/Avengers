@@ -140,7 +140,7 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
         qs = [a for a in qs if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
 
     # 전역락(지마켓): 크롤과 동시 실행 금지 — 진행 중이면 끝날 때까지 대기(kill_existing 충돌 방지)
-    ok, reason = guard.preflight('지마켓일반광고제어', platform='gmarket', wait=True, wait_timeout=1800)
+    ok, reason = guard.preflight('지마켓일반광고제어', platform='gmarket', wait=True, wait_timeout=10800)
     if not ok:
         if log_fn:
             log_fn(f'⏭️ 건너뜀 — {reason}')

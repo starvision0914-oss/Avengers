@@ -107,8 +107,15 @@ def _save_cookies(driver, account):
 
 def _dismiss_esm_popups(driver):
     """로그인 직후 뜨는 소프트 팝업 해제 — '하루동안 보지 않기' 체크 + 레이어 닫기.
-    (간헐적 공지/연락처 안내 팝업이 Home 진입을 가리는 경우 대응)"""
+    (간헐적 공지/연락처 안내 팝업이 Home 진입을 가리는 경우 대응)
+    ★ 팝업이 없는(대부분의) 경우 find_elements 3회가 전역 implicit_wait(10초)를 매번 다 채워서
+    호출 1번에 최대 30초가 걸렸다(2026-08-23 실측 30.08s → 0.09s). 팝업은 있으면 즉시 렌더되므로
+    이 함수 안에서만 implicit_wait를 0으로 낮췄다가 복원한다."""
     from selenium.webdriver.common.by import By
+    try:
+        driver.implicitly_wait(0)
+    except Exception:
+        pass
     try:
         for cb in driver.find_elements(By.XPATH, "//label[contains(.,'하루동안 보지') or contains(.,'오늘 하루')]"):
             if cb.is_displayed():
@@ -134,6 +141,11 @@ def _dismiss_esm_popups(driver):
                 break
     except Exception:
         pass
+    finally:
+        try:
+            driver.implicitly_wait(10)
+        except Exception:
+            pass
 
 
 def _esm_logged_in(driver):
@@ -298,16 +310,21 @@ def _get_auction_seller_id(login_id):
 
 
 def _collect_account_months(driver, login_id, months, log_fn):
-    """마스터·서브 공통 — 지마켓+옥션 월별 거래내역 수집 후 저장. (rows, ad_rows) 반환."""
+    """마스터·서브 공통 — 지마켓+옥션 월별 거래내역 수집 후 저장. (rows, ad_rows) 반환.
+    ★ fetch()는 credentials:include라 쿠키가 도메인 단위로 붙고, endpoint도
+    '/Member/Settle/' 하위 상대경로라 그 디렉터리 밑 아무 페이지에서나 호출해도 된다
+    (2026-08-23 실측: 페이지이동 없이 즉시 fetch 0.13s). 계정당 두 번씩(지마켓+옥션) 정산페이지를
+    풀 로딩하던 게 실제 지연의 대부분이었음 — 이제 이 함수 시작 시 한 번만(필요하면) 진입한다."""
     acc_rows = acc_ad = 0
     auction_sid = _get_auction_seller_id(login_id)
-    for page_url, endpoint, market, norm in (
-        (GMKT_PAGE, 'GmktSellBalanceUseListSearch', 'gmarket', _norm_gmkt),
-        (IAC_PAGE, 'IacSellBalanceUseListSearch', 'auction', _norm_iac),
+    if '/member/settle/' not in driver.current_url.lower():
+        driver.get(GMKT_PAGE)
+        time.sleep(1.5)
+        _dismiss_esm_popups(driver)
+    for endpoint, market, norm in (
+        ('GmktSellBalanceUseListSearch', 'gmarket', _norm_gmkt),
+        ('IacSellBalanceUseListSearch', 'auction', _norm_iac),
     ):
-        driver.get(page_url)
-        time.sleep(4)
-        _dismiss_esm_popups(driver)   # '고객 응대 연락처 인증' 등 소프트팝업이 정산페이지 진입 시에도 뜸(dlrmsgh012, 2026-07-14)
         save_id = auction_sid if market == 'auction' else login_id
         for sdt, edt in months:
             rows, ok = _fetch_month(driver, login_id, endpoint, str(sdt), str(edt), log_fn, norm)
@@ -333,7 +350,7 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
 
     d1 = date_to or timezone.localdate()
     d0 = date_from or date(d1.year, 1, 1)
-    ok, reason = guard.preflight('지마켓광고비', platform='gmarket', wait=wait, wait_timeout=1800)
+    ok, reason = guard.preflight('지마켓광고비', platform='gmarket', wait=wait, wait_timeout=10800)
     if not ok:
         _log(log_fn, f'⏭️ 지마켓 광고비 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}
@@ -345,6 +362,11 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
     # 로그인 실패한 서브 계정 → 마스터 처리 후 재수집
     login_failed_subs = []
     driver = None
+    # 계정당 하드 타임아웃(초) — 느린 계정 1개가 전체 배치를 지연시키는 걸 막는다(30계정×1분 예산 보장).
+    # 초과 시 이 계정은 이번 회차엔 스킵되지만 GmarketCostHistory가 멱등 upsert라 다음 회차에 다시 잡힌다.
+    PER_ACCOUNT_TIMEOUT = 60
+    import concurrent.futures as _cf
+    _executor = _cf.ThreadPoolExecutor(max_workers=1)
     try:
         for a in accounts:
             blocked, _, _ = guard.is_blocked(platform='gmarket')
@@ -358,13 +380,33 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                     # 페이지로드 무한대기 방지(기본 300s) — 계정 하나가 응답없음 상태면
                     # 그대로 15~25분씩 멈춰 전체 배치를 막았음(dlrmsgh012, 2026-07-14).
                     driver.set_page_load_timeout(25)
-                driver.delete_all_cookies()
-                if _try_cookie_login(driver, a):
-                    _log(log_fn, f'[{a.login_id}] 쿠키 로그인')
-                elif _esm_login(driver, a.login_id, a.password_enc):
-                    _log(log_fn, f'[{a.login_id}] 풀 로그인')
-                    _save_cookies(driver, a)
-                else:
+
+                def _do_account(_driver=driver, _a=a):
+                    _driver.delete_all_cookies()
+                    if _try_cookie_login(_driver, _a):
+                        _log(log_fn, f'[{_a.login_id}] 쿠키 로그인')
+                    elif _esm_login(_driver, _a.login_id, _a.password_enc):
+                        _log(log_fn, f'[{_a.login_id}] 풀 로그인')
+                        _save_cookies(_driver, _a)
+                    else:
+                        return None  # 로그인 실패
+                    rows, ad = _collect_account_months(_driver, _a.login_id, months, log_fn)
+                    return rows, ad
+
+                try:
+                    result = _executor.submit(_do_account).result(timeout=PER_ACCOUNT_TIMEOUT)
+                except _cf.TimeoutError:
+                    _log(log_fn, f'[{a.login_id}] ⏱️ {PER_ACCOUNT_TIMEOUT}초 초과 — 스킵(다음 회차에 재시도)')
+                    failed += 1
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = None
+                    # 백그라운드에서 여전히 도는 스레드는 버려두고 다음 계정으로 계속 진행
+                    continue
+
+                if result is None:
                     # 로그인 실패 — origin_id 있으면 마스터 세션 대기, 없으면 건너뜀
                     if a.gmarket_origin_id:
                         _log(log_fn, f'[{a.login_id}] 로그인 실패 → 마스터({a.gmarket_origin_id}) 세션 대기')
@@ -373,7 +415,7 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                         _log(log_fn, f'[{a.login_id}] 로그인 실패 — 건너뜀')
                         failed += 1
                     continue
-                acc_rows, acc_ad = _collect_account_months(driver, a.login_id, months, log_fn)
+                acc_rows, acc_ad = result
                 total_rows += acc_rows
                 ad_rows += acc_ad
                 done += 1
@@ -384,10 +426,14 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                     login_failed_subs.remove(sub)
                     _log(log_fn, f'[{sub.login_id}] 서브 수집 (마스터 세션)...')
                     try:
-                        s_rows, s_ad = _collect_account_months(driver, sub.login_id, months, log_fn)
+                        s_rows, s_ad = _executor.submit(
+                            _collect_account_months, driver, sub.login_id, months, log_fn
+                        ).result(timeout=PER_ACCOUNT_TIMEOUT)
                         total_rows += s_rows
                         ad_rows += s_ad
                         _log(log_fn, f'[{sub.login_id}] 서브 완료 — 거래 {s_rows}건 (광고 {s_ad}건)')
+                    except _cf.TimeoutError:
+                        _log(log_fn, f'[{sub.login_id}] ⏱️ 서브 {PER_ACCOUNT_TIMEOUT}초 초과 — 스킵')
                     except Exception as se:
                         _log(log_fn, f'[{sub.login_id}] 서브 오류: {str(se)[:120]}')
             except Exception as e:

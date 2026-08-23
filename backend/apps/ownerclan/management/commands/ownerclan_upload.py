@@ -44,6 +44,7 @@ class Command(BaseCommand):
             try:
                 from apps.cpc.eleven_my_product_service import (
                     refresh_purchase_costs, refresh_gmarket_purchase_costs, refresh_smartstore_purchase_costs,
+                    refresh_lotteon_purchase_costs,
                 )
                 n = refresh_purchase_costs(codes=result.get('codes'))
                 result['purchase_cost_refreshed'] = n
@@ -51,6 +52,8 @@ class Command(BaseCommand):
                 result['gmarket_purchase_cost_refreshed'] = gn
                 sn = refresh_smartstore_purchase_costs(codes=result.get('codes'))
                 result['smartstore_purchase_cost_refreshed'] = sn
+                ln = refresh_lotteon_purchase_costs(codes=result.get('codes'))
+                result['lotteon_purchase_cost_refreshed'] = ln
             except Exception:
                 result['purchase_cost_refreshed'] = f'skip: {traceback.format_exc().splitlines()[-1]}'
         except Exception:
