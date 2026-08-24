@@ -271,10 +271,12 @@ def run_delete(targets, mode='validate', log_fn=None):
     for t in targets:
         by_acc.setdefault(t['login_id'], []).append(str(t['product_no']))
 
-    ok, reason = guard.preflight('롯데온적자삭제', platform='lotteon')
+    ok, reason = guard.preflight('롯데온적자삭제', platform='lotteon', wait=True)
     if not ok:
         _log(log_fn, f'⛔ preflight 차단: {reason}')
         return {'ok': False, 'skipped': reason}
+    if reason != 'ok':
+        _log(log_fn, f'⏳ 락 대기 후 시작: {reason}')
 
     summary = {'accounts': 0, 'ended': 0, 'failed': 0}
     results = []

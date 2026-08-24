@@ -23,6 +23,7 @@ urlpatterns = [
     path('account-info-crawl/', views.OwnerclanAccountInfoCrawlView.as_view()),
     path('weekly-popular/', views.OwnerclanWeeklyPopularView.as_view()),
     path('weekly-popular/download/', views.OwnerclanWeeklyPopularDownloadView.as_view()),
+    path('weekly-popular/download-all/', views.OwnerclanWeeklyPopularDownloadAllView.as_view()),
 
     path('my/copy/', views.MyProductCopyView.as_view()),
     path('my/products/upload/', views.MyProductUploadView.as_view()),

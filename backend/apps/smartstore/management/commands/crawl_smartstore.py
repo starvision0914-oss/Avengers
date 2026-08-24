@@ -23,6 +23,55 @@ from crawlers.smartstore_crawler import (
 )
 
 
+def _save_products_delete_insert(account, products, total_elements, ok, log_fn):
+    """상품 리스트를 계정 기준으로 전량 삭제 후 재삽입(2026-08-24, 11번가/지마켓과 동일 원칙).
+    total_elements(상품 API totalElements = 사전체크)를 계정에 기록해 실제 반영건수와 비교 가능하게 함.
+    ok=False(API 자체가 불통)면 기존 데이터를 절대 건드리지 않고 그대로 반환(정합성 필드도 갱신 안 함)."""
+    from collections import Counter
+    if not ok:
+        log_fn('[스마트] 상품 API 응답 자체가 없어 기존 데이터 유지(삭제 안 함)')
+        return 0
+
+    account.last_precheck_total = total_elements
+    account.last_check_at = timezone.now()
+
+    uniq = {}
+    for p in products:
+        pno = p.get('product_no')
+        if pno:
+            uniq[pno] = p
+
+    SmartStoreProduct.objects.filter(account=account).delete()
+    if uniq:
+        cnt = Counter(p.get('status_type') or '' for p in uniq.values())
+        objs = [SmartStoreProduct(
+            account=account, product_no=pno,
+            channel_product_no=p.get('channel_product_no', ''),
+            name=(p.get('name') or '')[:500],
+            sale_price=p.get('sale_price') or 0,
+            stock_quantity=p.get('stock_quantity') or 0,
+            status_type=p.get('status_type') or '',
+            seller_management_code=(p.get('seller_management_code') or '')[:200],
+            category_id=p.get('category_id') or '',
+            product_image_url=p.get('product_image_url') or '',
+        ) for pno, p in uniq.items()]
+        SmartStoreProduct.objects.bulk_create(objs, batch_size=1000)
+    else:
+        cnt = Counter()
+
+    account.last_excel_total = len(uniq)
+    account.last_excel_selling = cnt.get('SALE', 0)
+    account.last_excel_soldout = cnt.get('OUTOFSTOCK', 0)
+    account.last_excel_stopped = cnt.get('SUSPENSION', 0)
+    account.save(update_fields=[
+        'last_precheck_total', 'last_check_at', 'last_excel_total',
+        'last_excel_selling', 'last_excel_soldout', 'last_excel_stopped',
+    ])
+    if total_elements is not None and len(uniq) != total_elements:
+        log_fn(f'[스마트] ⚠️ 사전체크({total_elements})와 실제반영({len(uniq)}) 불일치')
+    return len(uniq)
+
+
 def _lock_path(account_id):
     return f'/tmp/smartstore_{account_id}.lock'
 
@@ -53,35 +102,39 @@ def _save_products_from_api(account, log_fn):
     token = _get_access_token(account.commerce_api_key, account.commerce_secret_key)
     all_products = []
     page = 1
+    total_elements = None
+    ok = False
     while True:
         data = _fetch_products_page(token, page=page, size=100)
+        if not data:
+            break
+        ok = True
+        if total_elements is None:
+            total_elements = data.get('totalElements', 0) or 0
         contents = data.get('contents', [])
         all_products.extend(contents)
         if data.get('last', True) or not contents:
             break
         page += 1
 
-    saved = 0
+    products = []
     for p in all_products:
         ch = p.get('channelProducts', [{}])[0]
         pno = str(p.get('originProductNo', ''))
         if not pno:
             continue
-        SmartStoreProduct.objects.update_or_create(
-            account=account,
-            product_no=pno,
-            defaults={
-                'channel_product_no': str(ch.get('channelProductNo', '')),
-                'name': ch.get('name', ''),
-                'sale_price': ch.get('salePrice', 0) or 0,
-                'stock_quantity': ch.get('stockQuantity', 0) or 0,
-                'status_type': ch.get('statusType', ''),
-                'seller_management_code': ch.get('sellerManagementCode', ''),
-                'category_id': str(ch.get('categoryId', '')),
-                'product_image_url': '',
-            }
-        )
-        saved += 1
+        products.append({
+            'product_no': pno,
+            'channel_product_no': str(ch.get('channelProductNo', '')),
+            'name': ch.get('name', ''),
+            'sale_price': ch.get('salePrice', 0) or 0,
+            'stock_quantity': ch.get('stockQuantity', 0) or 0,
+            'status_type': ch.get('statusType', ''),
+            'seller_management_code': ch.get('sellerManagementCode', ''),
+            'category_id': str(ch.get('categoryId', '')),
+            'product_image_url': '',
+        })
+    saved = _save_products_delete_insert(account, products, total_elements, ok, log_fn)
     log_fn(f'[API] 상품 {saved}건 저장')
     return saved
 
@@ -175,33 +228,14 @@ class Command(BaseCommand):
             merchant_no = fetch_merchant_no(driver, account, log_fn=log_fn)
 
             if not skip_products:
-                products = fetch_products(driver, log_fn=log_fn)
-                prod_saved = 0
-                if products:
-                    for p in products:
-                        if not p['product_no']:
-                            continue
-                        SmartStoreProduct.objects.update_or_create(
-                            account=account,
-                            product_no=p['product_no'],
-                            defaults={
-                                'channel_product_no': p['channel_product_no'],
-                                'name': p['name'],
-                                'sale_price': p['sale_price'],
-                                'stock_quantity': p['stock_quantity'],
-                                'status_type': p['status_type'],
-                                'seller_management_code': p['seller_management_code'],
-                                'category_id': p['category_id'],
-                                'product_image_url': p['product_image_url'],
-                            }
-                        )
-                        prod_saved += 1
-                # Selenium 0건 → Commerce API 폴백
-                if prod_saved == 0 and account.commerce_api_key:
-                    log_fn('[스마트] Selenium 0건 → Commerce API 폴백')
+                products, total_elements, ok = fetch_products(driver, log_fn=log_fn)
+                # Selenium API 자체가 불통이었을 때만 Commerce API 폴백(진짜 0건은 폴백 불필요)
+                if not ok and account.commerce_api_key:
+                    log_fn('[스마트] Selenium 상품 API 불통 → Commerce API 폴백')
                     prod_saved = _save_products_from_api(account, log_fn)
                     messages.append(f'상품:{prod_saved}건(API폴백)')
                 else:
+                    prod_saved = _save_products_delete_insert(account, products, total_elements, ok, log_fn)
                     messages.append(f'상품:{prod_saved}건')
                 self.stdout.write(f'  [{account.display_name}] 상품 {prod_saved}건 저장')
 

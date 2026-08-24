@@ -13,7 +13,9 @@ import time
 
 logger = logging.getLogger('crawler')
 
-CHUNK_SIZE = 20  # 검색결과 그리드가 한 페이지(약 20~30행)만 렌더링돼 '전체선택'이 그 페이지만
+CHUNK_SIZE = 30  # 검색결과 그리드가 한 페이지(약 20~30행)만 렌더링돼 '전체선택'이 그 페이지만
+# (2026-08-24 사용자 지시로 20→30 상향. 렌더링 한계가 실제로 30 미만인 경우 일부 미선택
+#  누락 위험 있음 — 다음 실행 시 배치별 조회건수 로그를 반드시 확인할 것)
                   # 선택함 — 큰 배치를 한 번에 검색하면 나머지는 조용히 누락됨(2026-08-22 발견,
                   # alert 문구 "총 30건 중 30건"이 실제로는 670건 요청 중 30건만 처리됐다는 뜻이었음).
 
@@ -22,6 +24,25 @@ def _log(log_fn, m):
     logger.info(m)
     if log_fn:
         log_fn(m)
+
+
+def _cdp_click_plain(driver, el):
+    """iframe이 아닌 최상위 창(팝업 등)에서의 신뢰된(trusted) 클릭.
+    2026-08-24 발견: 팝업 '적용' 버튼을 execute_script(...click())로 누르면 확인 alert는
+    똑같이 뜨지만(클라이언트 측 검증만 통과) 실제 서버 반영은 안 되는 사고 발생 — jqxGrid 체크박스와
+    동일하게 이 버튼도 신뢰된 이벤트가 필요한 것으로 추정. CDP dispatchMouseEvent로 교체."""
+    driver.execute_script("arguments[0].scrollIntoView({block:'center', inline:'center'});", el)
+    time.sleep(0.35)
+    r = driver.execute_script(
+        "var r=arguments[0].getBoundingClientRect(); return [r.x,r.y,r.width,r.height];", el)
+    x = r[0] + r[2] / 2
+    y = r[1] + r[3] / 2
+    driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': x, 'y': y})
+    driver.execute_cdp_cmd('Input.dispatchMouseEvent',
+                            {'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1})
+    time.sleep(0.1)
+    driver.execute_cdp_cmd('Input.dispatchMouseEvent',
+                            {'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1})
 
 
 def _cdp_click(driver, el, iframe_id):
@@ -107,7 +128,7 @@ def _suspend_current_search(driver, eid, log_fn):
             driver.switch_to.window(driver.window_handles[0])
             _focus_frame(driver)
             return True, False, 0
-        driver.execute_script("arguments[0].click();", apply_btn)
+        _cdp_click_plain(driver, apply_btn)
         time.sleep(1.5)
         try:
             alert = driver.switch_to.alert
@@ -132,8 +153,11 @@ def _suspend_current_search(driver, eid, log_fn):
     return True, True, applied_count
 
 
-def suspend_only(targets, mode='validate', eid_filter=None, log_fn=None):
-    """targets: [{'eleven_id' or 'login_id','product_no'}...]. mode: validate(검색만) | real(실제 판매중지)."""
+def suspend_only(targets, mode='validate', eid_filter=None, log_fn=None, checkpoint_path=None):
+    """targets: [{'eleven_id' or 'login_id','product_no'}...]. mode: validate(검색만) | real(실제 판매중지).
+    checkpoint_path: 지정 시 계정 처리 완료마다 이 파일에 계정ID를 한 줄씩 append하고,
+    시작 시 이미 있는 계정은 건너뜀 — 도중에 죽어도(OOM 등) 재실행 시 이어서 처리 가능
+    (2026-08-24, L코드 판매중지가 무로그로 소멸해 9개 계정이 누락된 사고 이후 도입)."""
     from apps.cpc.models import CrawlerAccount
     from apps.cpc import eleven_block_guard as guard
     from crawlers.eleven_crawler import _do_login, _drain_alerts
@@ -143,10 +167,22 @@ def suspend_only(targets, mode='validate', eid_filter=None, log_fn=None):
     if mode not in ('validate', 'real'):
         mode = 'validate'
 
-    ok, reason = guard.preflight('11번가살생물제판매중지')
+    done_eids = set()
+    if checkpoint_path:
+        try:
+            with open(checkpoint_path) as f:
+                done_eids = {ln.strip() for ln in f if ln.strip()}
+            if done_eids:
+                _log(log_fn, f'▶ 체크포인트에서 이미완료 {len(done_eids)}개 계정 건너뜀: {sorted(done_eids)}')
+        except FileNotFoundError:
+            pass
+
+    ok, reason = guard.preflight('11번가살생물제판매중지', wait=True)
     if not ok:
         _log(log_fn, f'⏭️ 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}
+    if reason != 'ok':
+        _log(log_fn, f'⏳ 락 대기 후 시작: {reason}')
 
     grouped = {}
     for t in targets:
@@ -162,6 +198,9 @@ def suspend_only(targets, mode='validate', eid_filter=None, log_fn=None):
     results = []
     try:
         for eid, items in by_acc.items():
+            if eid in done_eids:
+                _log(log_fn, f'[{eid}] 체크포인트 완료됨 — 건너뜀')
+                continue
             blocked, _, _ = guard.is_blocked()
             if blocked:
                 _log(log_fn, '⛔ 차단 감지 — 중단')
@@ -216,6 +255,12 @@ def suspend_only(targets, mode='validate', eid_filter=None, log_fn=None):
                 if acc_fail_chunks:
                     summary['failed'] += acc_fail_chunks
                 summary['accounts'] += 1
+                if checkpoint_path:
+                    try:
+                        with open(checkpoint_path, 'a') as f:
+                            f.write(eid + '\n')
+                    except Exception:
+                        pass
             except Exception as e:
                 _log(log_fn, f'[{eid}] 오류: {str(e)[:200]}')
                 summary['failed'] += 1

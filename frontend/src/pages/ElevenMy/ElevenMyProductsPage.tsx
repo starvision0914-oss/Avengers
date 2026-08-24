@@ -7,11 +7,14 @@ import {
   suspendSelectedProducts, suspendAllNoMatchProducts, downloadWCodes,
   startLCodeCheck, stopLCodeCheck, fetchLCodeStatus, type LCodeStatusSummary,
   type ElevenAccountSummary,
+  fetchElevenPrecheckDiff, type PrecheckDiffResponse,
+  previewElevenPriceMatch, applyElevenPriceMatch, type ElevenPriceMatchPreviewResponse,
+  previewElevenPriceCap, applyElevenPriceCap,
 } from '../../api/elevenMy';
 import { stopElevenCrawl, stopGmarketCrawl } from '../../api/crawler';
-import { fetchGmarketMyProducts, fetchGmarketMyAccounts, exportGmarketMyProducts, suspendSelectedGmarketProducts, suspendAllNoMatchGmarketProducts } from '../../api/gmarketMy';
-import { getAccounts as getSmartstoreAccounts, getProducts as getSmartstoreProducts, downloadProductExcel as downloadSmartstoreExcel, suspendAllNoMatchProducts as suspendAllNoMatchSmartstoreProducts } from '../../api/smartstore';
-import { fetchLotteonMyAccounts, fetchLotteonMyProducts } from '../../api/lotteonMy';
+import { fetchGmarketMyProducts, fetchGmarketMyAccounts, exportGmarketMyProducts, suspendSelectedGmarketProducts, suspendAllNoMatchGmarketProducts, previewGmarketPriceMatch, applyGmarketPriceMatch, type GmarketPriceMatchPreviewResponse, previewGmarketPriceCap, applyGmarketPriceCap } from '../../api/gmarketMy';
+import { getAccounts as getSmartstoreAccounts, getProducts as getSmartstoreProducts, downloadProductExcel as downloadSmartstoreExcel, suspendAllNoMatchProducts as suspendAllNoMatchSmartstoreProducts, fetchPrecheckDiff as fetchSmartstorePrecheckDiff, type SmartStorePrecheckDiffResponse, previewPriceMatch, applyPriceMatch, type PriceMatchPreviewResponse, previewPriceCap, applyPriceCap } from '../../api/smartstore';
+import { fetchLotteonMyAccounts, fetchLotteonMyProducts, suspendAllNoMatchLotteonProducts } from '../../api/lotteonMy';
 import { fetchAllMyProducts, exportAllMyProducts, fetchMyProductsStatusSummary, type MyProductAllItem, type MyProductsStatusSummary } from '../../api/myProductsAll';
 import api from '../../api/client';
 import { useTheme } from '../../hooks/useTheme';
@@ -95,6 +98,19 @@ export default function ElevenMyProductsPage() {
   const [suspendSel, setSuspendSel] = useState<Set<string>>(new Set());
   const [suspending, setSuspending] = useState(false);
   const [stoppingJob, setStoppingJob] = useState(false);
+  const [precheckDiffOpen, setPrecheckDiffOpen] = useState(false);
+  const [precheckDiffLoading, setPrecheckDiffLoading] = useState(false);
+  const [precheckDiffData, setPrecheckDiffData] = useState<PrecheckDiffResponse | null>(null);
+  const [ssPrecheckDiffData, setSsPrecheckDiffData] = useState<SmartStorePrecheckDiffResponse | null>(null);
+  const [priceMatchOpen, setPriceMatchOpen] = useState(false);
+  const [priceMatchLoading, setPriceMatchLoading] = useState(false);
+  const [priceMatchApplying, setPriceMatchApplying] = useState(false);
+  const [priceMatchData, setPriceMatchData] = useState<PriceMatchPreviewResponse | ElevenPriceMatchPreviewResponse | GmarketPriceMatchPreviewResponse | null>(null);
+  const [priceCapOpen, setPriceCapOpen] = useState(false);
+  const [priceCapLoading, setPriceCapLoading] = useState(false);
+  const [priceCapApplying, setPriceCapApplying] = useState(false);
+  const [priceCapData, setPriceCapData] = useState<PriceMatchPreviewResponse | ElevenPriceMatchPreviewResponse | GmarketPriceMatchPreviewResponse | null>(null);
+  const [priceCapPct, setPriceCapPct] = useState(100);           // 고단가 기준 — 마켓가 대비 몇 % 이상 초과일 때 고단가로 볼지(기본 100%=2배)
   // 상품 선택(엑셀 다운로드용) — 페이지 넘어가도 유지 (platform:id → 상품)
   const [selProd, setSelProd] = useState<Map<string, MyProductAllItem>>(new Map());
   // 정렬
@@ -416,6 +432,26 @@ export default function ElevenMyProductsPage() {
       setSuspendingAllNoMatch(false);
       return;
     }
+    if (platform === 'lotteon') {
+      const msg = `현재 필터 기준 롯데ON ${kindLabel}(판매중) 상품 전체(약 ${fmt(kindTotal)}건)를 판매종료합니다.\n`
+        + `⚠ 롯데ON은 셀러가 "판매중지"를 쓸 수 없어 판매종료로 처리하며, 판매종료는 되돌릴 수 없습니다. 계속할까요?`;
+      if (!window.confirm(msg)) return;
+      setSuspendingAllNoMatch(true);
+      const tid = toast.loading(`${kindLabel} 전체 판매종료 시작 중...`);
+      try {
+        const r = await suspendAllNoMatchLotteonProducts(accountId, search || undefined);
+        if (r.status === 'started') {
+          toast.success(r.message || '시작됨', { id: tid, duration: 8000 });
+        } else {
+          toast.error(r.message || r.error || '시작 실패', { id: tid });
+        }
+      } catch (e: any) {
+        toast.error(`시작 실패: ${e.response?.data?.message || e.response?.data?.error || e.message}`, { id: tid });
+      } finally {
+        setSuspendingAllNoMatch(false);
+      }
+      return;
+    }
     const label = platform === 'gmarket' ? '지마켓' : platform === 'smartstore' ? '스마트스토어' : '11번가';
     const msg = `현재 필터 기준 ${label} ${kindLabel}(판매중) 상품 전체(약 ${fmt(kindTotal)}건)를 판매중지합니다. 계속할까요?`;
     if (!window.confirm(msg)) return;
@@ -500,6 +536,94 @@ export default function ElevenMyProductsPage() {
       toast.error(e.response?.data?.message || e.message);
     } finally {
       setLCodeBusy(false);
+    }
+  };
+
+  const togglePrecheckDiff = async () => {
+    if (precheckDiffOpen) { setPrecheckDiffOpen(false); return; }
+    setPrecheckDiffOpen(true);
+    setPrecheckDiffLoading(true);
+    try {
+      if (platform === 'smartstore') {
+        const r = await fetchSmartstorePrecheckDiff();
+        setSsPrecheckDiffData(r);
+      } else {
+        const r = await fetchElevenPrecheckDiff();
+        setPrecheckDiffData(r);
+      }
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || e.message);
+      setPrecheckDiffOpen(false);
+    } finally {
+      setPrecheckDiffLoading(false);
+    }
+  };
+
+  const togglePriceMatch = async () => {
+    if (priceMatchOpen) { setPriceMatchOpen(false); return; }
+    setPriceMatchOpen(true);
+    setPriceMatchLoading(true);
+    try {
+      const r = platform === '11st' ? await previewElevenPriceMatch(needsCheckPct)
+        : platform === 'gmarket' ? await previewGmarketPriceMatch(needsCheckPct)
+        : await previewPriceMatch(needsCheckPct);
+      setPriceMatchData(r);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || e.message);
+      setPriceMatchOpen(false);
+    } finally {
+      setPriceMatchLoading(false);
+    }
+  };
+
+  const handleApplyPriceMatch = async () => {
+    if (!priceMatchData || priceMatchData.total === 0) return;
+    if (!window.confirm(`확인필요(역마진) 상품 ${fmt(priceMatchData.total)}개의 판매가를 예비상품 마켓가로 실제 변경합니다. 계속할까요?`)) return;
+    setPriceMatchApplying(true);
+    try {
+      const r = platform === '11st' ? await applyElevenPriceMatch(needsCheckPct)
+        : platform === 'gmarket' ? await applyGmarketPriceMatch(needsCheckPct)
+        : await applyPriceMatch(needsCheckPct);
+      toast.success(r.message || '시작됨');
+      setPriceMatchOpen(false);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || e.message);
+    } finally {
+      setPriceMatchApplying(false);
+    }
+  };
+
+  const togglePriceCap = async () => {
+    if (priceCapOpen) { setPriceCapOpen(false); return; }
+    setPriceCapOpen(true);
+    setPriceCapLoading(true);
+    try {
+      const r = platform === '11st' ? await previewElevenPriceCap(priceCapPct)
+        : platform === 'gmarket' ? await previewGmarketPriceCap(priceCapPct)
+        : await previewPriceCap(priceCapPct);
+      setPriceCapData(r);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || e.message);
+      setPriceCapOpen(false);
+    } finally {
+      setPriceCapLoading(false);
+    }
+  };
+
+  const handleApplyPriceCap = async () => {
+    if (!priceCapData || priceCapData.total === 0) return;
+    if (!window.confirm(`고단가(마켓가 대비 ${priceCapPct}%+ 초과) 상품 ${fmt(priceCapData.total)}개의 판매가를 예비상품 마켓가로 실제 인하합니다. 계속할까요?`)) return;
+    setPriceCapApplying(true);
+    try {
+      const r = platform === '11st' ? await applyElevenPriceCap(priceCapPct)
+        : platform === 'gmarket' ? await applyGmarketPriceCap(priceCapPct)
+        : await applyPriceCap(priceCapPct);
+      toast.success(r.message || '시작됨');
+      setPriceCapOpen(false);
+    } catch (e: any) {
+      toast.error(e.response?.data?.error || e.message);
+    } finally {
+      setPriceCapApplying(false);
     }
   };
 
@@ -979,6 +1103,17 @@ export default function ElevenMyProductsPage() {
             </button>
           )}
 
+          {platform === 'lotteon' && noMatch && noMatchTotal > 0 && (
+            <button
+              onClick={() => suspendAllNoMatchAction('no_match')}
+              disabled={suspendingAllNoMatch}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-40"
+              title="선택 없이, 현재 필터의 미매칭(판매중) 상품 전체를 서버에서 한 번에 판매종료(롯데ON은 판매중지를 셀러가 쓸 수 없어 판매종료로 처리, 비가역)"
+            >
+              🛑 미매칭 전체 판매종료 (약 {fmt(noMatchTotal)})
+            </button>
+          )}
+
           {platform === 'all' && noMatch && (
             <button
               onClick={() => suspendAllNoMatchAction('no_match')}
@@ -1083,6 +1218,42 @@ export default function ElevenMyProductsPage() {
             {downloadingWCodes ? '추출 중…' : 'W코드 다운로드'}
           </button>
 
+          {(platform === '11st' || platform === 'smartstore') && (
+            <button
+              onClick={togglePrecheckDiff}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white disabled:opacity-40 ${
+                precheckDiffOpen ? 'bg-orange-700 hover:bg-orange-800' : 'bg-orange-600 hover:bg-orange-700'
+              }`}
+              title="크롤 시작 시 읽은 사전체크 건수와 실제 DB에 반영된 건수를 계정별로 비교. 차이나는 계정만 표시"
+            >
+              ⚠️ 정합성 리포트{platform === 'smartstore' ? (ssPrecheckDiffData ? ` (${ssPrecheckDiffData.count})` : '') : (precheckDiffData ? ` (${precheckDiffData.count})` : '')}
+            </button>
+          )}
+
+          {(platform === 'smartstore' || platform === '11st' || platform === 'gmarket') && (
+            <button
+              onClick={togglePriceMatch}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white disabled:opacity-40 ${
+                priceMatchOpen ? 'bg-pink-700 hover:bg-pink-800' : 'bg-pink-600 hover:bg-pink-700'
+              }`}
+              title="확인필요(역마진) 상품의 판매가를 예비상품 마켓가로 맞춤 — 미리보기 후 실행"
+            >
+              💰 가격맞추기{priceMatchData ? ` (${priceMatchData.total})` : ''}
+            </button>
+          )}
+
+          {(platform === 'smartstore' || platform === '11st' || platform === 'gmarket') && (
+            <button
+              onClick={togglePriceCap}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white disabled:opacity-40 ${
+                priceCapOpen ? 'bg-violet-700 hover:bg-violet-800' : 'bg-violet-600 hover:bg-violet-700'
+              }`}
+              title="고단가(마켓가 대비 100%+ 초과) 상품의 판매가를 예비상품 마켓가로 인하 — 미리보기 후 실행"
+            >
+              🔽 고단가조정{priceCapData ? ` (${priceCapData.total})` : ''}
+            </button>
+          )}
+
           <button
             onClick={lCodeStatus?.running ? handleStopLCodeCheck : handleStartLCodeCheck}
             disabled={lCodeBusy}
@@ -1180,6 +1351,239 @@ export default function ElevenMyProductsPage() {
         </div>
 
         {/* 등록상품 재크롤 — 계정 선택 패널 */}
+        {/* 크롤 정합성 리포트 — 사전체크(라이브) vs 실제반영(DB) 차이나는 계정만 표시 */}
+        {platform === '11st' && precheckDiffOpen && (
+          <div className={`rounded-xl border ${card} p-3 space-y-2.5`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className={`text-[12px] font-bold ${text1}`}>
+                크롤 정합성 리포트 — 사전체크(라이브) vs 실제반영(DB)
+                {precheckDiffData && ` · 확인계정 ${fmt(precheckDiffData.checked_accounts)} / 차이있음 ${fmt(precheckDiffData.count)}`}
+              </span>
+              <button onClick={togglePrecheckDiff} className={`text-[11px] ${text3}`}>닫기</button>
+            </div>
+            {precheckDiffLoading ? (
+              <p className={`text-[11px] ${text3}`}>불러오는 중…</p>
+            ) : !precheckDiffData || precheckDiffData.items.length === 0 ? (
+              <p className={`text-[11px] ${text3}`}>차이나는 계정이 없습니다 — 전부 정상입니다.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className={`text-left ${text3} border-b ${card}`}>
+                      <th className="py-1 pr-3">계정</th>
+                      <th className="py-1 pr-3">확인시각</th>
+                      <th className="py-1 pr-3 text-right">전체(사전체크→실반영, 차이)</th>
+                      <th className="py-1 pr-3 text-right">판매중(차이)</th>
+                      <th className="py-1 pr-3 text-right">품절(차이)</th>
+                      <th className="py-1 pr-3 text-right">판매중지(차이)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {precheckDiffData.items.map(r => (
+                      <tr key={r.account_id} className={`border-b ${card}`}>
+                        <td className={`py-1 pr-3 ${text1}`}>
+                          {r.seller_name || r.login_id} ({r.login_id}){!r.is_active && <span className="ml-1 text-rose-500">[비활성]</span>}
+                        </td>
+                        <td className={`py-1 pr-3 ${text3}`}>{new Date(r.last_check_at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                        <td className="py-1 pr-3 text-right">
+                          {r.precheck.total ?? '-'} → {r.excel.total ?? '-'}
+                          {r.diff.total !== 0 && <span className="ml-1 font-bold text-rose-500">({r.diff.total > 0 ? '+' : ''}{r.diff.total})</span>}
+                        </td>
+                        <td className="py-1 pr-3 text-right">{r.diff.selling !== 0 ? <span className="font-bold text-rose-500">{r.diff.selling > 0 ? '+' : ''}{r.diff.selling}</span> : '0'}</td>
+                        <td className="py-1 pr-3 text-right">{r.diff.soldout !== 0 ? <span className="font-bold text-rose-500">{r.diff.soldout > 0 ? '+' : ''}{r.diff.soldout}</span> : '0'}</td>
+                        <td className="py-1 pr-3 text-right">{r.diff.stopped !== 0 ? <span className="font-bold text-rose-500">{r.diff.stopped > 0 ? '+' : ''}{r.diff.stopped}</span> : '0'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className={`text-[10px] ${text3}`}>
+              ※ 차이(diff) = 사전체크값 − 실제반영값. 양수면 실제가 더 적게 반영(다운로드 누락 의심), 음수면 더 많이 반영된 것.
+            </p>
+          </div>
+        )}
+
+        {/* 스마트스토어 정합성 리포트 — 상품 API totalElements(사전체크) vs 실제반영(DB), 전체건수만 비교 가능 */}
+        {platform === 'smartstore' && precheckDiffOpen && (
+          <div className={`rounded-xl border ${card} p-3 space-y-2.5`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className={`text-[12px] font-bold ${text1}`}>
+                크롤 정합성 리포트 — 사전체크(API totalElements) vs 실제반영(DB)
+                {ssPrecheckDiffData && ` · 확인계정 ${fmt(ssPrecheckDiffData.checked_accounts)} / 차이있음 ${fmt(ssPrecheckDiffData.count)}`}
+              </span>
+              <button onClick={togglePrecheckDiff} className={`text-[11px] ${text3}`}>닫기</button>
+            </div>
+            {precheckDiffLoading ? (
+              <p className={`text-[11px] ${text3}`}>불러오는 중…</p>
+            ) : !ssPrecheckDiffData || ssPrecheckDiffData.items.length === 0 ? (
+              <p className={`text-[11px] ${text3}`}>차이나는 계정이 없습니다 — 전부 정상입니다.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className={`text-left ${text3} border-b ${card}`}>
+                      <th className="py-1 pr-3">계정</th>
+                      <th className="py-1 pr-3">확인시각</th>
+                      <th className="py-1 pr-3 text-right">전체(사전체크→실반영, 차이)</th>
+                      <th className="py-1 pr-3 text-right">판매중</th>
+                      <th className="py-1 pr-3 text-right">품절</th>
+                      <th className="py-1 pr-3 text-right">판매중지</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ssPrecheckDiffData.items.map(r => (
+                      <tr key={r.account_id} className={`border-b ${card}`}>
+                        <td className={`py-1 pr-3 ${text1}`}>
+                          {r.store_name || r.login_id} ({r.login_id}){!r.is_active && <span className="ml-1 text-rose-500">[비활성]</span>}
+                        </td>
+                        <td className={`py-1 pr-3 ${text3}`}>{new Date(r.last_check_at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                        <td className="py-1 pr-3 text-right">
+                          {r.precheck_total ?? '-'} → {r.excel_total ?? '-'}
+                          {r.diff_total !== 0 && <span className="ml-1 font-bold text-rose-500">({r.diff_total > 0 ? '+' : ''}{r.diff_total})</span>}
+                        </td>
+                        <td className="py-1 pr-3 text-right">{r.excel_selling ?? '-'}</td>
+                        <td className="py-1 pr-3 text-right">{r.excel_soldout ?? '-'}</td>
+                        <td className="py-1 pr-3 text-right">{r.excel_stopped ?? '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className={`text-[10px] ${text3}`}>
+              ※ 스마트스토어는 상태별 사전체크가 없어 전체 건수만 비교합니다. 판매중/품절/판매중지는 실제 반영된 값(참고용).
+            </p>
+          </div>
+        )}
+
+        {/* 스마트스토어/11번가/지마켓 가격맞추기 — 확인필요(역마진) 상품 판매가를 예비상품 마켓가로 미리보기+실행 */}
+        {(platform === 'smartstore' || platform === '11st' || platform === 'gmarket') && priceMatchOpen && (
+          <div className={`rounded-xl border ${card} p-3 space-y-2.5`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className={`text-[12px] font-bold ${text1}`}>
+                가격맞추기 미리보기 — 확인필요(역마진 {needsCheckPct}%+, {platform === 'smartstore' ? 'SALE' : '판매중'}) 상품 판매가 → 예비상품 마켓가
+                {priceMatchData && ` · 대상 ${fmt(priceMatchData.total)}건`}
+              </span>
+              <button onClick={togglePriceMatch} className={`text-[11px] ${text3}`}>닫기</button>
+            </div>
+            {priceMatchLoading ? (
+              <p className={`text-[11px] ${text3}`}>불러오는 중…</p>
+            ) : !priceMatchData || priceMatchData.rows.length === 0 ? (
+              <p className={`text-[11px] ${text3}`}>대상 상품이 없습니다.</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className={`text-left ${text3} border-b ${card}`}>
+                        <th className="py-1 pr-3">계정</th>
+                        <th className="py-1 pr-3">상품명</th>
+                        <th className="py-1 pr-3 text-right">현재가</th>
+                        <th className="py-1 pr-3 text-right">마켓가</th>
+                        <th className="py-1 pr-3 text-right">%</th>
+                        <th className="py-1 pr-3 text-right">차이</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {priceMatchData.rows.slice(0, 200).map(r => (
+                        <tr key={r.id} className={`border-b ${card}`}>
+                          <td className={`py-1 pr-3 ${text1}`}>{r.account_name}</td>
+                          <td className={`py-1 pr-3 ${text2} max-w-[280px] truncate`} title={r.name}>{r.name}</td>
+                          <td className="py-1 pr-3 text-right">{fmt(r.current_price)}</td>
+                          <td className="py-1 pr-3 text-right">{fmt(r.target_price)}</td>
+                          <td className="py-1 pr-3 text-right">{r.target_price ? `${Math.round(r.current_price / r.target_price * 100)}%` : '-'}</td>
+                          <td className="py-1 pr-3 text-right font-bold text-emerald-500">{r.diff > 0 ? '+' : ''}{fmt(r.diff)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {priceMatchData.total > priceMatchData.preview_limit && (
+                  <p className={`text-[10px] ${text3}`}>※ 미리보기는 최대 {fmt(priceMatchData.preview_limit)}건까지만 표시(실행 시엔 전체 {fmt(priceMatchData.total)}건 대상).</p>
+                )}
+                <button
+                  onClick={handleApplyPriceMatch}
+                  disabled={priceMatchApplying}
+                  className="w-full py-2 rounded-lg text-[12px] font-bold bg-pink-600 hover:bg-pink-700 text-white disabled:opacity-40"
+                >
+                  {priceMatchApplying ? '실행 중…' : `실행 — ${fmt(priceMatchData.total)}개 판매가 변경`}
+                </button>
+              </>
+            )}
+            <p className={`text-[10px] ${text3}`}>
+              {platform === 'smartstore'
+                ? '※ 네이버 API로 실제 가격을 변경합니다(1건당 약 1초, 백그라운드 진행). 실행 후엔 되돌릴 수 없으니 미리보기로 먼저 확인하세요.'
+                : platform === 'gmarket'
+                ? '※ 지마켓 내부 API로 실제 가격을 변경합니다(계정별 로그인 1회 후 백그라운드 진행, 다른 지마켓 크롤이 실행 중이면 끝난 뒤 시작). 실행 후엔 되돌릴 수 없으니 미리보기로 먼저 확인하세요.'
+                : '※ 11번가 hulk API로 실제 가격을 변경합니다(계정별 로그인 1회 후 백그라운드 진행, 다른 11번가 크롤이 실행 중이면 끝난 뒤 시작). 실행 후엔 되돌릴 수 없으니 미리보기로 먼저 확인하세요.'}
+            </p>
+          </div>
+        )}
+
+        {(platform === 'smartstore' || platform === '11st' || platform === 'gmarket') && priceCapOpen && (
+          <div className={`rounded-xl border ${card} p-3 space-y-2.5`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className={`text-[12px] font-bold ${text1}`}>
+                고단가조정 미리보기 — 마켓가 대비 {priceCapPct}%+ 초과({platform === 'smartstore' ? 'SALE' : '판매중'}) 상품 판매가 → 예비상품 마켓가
+                {priceCapData && ` · 대상 ${fmt(priceCapData.total)}건`}
+              </span>
+              <button onClick={togglePriceCap} className={`text-[11px] ${text3}`}>닫기</button>
+            </div>
+            {priceCapLoading ? (
+              <p className={`text-[11px] ${text3}`}>불러오는 중…</p>
+            ) : !priceCapData || priceCapData.rows.length === 0 ? (
+              <p className={`text-[11px] ${text3}`}>대상 상품이 없습니다.</p>
+            ) : (
+              <>
+                <div className="overflow-x-auto max-h-80 overflow-y-auto">
+                  <table className="w-full text-[11px]">
+                    <thead>
+                      <tr className={`text-left ${text3} border-b ${card}`}>
+                        <th className="py-1 pr-3">계정</th>
+                        <th className="py-1 pr-3">상품명</th>
+                        <th className="py-1 pr-3 text-right">현재가</th>
+                        <th className="py-1 pr-3 text-right">마켓가</th>
+                        <th className="py-1 pr-3 text-right">%</th>
+                        <th className="py-1 pr-3 text-right">차이</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {priceCapData.rows.slice(0, 200).map(r => (
+                        <tr key={r.id} className={`border-b ${card}`}>
+                          <td className={`py-1 pr-3 ${text1}`}>{r.account_name}</td>
+                          <td className={`py-1 pr-3 ${text2} max-w-[280px] truncate`} title={r.name}>{r.name}</td>
+                          <td className="py-1 pr-3 text-right">{fmt(r.current_price)}</td>
+                          <td className="py-1 pr-3 text-right">{fmt(r.target_price)}</td>
+                          <td className="py-1 pr-3 text-right">{r.target_price ? `${Math.round(r.current_price / r.target_price * 100)}%` : '-'}</td>
+                          <td className="py-1 pr-3 text-right font-bold text-red-500">-{fmt(r.diff)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {priceCapData.total > priceCapData.preview_limit && (
+                  <p className={`text-[10px] ${text3}`}>※ 미리보기는 최대 {fmt(priceCapData.preview_limit)}건까지만 표시(실행 시엔 전체 {fmt(priceCapData.total)}건 대상).</p>
+                )}
+                <button
+                  onClick={handleApplyPriceCap}
+                  disabled={priceCapApplying}
+                  className="w-full py-2 rounded-lg text-[12px] font-bold bg-violet-600 hover:bg-violet-700 text-white disabled:opacity-40"
+                >
+                  {priceCapApplying ? '실행 중…' : `실행 — ${fmt(priceCapData.total)}개 판매가 인하`}
+                </button>
+              </>
+            )}
+            <p className={`text-[10px] ${text3}`}>
+              {platform === 'smartstore'
+                ? '※ 네이버 API로 실제 가격을 변경합니다(1건당 약 1초, 백그라운드 진행). 실행 후엔 되돌릴 수 없으니 미리보기로 먼저 확인하세요.'
+                : platform === 'gmarket'
+                ? '※ 지마켓 내부 API로 실제 가격을 변경합니다(계정별 로그인 1회 후 백그라운드 진행, 다른 지마켓 크롤이 실행 중이면 끝난 뒤 시작). 실행 후엔 되돌릴 수 없으니 미리보기로 먼저 확인하세요.'
+                : '※ 11번가 hulk API로 실제 가격을 변경합니다(계정별 로그인 1회 후 백그라운드 진행, 다른 11번가 크롤이 실행 중이면 끝난 뒤 시작). 실행 후엔 되돌릴 수 없으니 미리보기로 먼저 확인하세요.'}
+            </p>
+          </div>
+        )}
+
         {platform !== 'all' && recrawlOpen && (
           <div className={`rounded-xl border ${card} p-3 space-y-2.5`}>
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1316,15 +1720,9 @@ export default function ElevenMyProductsPage() {
                     <th onClick={() => handleSort('seller_product_code')} className="px-3 py-2 text-left font-medium w-28 cursor-pointer select-none">셀러코드{sortArrow('seller_product_code')}</th>
                     <th onClick={() => handleSort('category')} className="px-3 py-2 text-left font-medium w-24 cursor-pointer select-none">카테고리{sortArrow('category')}</th>
                     <th onClick={() => handleSort('synced_at')} className="px-3 py-2 text-right font-medium w-28 cursor-pointer select-none">동기화{sortArrow('synced_at')}</th>
-                    {platform !== 'all' && (
-                      <th onClick={() => handleSort('purchase_cost')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="예비상품(오너클랜) 마켓가(마켓실제판매가) — 판매자코드 매칭">마켓가{sortArrow('purchase_cost')}</th>
-                    )}
-                    {platform !== 'all' && (
-                      <th onClick={() => handleSort('cost_diff')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="판매가 - 마켓가">차이{sortArrow('cost_diff')}</th>
-                    )}
-                    {platform !== 'all' && (
-                      <th onClick={() => handleSort('cost_pct')} className="px-3 py-2 text-right font-medium w-20 cursor-pointer select-none" title="판매가/마켓가*100 (100=원가와동일, 낮을수록 역마진, 높을수록 고마진)">%{sortArrow('cost_pct')}</th>
-                    )}
+                    <th onClick={() => handleSort('purchase_cost')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="예비상품(오너클랜) 마켓가(마켓실제판매가) — 판매자코드 매칭">마켓가{sortArrow('purchase_cost')}</th>
+                    <th onClick={() => handleSort('cost_diff')} className="px-3 py-2 text-right font-medium w-24 cursor-pointer select-none" title="판매가 - 마켓가">차이{sortArrow('cost_diff')}</th>
+                    <th onClick={() => handleSort('cost_pct')} className="px-3 py-2 text-right font-medium w-20 cursor-pointer select-none" title="판매가/마켓가*100 (100=원가와동일, 낮을수록 역마진, 높을수록 고마진)">%{sortArrow('cost_pct')}</th>
                   </tr>
                 </thead>
                 <tbody className={`divide-y ${dark ? 'divide-[#2a2b35]' : 'divide-gray-100'}`}>
@@ -1392,27 +1790,21 @@ export default function ElevenMyProductsPage() {
                       <td className={`px-3 py-1.5 text-right text-[10px] ${text3}`}>
                         {p.synced_at ? new Date(p.synced_at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'}
                       </td>
-                      {platform !== 'all' && (
-                        <td className={`px-3 py-1.5 text-right ${text2}`}>{p.purchase_cost != null ? fmt(p.purchase_cost) : '-'}</td>
-                      )}
-                      {platform !== 'all' && (
-                        <td className="px-3 py-1.5 text-right font-semibold">
-                          {p.cost_diff != null ? (
-                            <span className={p.cost_diff >= 0 ? 'text-emerald-500' : 'text-red-500'}>
-                              {p.cost_diff > 0 ? '+' : ''}{fmt(p.cost_diff)}
-                            </span>
-                          ) : <span className={text3}>-</span>}
-                        </td>
-                      )}
-                      {platform !== 'all' && (
-                        <td className="px-3 py-1.5 text-right font-semibold">
-                          {p.cost_pct != null ? (
-                            <span className={p.cost_pct >= 100 ? 'text-emerald-500' : 'text-red-500'}>
-                              {p.cost_pct}%
-                            </span>
-                          ) : <span className={text3}>-</span>}
-                        </td>
-                      )}
+                      <td className={`px-3 py-1.5 text-right ${text2}`}>{p.purchase_cost != null ? fmt(p.purchase_cost) : '-'}</td>
+                      <td className="px-3 py-1.5 text-right font-semibold">
+                        {p.cost_diff != null ? (
+                          <span className={p.cost_diff >= 0 ? 'text-emerald-500' : 'text-red-500'}>
+                            {p.cost_diff > 0 ? '+' : ''}{fmt(p.cost_diff)}
+                          </span>
+                        ) : <span className={text3}>-</span>}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-semibold">
+                        {p.cost_pct != null ? (
+                          <span className={p.cost_pct >= 100 ? 'text-emerald-500' : 'text-red-500'}>
+                            {p.cost_pct}%
+                          </span>
+                        ) : <span className={text3}>-</span>}
+                      </td>
                     </tr>
                   );})}
                 </tbody>

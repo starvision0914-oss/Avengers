@@ -824,9 +824,11 @@ def get_account_summary(all_accounts=False):
     if cached is not None:
         return cached
 
-    qs_acct = CrawlerAccount.objects.filter(platform='11st', is_active=True)
+    # 전체보기(all_accounts)일 땐 is_active=False(전체상품수 0 등으로 크롤링 제외된 계정)도
+    # 과거 기록 조회는 가능해야 하므로 포함 — 기본(집중관리만) 뷰는 기존대로 활성+집중관리만.
+    qs_acct = CrawlerAccount.objects.filter(platform='11st')
     if not all_accounts:
-        qs_acct = qs_acct.filter(is_focused=True)
+        qs_acct = qs_acct.filter(is_active=True, is_focused=True)
     accounts = list(qs_acct)
     login_ids = [a.login_id for a in accounts]
     account_ids = [a.id for a in accounts]
@@ -842,7 +844,10 @@ def get_account_summary(all_accounts=False):
         ElevenMyProduct.objects.filter(account_id__in=account_ids)
             .values('account_id')
             .annotate(
-                product_count=Count('id'), last_synced=Max('synced_at'),
+                # product_count = 판매중 상품수만 — 판매중지/판매종료/품절/판매금지는 제외.
+                # 계정이 11번가에서 완전히 비어(전체상품수 0) 판매중지로 일괄 정정된 경우 0으로 잡히게 함
+                product_count=Count('id', filter=Q(status_type='판매중')),
+                last_synced=Max('synced_at'),
                 soldout_count=Count('id', filter=Q(status_type='품절')),
             )
     }

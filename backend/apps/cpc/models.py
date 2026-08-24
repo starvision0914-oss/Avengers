@@ -72,6 +72,17 @@ class CrawlerAccount(models.Model):
     last_otp_at = models.DateTimeField(null=True, blank=True, help_text='마지막 OTP 인증 완료 시각 (11번가 OTP는 24시간 유지)')
     hide_from_dashboard = models.BooleanField(default=False, help_text='지마켓/옥션 대시보드 계정목록에서 숨김(ROAS 등 리포트에는 계속 표시) — 타사 테스트 계정용')
     is_test_account = models.BooleanField(default=False, help_text='테스트/타사 계정 — 조회·다운로드만 허용, 판매중지·삭제·광고on/off 등 실제 조치는 전부 차단')
+    # 11번가 상품크롤 사전체크(전체상품수 탭)와 실제 엑셀 다운로드/파싱 결과 비교용 —
+    # 둘이 다르면 엑셀 다운로드가 일부만 되는 등 크롤 자체의 이상을 조기 발견 가능 (2026-08-24)
+    last_precheck_total = models.IntegerField(null=True, blank=True, help_text='크롤 시작 시 전체상품수 탭에서 읽은 값')
+    last_precheck_selling = models.IntegerField(null=True, blank=True, help_text='크롤 시작 시 판매중 탭 값')
+    last_precheck_stopped = models.IntegerField(null=True, blank=True, help_text='크롤 시작 시 판매중지 탭 값')
+    last_precheck_soldout = models.IntegerField(null=True, blank=True, help_text='크롤 시작 시 품절 탭 값')
+    last_excel_total = models.IntegerField(null=True, blank=True, help_text='엑셀 다운로드/파싱으로 실제 반영된 상품수')
+    last_excel_selling = models.IntegerField(null=True, blank=True, help_text='엑셀 반영 후 DB 판매중 건수')
+    last_excel_stopped = models.IntegerField(null=True, blank=True, help_text='엑셀 반영 후 DB 판매중지 건수')
+    last_excel_soldout = models.IntegerField(null=True, blank=True, help_text='엑셀 반영 후 DB 품절 건수')
+    last_check_at = models.DateTimeField(null=True, blank=True, help_text='위 값들을 마지막으로 비교/기록한 시각')
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'crawler_accounts'

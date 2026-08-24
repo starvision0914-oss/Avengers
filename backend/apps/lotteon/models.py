@@ -19,6 +19,12 @@ class LotteonAccount(models.Model):
     api_key = models.CharField(max_length=200, blank=True, default='')
     api_key_expires_at = models.DateTimeField(null=True, blank=True)
 
+    # 크롤 정합성 체크(11번가/지마켓과 동일 취지, 2026-08-24): API 응답의 totalCount(사전체크) vs
+    # 삭제 후 재수집해 실제 DB에 반영된 건수(excel) 비교.
+    last_precheck_total = models.IntegerField(null=True, blank=True, help_text='크롤 시작 시 API totalCount')
+    last_excel_total = models.IntegerField(null=True, blank=True, help_text='재수집 후 실제 DB 반영 건수')
+    last_check_at = models.DateTimeField(null=True, blank=True, help_text='위 값들을 마지막으로 비교한 시각')
+
     class Meta:
         db_table = 'lotteon_account'
         ordering = ['display_order', 'id']

@@ -46,18 +46,37 @@ def _make_driver():
     return d
 
 
-def _login(driver, login_id, pw):
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    driver.get(ADOFFICE); time.sleep(3)
+def _login(driver, account):
+    """adoffice 로그인 — 사용자 지시(2026-08-24)로 방식 변경: adoffice에 직접 ID/PW 로그인하는
+    대신 먼저 soffice(셀러오피스)에 로그인(쿠키 재사용+OTP 지원 인프라 재사용)한 뒤 adoffice로
+    이동(SSO 세션 공유). 계정마다 매번 새로 ID/PW를 치는 기존 방식이 55계정 연속 처리 시 전면
+    CAPTCHA를 유발했던 것으로 추정 — soffice는 72시간 쿠키 재사용이라 실제 로그인 폼 제출
+    빈도가 훨씬 낮아짐.
+    account: CrawlerAccount 인스턴스(login_id/password_enc/cookie_data 등)."""
+    from . import eleven_crawler as _ec
+
+    driver.get(ADOFFICE)
+    time.sleep(3)
     if 'login' in driver.current_url.lower():
-        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, 'memId')))
-        driver.find_element(By.ID, 'memId').send_keys(login_id)
-        driver.find_element(By.ID, 'memPwd').send_keys(pw or '')
-        driver.execute_script("arguments[0].click();", driver.find_element(By.ID, 'loginbutton'))
-        WebDriverWait(driver, 25).until(lambda x: 'login' not in x.current_url.lower())
+        used_cookie = _ec._try_cookie_login(driver, account)
+        if used_cookie is None:
+            raise Exception('Chrome 죽음(쿠키 로그인)')
+        if not used_cookie:
+            logger.info(f'[11st-adoffice:{account.login_id}] soffice 로그인 시도(쿠키 없음/만료)')
+            if not _ec._do_login(driver, account.login_id, account.password_enc):
+                logger.warning(f'[11st-adoffice:{account.login_id}] soffice 로그인 실패')
+                return None
+            _ec._save_cookies(driver, account)
+            logger.info(f'[11st-adoffice:{account.login_id}] soffice 로그인 성공')
+        else:
+            logger.info(f'[11st-adoffice:{account.login_id}] soffice 쿠키 재사용')
+
+        # soffice 세션으로 adoffice 재진입(SSO) — 팝업/알럿 자동 해제
+        driver.get(ADOFFICE)
         time.sleep(3)
+        _ec._drain_alerts(driver, login_id=account.login_id)
+        _ec._dismiss_dom_modals(driver, login_id=account.login_id)
+
     m = re.search(r'/sellers/(\d+)/', driver.current_url)
     return m.group(1) if m else None
 
@@ -102,11 +121,12 @@ def _aggregate_by_product(csv_text):
     return agg
 
 
-def collect_account(driver, login_id, pw, daterange, period_label, log, gsheet=None):
+def collect_account(driver, account, daterange, period_label, log, gsheet=None):
     """단일 계정: 보고서 생성→다운로드→상품번호 집계→저장. (저장건수, 상품수) 반환.
     gsheet: 열린 스프레드시트 객체(있으면 받은 CSV를 계정별 워크시트에도 업로드)."""
     from apps.cpc.models import St11ProductRoas
-    sn = _login(driver, login_id, pw)
+    login_id = account.login_id
+    sn = _login(driver, account)
     if not sn:
         raise Exception('adoffice 로그인 실패(sellerNo 미검출)')
     driver.set_script_timeout(120)
@@ -215,7 +235,7 @@ def run_all_accounts(log_fn=None, account_filter=None, daterange=None, period_la
         driver = None
         try:
             driver = _make_driver()   # 계정마다 새 세션 (세션 재사용으로 인한 데이터 혼선 방지)
-            n, _ = collect_account(driver, a.login_id, a.password_enc, daterange, period_label, log, gsheet=sheet)
+            n, _ = collect_account(driver, a, daterange, period_label, log, gsheet=sheet)
             collected += 1
         except Exception as e:
             failed += 1

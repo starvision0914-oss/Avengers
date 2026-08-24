@@ -14,22 +14,40 @@ LOTTEON_STATUS_REVERSE = {v: k for k, v in LOTTEON_STATUS_MAP.items()}
 LOTTEON_CRAWL_LOCKFILE = '/tmp/avengers_crawl_chrome_lotteon.lock'
 
 
+class LotteonPrecheckDiffView(views.APIView):
+    """롯데온 크롤 사전체크(API totalCount) vs 실제 반영(DB) 정합성 리포트 — 11번가/지마켓과 동일 취지.
+    (2026-08-24) 차이나는 계정만 반환."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        accounts = LotteonAccount.objects.filter(last_check_at__isnull=False).order_by('-last_check_at')
+        rows = []
+        for a in accounts:
+            pt, et = a.last_precheck_total, a.last_excel_total
+            diff = (pt or 0) - (et or 0)
+            if diff == 0:
+                continue
+            rows.append({
+                'account_id': a.id, 'login_id': a.login_id, 'seller_name': a.store_name,
+                'is_active': a.is_active, 'last_check_at': a.last_check_at.isoformat(),
+                'precheck_total': pt, 'excel_total': et, 'diff': diff,
+            })
+        rows.sort(key=lambda r: abs(r['diff']), reverse=True)
+        return Response({'count': len(rows), 'checked_accounts': accounts.count(), 'items': rows})
+
+
 class LotteonSuspendAllNoMatchView(views.APIView):
     """롯데온 미매칭 전체(판매중만) 판매종료 — Gmarket/11번가/스마트스토어 SuspendAllNoMatchView와 동일 개념.
     단, 롯데온은 "판매중지" 상태를 판매자가 직접 설정할 수 없음(판매자센터 안내: 법령/정책위반 전용,
     롯데 측 부여) — 판매자가 쓸 수 있는 상태는 판매중/품절/판매종료 3개뿐이고, 판매종료(END)는
-    UI에 명시된 대로 비가역(다시 되돌릴 수 없음). 사용자 확인(2026-08-23) 후 목표상태를 판매종료로 확정."""
+    UI에 명시된 대로 비가역(다시 되돌릴 수 없음). 사용자 확인(2026-08-23) 후 목표상태를 판매종료로 확정.
+    run_delete 내부 guard.preflight가 wait=True로 락을 대기하므로(2026-08-23), 다른 롯데온 작업이
+    실행 중이어도 여기서 막지 않고 뒤에 줄서서 자동 진행되게 둔다."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
         import subprocess
         from apps.cpc.views import _write_targets_json_file, _crawl_lock_busy
-
-        pid, busy = _crawl_lock_busy(LOTTEON_CRAWL_LOCKFILE)
-        if busy:
-            return Response({'status': 'blocked',
-                              'message': f'⛔ 이미 다른 롯데온 작업이 실행 중입니다(PID {pid}) — 끝난 뒤 다시 시도하세요.'},
-                             status=409)
 
         account_id = request.data.get('account_id')
         search = request.data.get('search')
@@ -60,7 +78,9 @@ class LotteonSuspendAllNoMatchView(views.APIView):
             return Response({'status': 'error', 'error': str(e)}, status=500)
 
         total = sum(len(v) for v in acc_map.values())
-        msg = (f'🛑 미매칭 전체 판매종료 시작 — {len(acc_map)}계정 총 {total}개(판매중만 대상, 비가역). '
+        pid, busy = _crawl_lock_busy(LOTTEON_CRAWL_LOCKFILE)
+        queue_note = f' (다른 롯데온 작업 실행 중(PID {pid}) — 끝나는 대로 자동 시작됩니다)' if busy else ''
+        msg = (f'🛑 미매칭 전체 판매종료 시작 — {len(acc_map)}계정 총 {total}개(판매중만 대상, 비가역).{queue_note} '
                f'진행상황은 /tmp/delete_loss_lotteon.log 확인.')
         return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
 

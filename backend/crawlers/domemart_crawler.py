@@ -31,10 +31,31 @@ def is_logged_out(driver):
 
 
 def do_login(driver):
+    # user_data_dir(/tmp/domemart_profile_run)가 영속 프로필이라 이전 세션 쿠키가 남아있으면
+    # login.php 접속 시 곧바로 index.php로 리다이렉트됨(이미 로그인된 상태) — 이 경우 로그인폼
+    # 자체가 없는 게 정상이라 "못 찾음" 실패가 아니라 성공으로 봐야 함(2026-08-24 실측 확인:
+    # 브라우저 강제종료 후 재시작 때 이 상태였는데 실패로 오판해 3회 재시도 후 죽었음).
     driver.get(LOGIN_URL)
-    time.sleep(2)
-    driver.find_element(By.NAME, 'MB_ID').clear()
-    driver.find_element(By.NAME, 'MB_ID').send_keys(LOGIN_ID)
+    time.sleep(1.5)
+    if 'login.php' not in driver.current_url:
+        logger.info(f'[domemart] 이미 로그인된 세션 감지(url={driver.current_url}) — 로그인 생략')
+        return
+
+    mb_id = None
+    for attempt in range(3):
+        if attempt > 0:
+            driver.get(LOGIN_URL)
+        try:
+            WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.NAME, 'MB_ID')))
+            mb_id = driver.find_element(By.NAME, 'MB_ID')
+            break
+        except Exception as e:
+            logger.info(f'[domemart] 로그인폼 로딩 실패(시도 {attempt+1}/3) url={driver.current_url}: {e}')
+            time.sleep(2)
+    if mb_id is None:
+        raise Exception(f'로그인폼 로딩 실패(3회 재시도 소진), url={driver.current_url}')
+    mb_id.clear()
+    mb_id.send_keys(LOGIN_ID)
     pw = driver.find_element(By.NAME, 'MB_PW')
     pw.clear()
     pw.send_keys(LOGIN_PW)

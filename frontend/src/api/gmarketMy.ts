@@ -99,3 +99,35 @@ export async function exportGmarketMyProducts(
   const resp = await api.get(`${base}/products/`, { params, responseType: 'blob' });
   return resp.data as Blob;
 }
+
+export interface GmarketPriceMatchPreviewRow {
+  id: number; account_name: string; product_no: string; name: string;
+  current_price: number; target_price: number; diff: number;
+}
+export interface GmarketPriceMatchPreviewResponse {
+  total: number; rows: GmarketPriceMatchPreviewRow[]; preview_limit: number;
+}
+// 확인필요(역마진) 상품 판매가를 예비상품 마켓가로 맞추기 — 미리보기(변경 없음)
+export async function previewGmarketPriceMatch(pct?: number): Promise<GmarketPriceMatchPreviewResponse> {
+  const { data } = await api.get<GmarketPriceMatchPreviewResponse>(`${base}/price-match-preview/`, {
+    params: pct ? { pct } : undefined,
+  });
+  return data;
+}
+// 실제 실행 — API 직접호출 기반 백그라운드 관리커맨드(계정별 로그인 1회 후 순차 처리)
+export async function applyGmarketPriceMatch(pct?: number): Promise<{ status: string; message?: string; total?: number; error?: string }> {
+  const { data } = await api.post(`${base}/price-match-apply/`, pct ? { pct } : {});
+  return data;
+}
+
+// 고단가(판매가가 마켓가 대비 pct%+ 초과) 상품 판매가를 마켓가로 인하 — 미리보기(변경 없음)
+export async function previewGmarketPriceCap(pct?: number): Promise<GmarketPriceMatchPreviewResponse> {
+  const { data } = await api.get<GmarketPriceMatchPreviewResponse>(`${base}/price-cap-preview/`, {
+    params: pct ? { pct } : undefined,
+  });
+  return data;
+}
+export async function applyGmarketPriceCap(pct?: number): Promise<{ status: string; message?: string; total?: number; error?: string }> {
+  const { data } = await api.post(`${base}/price-cap-apply/`, pct ? { pct } : {});
+  return data;
+}

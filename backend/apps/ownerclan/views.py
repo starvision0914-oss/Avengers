@@ -18,15 +18,26 @@ class _WorkspaceMixin:
 
 
 def _pid_alive(pid):
+    """pid 생존 확인. 종료됐지만 부모(Django)가 wait()하지 않아 좀비(Z)로 남은 경우는
+    os.kill(pid, 0)이 예외 없이 성공해버리므로 반드시 죽은 것으로 취급해야 함."""
     if not pid:
         return False
     try:
         os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
+    except (ProcessLookupError, PermissionError, OSError):
         return False
-    except OSError:
-        return False
+    try:
+        with open(f'/proc/{pid}/stat') as f:
+            state = f.read().rsplit(')', 1)[1].split()[0]
+        if state == 'Z':
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+            return False
+    except (FileNotFoundError, IndexError, OSError):
+        pass
+    return True
 
 
 class OwnerClanProductUploadView(_WorkspaceMixin, APIView):
@@ -356,10 +367,9 @@ class OwnerclanApiCrawlView(APIView):
         task = OwnerclanTask.objects.filter(task_type='api_crawl').order_by('-created_at').first()
         busy = False
         if task and task.status == 'running' and task.pid:
-            try:
-                os.kill(task.pid, 0)
+            if _pid_alive(task.pid):
                 busy = True
-            except (ProcessLookupError, PermissionError):
+            else:
                 task.status = 'done'
                 task.save(update_fields=['status'])
 
@@ -382,13 +392,8 @@ class OwnerclanApiCrawlView(APIView):
     def post(self, request):
         import subprocess
         running = OwnerclanTask.objects.filter(task_type='api_crawl', status='running').first()
-        if running and running.pid:
-            import os
-            try:
-                os.kill(running.pid, 0)
-                return Response({'error': '이미 수집 중입니다.'}, status=409)
-            except (ProcessLookupError, PermissionError):
-                pass
+        if running and running.pid and _pid_alive(running.pid):
+            return Response({'error': '이미 수집 중입니다.'}, status=409)
 
         task = OwnerclanTask.objects.create(task_type='api_crawl', status='running')
         cmd = (f'cd /home/rejoice888/Avengers/backend && '
@@ -425,10 +430,9 @@ class OwnerclanWeeklyPopularView(APIView):
         task = OwnerclanTask.objects.filter(task_type='weekly_popular').order_by('-created_at').first()
         busy = False
         if task and task.status == 'running' and task.pid:
-            try:
-                os.kill(task.pid, 0)
+            if _pid_alive(task.pid):
                 busy = True
-            except (ProcessLookupError, PermissionError):
+            else:
                 task.status = 'done'
                 task.save(update_fields=['status'])
 
@@ -438,12 +442,8 @@ class OwnerclanWeeklyPopularView(APIView):
         import os
         import subprocess
         running = OwnerclanTask.objects.filter(task_type='weekly_popular', status='running').first()
-        if running and running.pid:
-            try:
-                os.kill(running.pid, 0)
-                return Response({'error': '이미 수집 중입니다.'}, status=409)
-            except (ProcessLookupError, PermissionError):
-                pass
+        if running and running.pid and _pid_alive(running.pid):
+            return Response({'error': '이미 수집 중입니다.'}, status=409)
 
         task = OwnerclanTask.objects.create(task_type='weekly_popular', status='running')
         cmd = (f'cd /home/rejoice888/Avengers/backend && '
@@ -475,21 +475,61 @@ class OwnerclanWeeklyPopularDownloadView(APIView):
         return FileResponse(open(path, 'rb'), as_attachment=True, filename=filename)
 
 
+class OwnerclanWeeklyPopularDownloadAllView(APIView):
+    """주간 인기 상품(db저장창고)에 저장된 날짜별 파일 전체를 zip 하나로 묶어 한번에 다운로드.
+    filenames 쿼리파라미터(콤마구분)로 특정 날짜만 지정도 가능 — 생략 시 전체."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import os
+        import zipfile
+        import io
+        from datetime import date
+        from django.conf import settings
+        from django.http import FileResponse, Http404
+
+        storage_dir = os.path.join(settings.BASE_DIR, 'media', 'ownerclan_weekly_popular')
+        if not os.path.isdir(storage_dir):
+            raise Http404()
+
+        requested = request.query_params.get('filenames', '')
+        if requested:
+            # 경로 조작 방지 — 순수 파일명만 허용, 중복 제거(순서 유지)
+            seen = set()
+            names = []
+            for n in requested.split(','):
+                n = n.strip()
+                if n and os.path.basename(n) == n and n not in seen:
+                    seen.add(n)
+                    names.append(n)
+        else:
+            names = sorted(n for n in os.listdir(storage_dir)
+                            if os.path.isfile(os.path.join(storage_dir, n)))
+
+        names = [n for n in names if os.path.isfile(os.path.join(storage_dir, n))]
+        if not names:
+            raise Http404()
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for n in names:
+                zf.write(os.path.join(storage_dir, n), arcname=n)
+        buf.seek(0)
+
+        bundle_name = f'오너클랜_주간인기상품_{len(names)}개_{date.today():%Y%m%d}.zip'
+        return FileResponse(buf, as_attachment=True, filename=bundle_name)
+
+
 class OwnerclanAccountInfoCrawlView(APIView):
     """오너클랜 마이페이지 계정정보(예치금/주문현황/구독서비스/최저가선점권) 새로고침 — 백그라운드 실행."""
     permission_classes = [IsAuthenticated]
     LOG_FILE = '/tmp/ownerclan_account_info_crawl.log'
 
     def post(self, request):
-        import os
         import subprocess
         running = OwnerclanTask.objects.filter(task_type='account_info', status='running').first()
-        if running and running.pid:
-            try:
-                os.kill(running.pid, 0)
-                return Response({'error': '이미 수집 중입니다.'}, status=409)
-            except (ProcessLookupError, PermissionError):
-                pass
+        if running and running.pid and _pid_alive(running.pid):
+            return Response({'error': '이미 수집 중입니다.'}, status=409)
 
         task = OwnerclanTask.objects.create(task_type='account_info', status='running')
         cmd = (f'cd /home/rejoice888/Avengers/backend && '

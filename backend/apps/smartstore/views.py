@@ -66,6 +66,31 @@ class AccountListView(APIView):
         return Response({'id': obj.id, 'store_name': obj.store_name}, status=201)
 
 
+class PrecheckDiffView(APIView):
+    """스마트스토어 크롤 사전체크(상품 API totalElements) vs 실제 반영(DB) 정합성 리포트.
+    (2026-08-24) 스마트스토어는 API 응답에 상태별 사전 분류가 없어 전체 건수만 비교 가능."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        accounts = SmartStoreAccount.objects.filter(last_check_at__isnull=False).order_by('-last_check_at')
+        rows = []
+        for a in accounts:
+            pt, et = a.last_precheck_total, a.last_excel_total
+            diff_total = (pt or 0) - (et or 0)
+            if diff_total == 0:
+                continue
+            rows.append({
+                'account_id': a.id, 'login_id': a.login_id,
+                'store_name': a.display_name or a.store_name, 'is_active': a.is_active,
+                'last_check_at': a.last_check_at.isoformat(),
+                'precheck_total': pt, 'excel_total': et, 'diff_total': diff_total,
+                'excel_selling': a.last_excel_selling, 'excel_soldout': a.last_excel_soldout,
+                'excel_stopped': a.last_excel_stopped,
+            })
+        rows.sort(key=lambda r: abs(r['diff_total']), reverse=True)
+        return Response({'count': len(rows), 'checked_accounts': accounts.count(), 'items': rows})
+
+
 class AccountDetailView(APIView):
     def patch(self, request, pk):
         try:
@@ -671,6 +696,101 @@ class PriceMatchApplyView(APIView):
             name = t.account.display_name or t.account.store_name
             by_store[name] = by_store.get(name, 0) + 1
         msg = (f'💰 단가 마켓가 맞춤 시작(역마진 {pct}%+) — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
+               f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
+
+
+class PriceCapPreviewView(APIView):
+    """고단가(판매가가 예비상품 마켓가의 mult배 초과) 상품의 판매가를 마켓가(100%)로 낮추면
+    몇 개가 얼마→얼마로 바뀌는지 미리보기(실제 변경 없음). PriceMatchPreviewView와 반대 방향
+    (역마진=너무 쌈 / 고단가=너무 비쌈)."""
+    def get(self, request):
+        pct_raw = request.query_params.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 100
+        mult = 1 + max(pct, 1) / 100.0
+
+        qs = (SmartStoreProduct.objects.select_related('account')
+              .filter(status_type='SALE', purchase_cost__gt=0,
+                      sale_price__gt=F('purchase_cost') * mult)
+              .order_by('-id'))
+
+        total = qs.count()
+        rows = []
+        for p in qs[:500]:
+            rows.append({
+                'id': p.id,
+                'account_name': p.account.display_name or p.account.store_name,
+                'product_no': p.product_no,
+                'name': p.name,
+                'current_price': p.sale_price,
+                'target_price': p.purchase_cost,
+                'diff': p.sale_price - p.purchase_cost,
+            })
+        return Response({'total': total, 'rows': rows, 'preview_limit': 500})
+
+
+class PriceCapApplyView(APIView):
+    """고단가 상품의 판매가를 예비상품 마켓가(100%)로 실제 인하. PriceMatchApplyView와 동일 패턴."""
+    LOG_FILE = '/tmp/price_cap_smartstore.log'
+
+    def post(self, request):
+        import threading, time
+        from django.db.models import F
+
+        account_id = request.data.get('account_id')
+        search = request.data.get('search')
+        pct_raw = request.data.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 100
+        mult = 1 + max(pct, 1) / 100.0
+
+        qs = SmartStoreProduct.objects.select_related('account').filter(
+            purchase_cost__gt=0, sale_price__gt=F('purchase_cost') * mult, status_type='SALE',
+        )
+        if account_id:
+            qs = qs.filter(account_id=int(account_id))
+        if search:
+            qs = qs.filter(Q(name__icontains=search) | Q(seller_management_code__icontains=search))
+        targets = list(qs)
+
+        if not targets:
+            return Response({'status': 'blocked', 'message': f'⛔ 고단가(마켓가 대비 {pct}%+ 초과, SALE) 대상이 없습니다.'}, status=400)
+
+        store_groups = {}
+        for t in targets:
+            store_groups.setdefault(t.account_id, {'account': t.account, 'items': []})['items'].append(t)
+
+        def _run():
+            from .services.naver_api import _get_access_token, update_price_api
+            with open(self.LOG_FILE, 'a') as log:
+                log.write(f'\n{time.strftime("%F %T")} 고단가 마켓가 인하 시작(마켓가 대비 {pct}%+ 초과) — {len(targets)}건 / {len(store_groups)}스토어\n')
+                success = fail = 0
+                for sid, group in store_groups.items():
+                    acc = group['account']
+                    if not acc.commerce_api_key or not acc.commerce_secret_key:
+                        fail += len(group['items'])
+                        log.write(f'  [{acc.store_name}] API키 미등록 — {len(group["items"])}건 스킵\n')
+                        continue
+                    try:
+                        token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
+                    except Exception as e:
+                        fail += len(group['items'])
+                        log.write(f'  [{acc.store_name}] 토큰 발급 실패: {e}\n')
+                        continue
+                    for item in group['items']:
+                        try:
+                            update_price_api(item.channel_product_no, item.purchase_cost, token)
+                            SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=item.purchase_cost)
+                            success += 1
+                        except Exception as e:
+                            fail += 1
+                            log.write(f'  [{acc.store_name}] {item.product_no} 실패: {e}\n')
+                        time.sleep(1)
+                    log.flush()
+                log.write(f'{time.strftime("%F %T")} 완료 — 성공 {success} / 실패 {fail}\n')
+
+        threading.Thread(target=_run, daemon=True).start()
+
+        msg = (f'💰 고단가 마켓가 인하 시작(마켓가 대비 {pct}%+ 초과) — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
                f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
         return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
 

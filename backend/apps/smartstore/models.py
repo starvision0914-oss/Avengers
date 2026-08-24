@@ -23,6 +23,17 @@ class SmartStoreAccount(models.Model):
     naver_ad_ai_login_id = models.CharField(max_length=100, blank=True, default='', help_text='광고센터 AI 로그인 Naver ID (naver_ads_cookies.json 키)')
     purchase_rate = models.IntegerField(default=0, help_text='구매가율(%) — 예: 70 입력 시 구매가=매출×70%')
     is_active = models.BooleanField(default=True)
+    # 11번가/지마켓과 동일한 취지의 크롤 정합성 체크(2026-08-24) — 상품 API 응답의
+    # totalElements(사전체크)와 실제 DB에 반영된 건수를 비교해 크롤 누락을 조기 발견.
+    last_precheck_total = models.IntegerField(null=True, blank=True, help_text='상품 API totalElements(페이지1 응답)')
+    last_precheck_selling = models.IntegerField(null=True, blank=True)
+    last_precheck_soldout = models.IntegerField(null=True, blank=True)
+    last_precheck_stopped = models.IntegerField(null=True, blank=True)
+    last_excel_total = models.IntegerField(null=True, blank=True, help_text='실제 DB에 반영된 상품수')
+    last_excel_selling = models.IntegerField(null=True, blank=True)
+    last_excel_soldout = models.IntegerField(null=True, blank=True)
+    last_excel_stopped = models.IntegerField(null=True, blank=True)
+    last_check_at = models.DateTimeField(null=True, blank=True)
     display_order = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -159,9 +159,13 @@ def login_naver(driver, login_id: str, login_pw: str, log_fn=None) -> bool:
         _xtype(login_pw, disp, driver)
         time.sleep(0.3)
 
-        # 로그인 버튼
-        login_btn = driver.find_element(By.ID, 'log.login')
-        login_btn.click()
+        # 로그인 버튼 (2026-08-24: id='log.login' 셀렉터가 더 이상 안 먹혀서 텍스트 기반 폴백 추가.
+        # 클릭 불가(element not interactable) 방지를 위해 JS 클릭 사용)
+        try:
+            login_btn = driver.find_element(By.ID, 'log.login')
+        except Exception:
+            login_btn = driver.find_element(By.XPATH, "//button[contains(normalize-space(.),'로그인')]")
+        driver.execute_script("arguments[0].click();", login_btn)
         time.sleep(3)
 
         # 로그인 성공 확인 (my.naver.com 또는 리디렉션)

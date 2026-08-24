@@ -126,3 +126,6 @@
 - [롯데온 미매칭 인프라 구축](project_lotteon_nomatch_suspend.md) — purchase_cost필드+매칭함수+미매칭필터 구축(2026-08-23), 실측 SALE미매칭 0건
 - [롯데온 판매중지는 셀러가 못함](project_lotteon_stp_not_seller_action.md) — 판매중지(STP)=롯데 법령/정책위반 강제조치 전용, 셀러가 쓸수있는 상태변경은 판매중/품절/판매종료 3개뿐(판매중지 옵션 자체가 없음). 실사이트 UI셀렉터 확보완료(2FA 불필요), 목표상태를 품절로 할지 사용자확인 필요
 - [tmxkql111/222 지마켓·롯데온 공용ID](project_lotteon_gmarket_shared_loginid.md) — 이 로그인ID는 두 플랫폼에 다 등록돼있어 오류보고시 플랫폼 헷갈리기 쉬움. 실제 8/23 오류는 롯데온 2FA실패였는데 지마켓으로 오보고한 사례
+- [재수집 먼저, 그다음 미매칭판매중지](feedback_recrawl_before_nomatch_suspend.md) — DB 오래된 스냅샷으로 타겟 뽑으면 시차/중복실행 혼란(가짜거부알럿) 생김. 11번가 status는 다음날 크롤 전까지 미갱신이 근본원인
+- [크롤링 문제확인 철저히](feedback_crawl_problem_check_thoroughness.md) — "문제있어?" 질문엔 crawling_status 필드만 보지 말고 최근3일 로그 전체 grep해서 보고(필드가 실패를 반영 안하는 경우 발견됨). 세션 무관 항상 적용
+- [11번가 엑셀나의상품 stale 검증함정](project_11st_excel_export_stale_status.md) — 판매중지 직후 검증할 때 엑셀재수집(crawl_11st_products) 쓰면 가짜"실패"(엑셀이 stale). 실시간 AJAX(SellProductAjaxAction getSellProductListJSON)로 검증할 것. 진짜 판매중지 API는 SellProductAction updateProductSelStat

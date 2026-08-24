@@ -184,10 +184,11 @@ def _merge_fee_payment(filled, login_id, d0, d1, log):
     log(f'[{login_id}] 수수료결제 {total_fee:,}원 합산(총비용 열에 반영)')
 
 
-def collect_period_for_account(driver, login_id, password_enc, period_text, d0, d1, sheet, log):
+def collect_period_for_account(driver, account, period_text, d0, d1, sheet, log):
     """이미 만들어진(로그인된) driver로 기간별 보고서 다운로드+구글시트 업로드.
     _login 멱등(이미 로그인이면 세션 재사용) → 상품ROAS 크롤과 로그인 1회 공유 가능."""
-    sn = _login(driver, login_id, password_enc)
+    login_id = account.login_id
+    sn = _login(driver, account)
     if not sn:
         raise Exception('adoffice 로그인 실패')
     rows = collect_period_rows(driver, sn, period_text, log)
@@ -261,7 +262,7 @@ def run_all_accounts(log_fn=None, account_filter=None, gsheet=True, year_month=N
         driver = None
         try:
             driver = _make_driver()
-            sn = _login(driver, a.login_id, a.password_enc)
+            sn = _login(driver, a)
             if not sn:
                 raise Exception('adoffice 로그인 실패')
             rows = collect_period_rows(driver, sn, period_text, log)

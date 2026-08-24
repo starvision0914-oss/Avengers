@@ -162,43 +162,43 @@ def control_one(driver, login_id, action, source='manual', log_fn=None):
             break
 
     # 대상 건수가 많을수록(예: 1,500개+) 사이트 자체 처리(선택 반영→저장)가 오래 걸려
-    # 고정 대기만으로는 부족 — 처리 중인 페이지에 재진입(get)이 겹치면
-    # 'aborted by navigation: Not attached to an active page'로 세션이 죽는다(2026-07-09 실측,
-    # rejoice666 1,505개에서 재현). 건수 비례 대기 + 재진입 실패 시 재시도로 완화.
+    # 고정 대기만으로는 부족했다(2026-07-09 rejoice666/tmxkqlwus 1,400~1,500건대에서 재확인이
+    # 0/0으로 렌더링 미완료 상태로 잡혀 추정치만 기록되던 문제 — "재확인 실패" 원인 1위).
+    # 2026-08-24: 고정 sleep+2회 재시도 대신, 총건수가 맞을 때까지 짧은 간격(2초)으로 폴링해서
+    # 준비되는 즉시 반환(작은 계정은 더 빨라짐) + 대량 계정은 시간을 충분히 줘서(최대 60초)
+    # 추정치로 눙기지 않고 실제로 확인한다(더 정확해짐). 재진입(get) 자체가 죽으면(세션 끊김)
+    # 즉시 재시도, poll 타임아웃 안에서도 계속 죽으면 최종적으로 추정치 경로로 넘어간다.
     target_n = before_off if action == 'on' else before_on
-    time.sleep(min(2 + target_n / 300.0, 10))
     total_before = before_on + before_off
-    for _nav_try in range(2):
+    poll_deadline = time.time() + min(8 + target_n / 40.0, 60)
+    after_on = after_off = None
+    last_err = None
+    while time.time() < poll_deadline:
         try:
             _go_cpc2_tab(driver)
             after_on, after_off = _count_on_off(driver)
-            # 대량 처리 직후 재진입 시 테이블이 아직 안 채워진 채로 렌더링되면 예외 없이
-            # 0행을 그대로 돌려줄 수 있다(2026-07-09 tmxkqlwus 1,449건에서 실측 — 재확인이
-            # 조용히 0/0으로 나와 DB에 잘못 저장됨). ON/OFF 전환만으로는 총건수가 변하지
-            # 않아야 하므로, 총건수가 어긋나면 렌더링 미완료로 보고 재시도/추정치 경로로 보낸다.
-            if after_on + after_off != total_before:
-                raise RuntimeError(
-                    f'재확인 건수 불일치(원래 {total_before}건인데 {after_on + after_off}건 감지 — 렌더링 미완료로 추정)')
-            break
+            if after_on + after_off == total_before:
+                break
+            after_on = after_off = None
+            time.sleep(2)
         except Exception as e:
-            # 세션 자체가 죽은 경우(아래 문구들)는 추정치로 눙치면 안 됨 — 여기서 삼키면
-            # run_control의 죽은 driver 감지(dead session → 재생성)가 트리거되지 않아,
-            # 이후 전 계정이 로그인 실패로 연쇄 실패한다(2026-07-21 실측, rejoice666 이후
-            # 24계정 전부 '로그인 실패(2회)' — 실제로는 driver가 죽어있었을 뿐). 그대로 재던짐.
+            last_err = e
             dead = any(s in str(e).lower() for s in
                        ('not attached', 'invalid session', 'no such window',
                         'chrome not reachable', 'disconnected', 'aborted by navigation'))
             if dead:
+                # 세션 자체가 죽은 경우는 추정치로 눙기면 안 됨 — run_control의 죽은 driver
+                # 감지(dead session → 재생성)가 트리거되도록 그대로 재던짐(2026-07-21 실측,
+                # 여기서 삼키면 이후 전 계정이 로그인 실패로 연쇄 실패했었음).
                 raise
-            if _nav_try == 0:
-                log(f'재진입 실패({e}) — 3초 대기 후 재시도')
-                time.sleep(3)
-            else:
-                # 재확인만 실패한 것 — 액션 자체(클릭+alert)는 이미 서버에 반영됐을 가능성이 높음.
-                # 다음 상태확인 크롤(crawl_gmarket_cpc_status)이 정확한 값으로 다시 채워줄 것이므로
-                # 여기선 목표대로 반영됐다고 가정한 추정치만 기록.
-                log(f'결과 재확인 실패({e}) — 액션은 반영됐을 수 있음, 다음 계정 계속')
-                after_on, after_off = (total_before, 0) if action == 'on' else (0, total_before)
+            time.sleep(2)
+
+    if after_on is None:
+        # 폴링 타임아웃까지도 확정 못함 — 액션 자체(클릭+alert)는 이미 서버에 반영됐을 가능성이
+        # 높음. 다음 상태확인 크롤(crawl_gmarket_cpc_status)이 정확한 값으로 다시 채워줄 것이므로
+        # 여기선 목표대로 반영됐다고 가정한 추정치만 기록.
+        log(f'결과 재확인 시간초과({last_err}) — 액션은 반영됐을 수 있음, 다음 계정 계속')
+        after_on, after_off = (total_before, 0) if action == 'on' else (0, total_before)
     log(f'결과: ON={after_on} OFF={after_off}')
 
     return {

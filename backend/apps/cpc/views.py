@@ -2131,19 +2131,12 @@ class ElevenSuspendAllNoMatchView(views.APIView):
 
 class GmarketSuspendAllNoMatchView(views.APIView):
     """지마켓 미매칭/확인필요(역마진)/L코드품절 전체(판매중만) 판매중지 — ElevenSuspendAllNoMatchView와 동일 패턴.
-    run_delete 내부 guard.preflight가 동시실행을 막긴 하지만, 이미 실행 중일 때도 뷰는 무조건
-    '시작됨'을 반환해 버튼을 눌러도 실제로는 아무 진행 없이 조용히 거부되는 것처럼 보였다
-    (2026-08-22 — 버튼 누를 때마다 처음부터 다시 도는 것처럼 느껴진 원인). 여기서 먼저 확인하고 막는다."""
+    run_delete 내부 guard.preflight가 wait=True로 락을 대기하므로(2026-08-23), 다른 지마켓 작업이
+    실행 중이어도 여기서 막지 않고 뒤에 줄서서 자동 진행되게 둔다."""
     def post(self, request):
         import json, subprocess
         from django.db.models import F
         from apps.cpc.models import GmarketMyProduct, protected_login_ids
-
-        pid, busy = _crawl_lock_busy(GMARKET_CRAWL_LOCKFILE)
-        if busy:
-            return Response({'status': 'blocked',
-                              'message': f'⛔ 이미 다른 지마켓 작업이 실행 중입니다(PID {pid}) — 끝난 뒤 다시 시도하세요.'},
-                             status=409)
 
         kind = request.data.get('kind') or 'no_match'
         account_id = request.data.get('account_id')
@@ -2202,7 +2195,9 @@ class GmarketSuspendAllNoMatchView(views.APIView):
             return Response({'status': 'error', 'error': str(e)}, status=500)
 
         total = sum(len(v) for v in acc_map.values())
-        msg = f'🛑 {label} 전체 판매중지 시작 — {len(acc_map)}계정 총 {total}개(판매중만 대상, 지마켓 순차처리). 진행상황은 /tmp/delete_loss_gmarket.log 확인.'
+        pid, busy = _crawl_lock_busy(GMARKET_CRAWL_LOCKFILE)
+        queue_note = f' (다른 지마켓 작업 실행 중(PID {pid}) — 끝나는 대로 자동 시작됩니다)' if busy else ''
+        msg = f'🛑 {label} 전체 판매중지 시작 — {len(acc_map)}계정 총 {total}개(판매중만 대상, 지마켓 순차처리).{queue_note} 진행상황은 /tmp/delete_loss_gmarket.log 확인.'
         if skipped_protected:
             msg += f' [제외: {", ".join(skipped_protected)}]'
         return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
@@ -3905,6 +3900,140 @@ class GmarketMyProductListView(views.APIView):
                          'high_margin_total': high_margin_total})
 
 
+class GmarketPriceMatchPreviewView(views.APIView):
+    """지마켓 확인필요(역마진) 상품의 판매가를 예비상품 마켓가(purchase_cost)로 맞추면
+    몇 개가 얼마→얼마로 바뀌는지 미리보기(실제 변경 없음). ElevenPriceMatchPreviewView와 동일 개념."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import F
+        from apps.cpc.models import GmarketMyProduct
+        pct_raw = request.query_params.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 20
+        mult = (100 - min(max(pct, 1), 99)) / 100.0
+
+        qs = (GmarketMyProduct.objects.select_related('account')
+              .filter(status_type='판매중', purchase_cost__gt=0,
+                      sale_price__lte=F('purchase_cost') * mult)
+              .order_by('-id'))
+
+        total = qs.count()
+        rows = []
+        for p in qs[:500]:
+            rows.append({
+                'id': p.id,
+                'account_name': p.account.seller_name or p.account.login_id,
+                'product_no': p.product_no,
+                'name': p.product_name,
+                'current_price': p.sale_price,
+                'target_price': p.purchase_cost,
+                'diff': p.purchase_cost - p.sale_price,
+            })
+        return Response({'total': total, 'rows': rows, 'preview_limit': 500})
+
+
+class GmarketPriceMatchApplyView(views.APIView):
+    """지마켓 확인필요(역마진) 상품의 판매가를 예비상품 마켓가로 실제 변경.
+    crawlers.gmarket_price_match.run_price_match(API 직접호출, 2026-08-24 실측 검증)를
+    apply_gmarket_price_match 관리커맨드를 통해 백그라운드 프로세스로 실행."""
+    LOG_FILE = '/tmp/price_match_gmarket.log'
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import subprocess
+        pct_raw = request.data.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 20
+
+        from django.db.models import F
+        from apps.cpc.models import GmarketMyProduct
+        mult = (100 - min(max(pct, 1), 99)) / 100.0
+        total = GmarketMyProduct.objects.filter(
+            status_type='판매중', purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * mult
+        ).count()
+        if not total:
+            return Response({'status': 'blocked', 'message': f'⛔ 확인필요(역마진 {pct}%+) 대상이 없습니다.'}, status=400)
+
+        script = ('cd /home/rejoice888/Avengers/backend && /usr/bin/python3 -u manage.py '
+                   f'apply_gmarket_price_match --all --pct {pct} >> {self.LOG_FILE} 2>&1')
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        msg = (f'💰 단가 마켓가 맞춤 시작(역마진 {pct}%+) — 총 {total}개(판매중만 대상). '
+               f'지마켓 다른 크롤이 실행 중이면 끝날 때까지 대기 후 시작됩니다. '
+               f'진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'total': total})
+
+
+class GmarketPriceCapPreviewView(views.APIView):
+    """지마켓 고단가(판매가가 예비상품 마켓가의 mult배 초과) 상품의 판매가를 마켓가(100%)로
+    낮추면 몇 개가 얼마→얼마로 바뀌는지 미리보기(실제 변경 없음). GmarketPriceMatchPreviewView와
+    반대 방향(역마진=너무 쌈 / 고단가=너무 비쌈)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import F
+        from apps.cpc.models import GmarketMyProduct
+        pct_raw = request.query_params.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 100
+        mult = 1 + max(pct, 1) / 100.0
+
+        qs = (GmarketMyProduct.objects.select_related('account')
+              .filter(status_type='판매중', purchase_cost__gt=0,
+                      sale_price__gt=F('purchase_cost') * mult)
+              .order_by('-id'))
+
+        total = qs.count()
+        rows = []
+        for p in qs[:500]:
+            rows.append({
+                'id': p.id,
+                'account_name': p.account.seller_name or p.account.login_id,
+                'product_no': p.product_no,
+                'name': p.product_name,
+                'current_price': p.sale_price,
+                'target_price': p.purchase_cost,
+                'diff': p.sale_price - p.purchase_cost,
+            })
+        return Response({'total': total, 'rows': rows, 'preview_limit': 500})
+
+
+class GmarketPriceCapApplyView(views.APIView):
+    """지마켓 고단가 상품의 판매가를 예비상품 마켓가(100%)로 실제 인하.
+    apply_gmarket_price_cap 관리커맨드를 백그라운드로 실행(GmarketPriceMatchApplyView와 동일 패턴)."""
+    LOG_FILE = '/tmp/price_cap_gmarket.log'
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import subprocess
+        pct_raw = request.data.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 100
+
+        from django.db.models import F
+        from apps.cpc.models import GmarketMyProduct
+        mult = 1 + max(pct, 1) / 100.0
+        total = GmarketMyProduct.objects.filter(
+            status_type='판매중', purchase_cost__gt=0, sale_price__gt=F('purchase_cost') * mult
+        ).count()
+        if not total:
+            return Response({'status': 'blocked', 'message': f'⛔ 고단가(마켓가 대비 {pct}%+ 초과) 대상이 없습니다.'}, status=400)
+
+        script = ('cd /home/rejoice888/Avengers/backend && /usr/bin/python3 -u manage.py '
+                   f'apply_gmarket_price_cap --all --pct {pct} >> {self.LOG_FILE} 2>&1')
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        msg = (f'💰 고단가 마켓가 인하 시작(마켓가 대비 {pct}%+ 초과) — 총 {total}개(판매중만 대상). '
+               f'지마켓 다른 크롤이 실행 중이면 끝날 때까지 대기 후 시작됩니다. '
+               f'진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'total': total})
+
+
 class GmarketSuspendSelectedView(views.APIView):
     """선택 상품(나의상품 그리드에서 체크한 것) 판매중지 — 지마켓판. ElevenSuspendSelectedView와 동일 패턴.
     dlwodb777 등 is_test_account=True 계정은 protected_login_ids로 자동 제외(2026-08-20 등록)."""
@@ -4706,6 +4835,7 @@ class MyProductsAllView(views.APIView):
                     'product_image_url': p.product_image_url,
                     'synced_at': p.synced_at.isoformat() if p.synced_at else None,
                     'purchase_cost': p.purchase_cost, 'cost_diff': p.cost_diff,
+                    'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else None,
                 })
 
         # ── 지마켓/옥션 ──
@@ -4757,6 +4887,7 @@ class MyProductsAllView(views.APIView):
                     'product_image_url': p.product_image_url,
                     'synced_at': p.synced_at.isoformat() if p.synced_at else None,
                     'purchase_cost': p.purchase_cost, 'cost_diff': p.cost_diff,
+                    'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else None,
                 })
 
         # ── 쿠팡 (오픈API 등록상품 — 판매가/재고 데이터 없음, 승인상태만 존재) ──
@@ -4839,7 +4970,9 @@ class MyProductsAllView(views.APIView):
                     'seller_product_code': p.seller_management_code, 'category': p.category_id,
                     'product_image_url': p.product_image_url,
                     'synced_at': p.synced_at.isoformat() if p.synced_at else None,
-                    'purchase_cost': None, 'cost_diff': None,
+                    'purchase_cost': p.purchase_cost,
+                    'cost_diff': (p.sale_price - p.purchase_cost) if p.purchase_cost else None,
+                    'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else None,
                 })
 
         # ── 롯데온 (세션 토큰 크롤러 수집 — 판매가만 존재, 재고 데이터 없음) ──
@@ -5048,6 +5181,177 @@ class ElevenMyProductAccountSummaryView(views.APIView):
     def get(self, request):
         all_accounts = request.query_params.get('all') in ('1', 'true', 'True')
         return Response(_emp_svc.get_account_summary(all_accounts=all_accounts))
+
+
+class ElevenPrecheckDiffView(views.APIView):
+    """11번가/지마켓 크롤 사전체크(라이브 탭) vs 실제 반영(DB) 정합성 리포트.
+    (2026-08-24) 크롤 시작 시 읽은 전체/판매중/품절(지마켓은 판매불가)/판매중지 수치와,
+    다운로드해 실제 DB에 반영된 수치를 계정별로 비교. 차이나는 계정만 반환(정상 계정은 제외).
+    ?platform=11st(기본)|gmarket 로 선택."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        platform = request.query_params.get('platform') or '11st'
+        accounts = CrawlerAccount.objects.filter(
+            platform=platform, last_check_at__isnull=False
+        ).order_by('-last_check_at')
+        rows = []
+        for a in accounts:
+            pt, et = a.last_precheck_total, a.last_excel_total
+            ps, es = a.last_precheck_selling, a.last_excel_selling
+            po, eo = a.last_precheck_soldout, a.last_excel_soldout
+            pp, ep = a.last_precheck_stopped, a.last_excel_stopped
+            diff_total = (pt or 0) - (et or 0)
+            diff_selling = (ps or 0) - (es or 0)
+            diff_soldout = (po or 0) - (eo or 0)
+            diff_stopped = (pp or 0) - (ep or 0)
+            if diff_total == 0 and diff_selling == 0 and diff_soldout == 0 and diff_stopped == 0:
+                continue   # 차이 없음 — 정상, 리스트에서 제외
+            rows.append({
+                'account_id': a.id, 'login_id': a.login_id, 'seller_name': a.seller_name,
+                'is_active': a.is_active, 'last_check_at': a.last_check_at.isoformat(),
+                'precheck': {'total': pt, 'selling': ps, 'soldout': po, 'stopped': pp},
+                'excel': {'total': et, 'selling': es, 'soldout': eo, 'stopped': ep},
+                'diff': {'total': diff_total, 'selling': diff_selling,
+                         'soldout': diff_soldout, 'stopped': diff_stopped},
+            })
+        rows.sort(key=lambda r: abs(r['diff']['total']), reverse=True)
+        return Response({'count': len(rows), 'checked_accounts': accounts.count(), 'items': rows})
+
+
+class ElevenPriceMatchPreviewView(views.APIView):
+    """11번가 확인필요(역마진) 상품의 판매가를 예비상품 마켓가(purchase_cost)로 맞추면
+    몇 개가 얼마→얼마로 바뀌는지 미리보기(실제 변경 없음). 스마트스토어 PriceMatchPreviewView와 동일 개념."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import F
+        from .models import ElevenMyProduct
+        pct_raw = request.query_params.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 20
+        mult = (100 - min(max(pct, 1), 99)) / 100.0
+
+        qs = (ElevenMyProduct.objects.select_related('account')
+              .filter(status_type='판매중', purchase_cost__gt=0,
+                      sale_price__lte=F('purchase_cost') * mult)
+              .order_by('-id'))
+
+        total = qs.count()
+        rows = []
+        for p in qs[:500]:
+            rows.append({
+                'id': p.id,
+                'account_name': p.account.seller_name or p.account.login_id,
+                'product_no': p.product_no,
+                'name': p.product_name,
+                'current_price': p.sale_price,
+                'target_price': p.purchase_cost,
+                'diff': p.purchase_cost - p.sale_price,
+            })
+        return Response({'total': total, 'rows': rows, 'preview_limit': 500})
+
+
+class ElevenPriceMatchApplyView(views.APIView):
+    """11번가 확인필요(역마진) 상품의 판매가를 예비상품 마켓가로 실제 변경.
+    hulk API(optimize_11st_product_names.py에서 검증된 _get_session/_get_hulk_detail/
+    _put_hulk_update 재사용) — 계정별 로그인 1회 후 순수 API 호출이라 셀레니움 화면조작보다 빠름.
+    apply_11st_price_match 관리커맨드를 백그라운드 프로세스로 실행(락/재시도는 커맨드 안에서 처리)."""
+    LOG_FILE = '/tmp/price_match_11st.log'
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import subprocess
+        pct_raw = request.data.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 20
+
+        from django.db.models import F
+        from .models import ElevenMyProduct
+        mult = (100 - min(max(pct, 1), 99)) / 100.0
+        total = ElevenMyProduct.objects.filter(
+            status_type='판매중', purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * mult
+        ).count()
+        if not total:
+            return Response({'status': 'blocked', 'message': f'⛔ 확인필요(역마진 {pct}%+) 대상이 없습니다.'}, status=400)
+
+        script = ('cd /home/rejoice888/Avengers/backend && /usr/bin/python3 -u manage.py '
+                   f'apply_11st_price_match --all --pct {pct} >> {self.LOG_FILE} 2>&1')
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        msg = (f'💰 단가 마켓가 맞춤 시작(역마진 {pct}%+) — 총 {total}개(판매중만 대상). '
+               f'11번가 다른 크롤이 실행 중이면 끝날 때까지 대기 후 시작됩니다. '
+               f'진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'total': total})
+
+
+class ElevenPriceCapPreviewView(views.APIView):
+    """11번가 고단가(판매가가 예비상품 마켓가의 mult배 초과) 상품의 판매가를 마켓가(100%)로
+    낮추면 몇 개가 얼마→얼마로 바뀌는지 미리보기(실제 변경 없음). ElevenPriceMatchPreviewView와
+    반대 방향(역마진=너무 쌈 / 고단가=너무 비쌈)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import F
+        from .models import ElevenMyProduct
+        pct_raw = request.query_params.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 100
+        mult = 1 + max(pct, 1) / 100.0
+
+        qs = (ElevenMyProduct.objects.select_related('account')
+              .filter(status_type='판매중', purchase_cost__gt=0,
+                      sale_price__gt=F('purchase_cost') * mult)
+              .order_by('-id'))
+
+        total = qs.count()
+        rows = []
+        for p in qs[:500]:
+            rows.append({
+                'id': p.id,
+                'account_name': p.account.seller_name or p.account.login_id,
+                'product_no': p.product_no,
+                'name': p.product_name,
+                'current_price': p.sale_price,
+                'target_price': p.purchase_cost,
+                'diff': p.sale_price - p.purchase_cost,
+            })
+        return Response({'total': total, 'rows': rows, 'preview_limit': 500})
+
+
+class ElevenPriceCapApplyView(views.APIView):
+    """11번가 고단가 상품의 판매가를 예비상품 마켓가(100%)로 실제 인하.
+    apply_11st_price_cap 관리커맨드를 백그라운드로 실행(ElevenPriceMatchApplyView와 동일 패턴)."""
+    LOG_FILE = '/tmp/price_cap_11st.log'
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import subprocess
+        pct_raw = request.data.get('pct')
+        pct = int(pct_raw) if pct_raw not in (None, '') else 100
+
+        from django.db.models import F
+        from .models import ElevenMyProduct
+        mult = 1 + max(pct, 1) / 100.0
+        total = ElevenMyProduct.objects.filter(
+            status_type='판매중', purchase_cost__gt=0, sale_price__gt=F('purchase_cost') * mult
+        ).count()
+        if not total:
+            return Response({'status': 'blocked', 'message': f'⛔ 고단가(마켓가 대비 {pct}%+ 초과) 대상이 없습니다.'}, status=400)
+
+        script = ('cd /home/rejoice888/Avengers/backend && /usr/bin/python3 -u manage.py '
+                   f'apply_11st_price_cap --all --pct {pct} >> {self.LOG_FILE} 2>&1')
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        msg = (f'💰 고단가 마켓가 인하 시작(마켓가 대비 {pct}%+ 초과) — 총 {total}개(판매중만 대상). '
+               f'11번가 다른 크롤이 실행 중이면 끝날 때까지 대기 후 시작됩니다. '
+               f'진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'total': total})
 
 
 class ElevenMyProductDuplicateView(views.APIView):

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
+import { useState, useEffect, useCallback, useRef, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
 import { PlayCircle, Package, BarChart3, RefreshCw, Download, TrendingUp } from 'lucide-react';
 import api from '../../api/client';
 
@@ -167,12 +167,45 @@ export default function OwnerclanCrawlerPage() {
     return () => clearInterval(t);
   }, [loadWeekly]);
 
+  const autoDownloadArmedRef = useRef(false);   // 이번 수집이 끝나면 자동 다운로드할지
+  const autoDownloadedFileRef = useRef('');     // 중복 자동다운로드 방지(같은 파일 재실행 가드)
+
+  const pollWeeklyUntilDone = useCallback(() => {
+    setTimeout(async () => {
+      try {
+        const r = await api.get('/ownerclan/weekly-popular/');
+        const files: WeeklyPopularFile[] = r.data.files || [];
+        setWeeklyFiles(files);
+        setWeeklyBusy(r.data.busy);
+        if (r.data.busy) {
+          pollWeeklyUntilDone();
+          return;
+        }
+        if (autoDownloadArmedRef.current) {
+          autoDownloadArmedRef.current = false;
+          const latest = files[0];
+          if (latest && autoDownloadedFileRef.current !== latest.filename + latest.saved_at) {
+            autoDownloadedFileRef.current = latest.filename + latest.saved_at;
+            await handleWeeklyDownload(latest.filename);
+            setWeeklyMsg(`다운로드 완료: ${latest.filename}`);
+          } else {
+            setWeeklyMsg('완료(변경된 파일 없음)');
+          }
+        }
+      } catch {
+        // 네트워크 일시 오류 — 다음 자동 폴링(10초 주기)에서 다시 시도
+      }
+    }, 3000);
+  }, []);
+
   const handleWeeklyRun = async () => {
     setWeeklyMsg('');
     try {
       await api.post('/ownerclan/weekly-popular/');
-      setWeeklyMsg('다운로드 시작됨 — 약 20~30초 소요');
-      setTimeout(loadWeekly, 25000);
+      setWeeklyBusy(true);
+      autoDownloadArmedRef.current = true;
+      setWeeklyMsg('수집 중… 완료되면 자동으로 다운로드됩니다 (약 20~30초 소요)');
+      pollWeeklyUntilDone();
     } catch (e: any) {
       setWeeklyMsg(e?.response?.data?.error || '시작 실패');
     }
@@ -192,6 +225,31 @@ export default function OwnerclanCrawlerPage() {
       URL.revokeObjectURL(url);
     } catch {
       alert('다운로드 실패');
+    }
+  };
+
+  const [weeklyBulkBusy, setWeeklyBulkBusy] = useState(false);
+  const handleWeeklyDownloadAll = async () => {
+    if (weeklyFiles.length === 0) {
+      alert('저장된 날짜별 자료가 없습니다. 먼저 "수집하기"로 자료를 모아주세요.');
+      return;
+    }
+    setWeeklyBulkBusy(true);
+    try {
+      const res = await api.get('/ownerclan/weekly-popular/download-all/', {
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `오너클랜_주간인기상품_${weeklyFiles.length}개.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setWeeklyMsg(`날짜별 자료 ${weeklyFiles.length}개를 zip 1개로 다운로드했습니다.`);
+    } catch {
+      alert('전체 다운로드 실패');
+    } finally {
+      setWeeklyBulkBusy(false);
     }
   };
 
@@ -344,7 +402,14 @@ export default function OwnerclanCrawlerPage() {
                 className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
                 style={{ background: weeklyBusy ? '#aaa' : '#dc2626' }}>
                 <PlayCircle size={13} className={weeklyBusy ? 'animate-spin' : ''} />
-                {weeklyBusy ? '다운로드 중…' : '지금 다운로드'}
+                {weeklyBusy ? '수집 중…' : '수집하기'}
+              </button>
+              <button onClick={handleWeeklyDownloadAll} disabled={weeklyBulkBusy || weeklyFiles.length === 0}
+                title="지금까지 모인 날짜별 자료를 전부 zip 파일 하나로 묶어 한번에 받습니다"
+                className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
+                style={{ background: '#059669' }}>
+                <Download size={13} />
+                {weeklyBulkBusy ? '묶는 중…' : `날짜 전체 한번에 받기 (${weeklyFiles.length})`}
               </button>
             </span>
           </div>
@@ -375,7 +440,7 @@ export default function OwnerclanCrawlerPage() {
                       <td className="border border-[#e5e7eb] px-3 py-2 text-center">
                         <button onClick={() => handleWeeklyDownload(f.filename)}
                           className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#2563eb] rounded hover:bg-[#1d4ed8]">
-                          <Download size={11} /> 받기
+                          <Download size={11} /> 지금다운로드
                         </button>
                       </td>
                     </tr>

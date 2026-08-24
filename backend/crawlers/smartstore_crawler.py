@@ -668,8 +668,12 @@ def fetch_ad_cost(driver, account, start_date: date, end_date: date, log_fn=None
 def fetch_products(driver, log_fn=None):
     """
     스마트스토어 내부 API로 전체 상품 목록 수집.
-    Returns: [{product_no, channel_product_no, name, sale_price, stock_quantity,
-               status_type, seller_management_code, category_id, product_image_url}, ...]
+    Returns: (results, total_elements, ok)
+      - results: [{product_no, channel_product_no, name, sale_price, stock_quantity,
+                    status_type, seller_management_code, category_id, product_image_url}, ...]
+      - total_elements: 1페이지 응답의 totalElements(사전체크 — API 자체가 알려주는 전체 개수)
+      - ok: 1페이지 응답을 정상적으로 받았는지 여부. False면 API 자체가 불통이었다는 뜻이라
+        results가 비어 있어도 '진짜 0건'과 구분해야 함(호출자는 ok=False면 기존 데이터를 건드리지 말 것).
     """
     log = log_fn or logger.info
 
@@ -679,6 +683,8 @@ def fetch_products(driver, log_fn=None):
     results = []
     page = 1
     size = 100
+    total_elements = None
+    ok = False
 
     while True:
         url = (
@@ -698,6 +704,10 @@ def fetch_products(driver, log_fn=None):
         if not data:
             log(f'[스마트] 상품 API 응답 없음 (page {page})')
             break
+
+        ok = True   # API 응답을 최소 1번은 정상적으로 받았음
+        if total_elements is None:
+            total_elements = data.get('totalElements', 0) or 0
 
         contents = data.get('contents', data.get('data', data.get('content', [])))
         if not contents:
@@ -745,8 +755,8 @@ def fetch_products(driver, log_fn=None):
         page += 1
         time.sleep(1)
 
-    log(f'[스마트] 상품 수집 완료: {len(results)}건')
-    return results
+    log(f'[스마트] 상품 수집 완료: {len(results)}건 (사전체크 totalElements={total_elements})')
+    return results, total_elements, ok
 
 
 def crawl_smartstore_account(driver, account, start_date: date, end_date: date, log_fn=None):

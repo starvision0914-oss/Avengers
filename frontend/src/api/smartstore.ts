@@ -117,6 +117,53 @@ export async function getAccounts(): Promise<SmartStoreAccount[]> {
   return data;
 }
 
+export interface SmartStorePrecheckDiffItem {
+  account_id: number; login_id: string; store_name: string; is_active: boolean;
+  last_check_at: string;
+  precheck_total: number | null; excel_total: number | null; diff_total: number;
+  excel_selling: number | null; excel_soldout: number | null; excel_stopped: number | null;
+}
+export interface SmartStorePrecheckDiffResponse {
+  count: number; checked_accounts: number; items: SmartStorePrecheckDiffItem[];
+}
+// 크롤 사전체크(상품 API totalElements) vs 실제 반영(DB) — 차이나는 계정만 반환
+export async function fetchPrecheckDiff(): Promise<SmartStorePrecheckDiffResponse> {
+  const { data } = await api.get<SmartStorePrecheckDiffResponse>('/smartstore/precheck-diff/');
+  return data;
+}
+
+export interface PriceMatchPreviewRow {
+  id: number; account_name: string; product_no: string; name: string;
+  current_price: number; target_price: number; diff: number;
+}
+export interface PriceMatchPreviewResponse {
+  total: number; rows: PriceMatchPreviewRow[]; preview_limit: number;
+}
+// 확인필요(역마진)+고단가 상품 판매가를 예비상품 마켓가로 맞추기 — 미리보기(변경 없음)
+export async function previewPriceMatch(pct?: number): Promise<PriceMatchPreviewResponse> {
+  const { data } = await api.get<PriceMatchPreviewResponse>('/smartstore/products/price-match-preview/', {
+    params: pct ? { pct } : undefined,
+  });
+  return data;
+}
+// 실제 실행 — 백그라운드로 순차 처리(네이버 API 특성상 1건당 약 1초)
+export async function applyPriceMatch(pct?: number): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+  const { data } = await api.post('/smartstore/products/price-match-apply/', pct ? { pct } : {});
+  return data;
+}
+
+// 고단가(판매가가 마켓가 대비 pct%+ 초과) 상품 판매가를 마켓가로 인하 — 미리보기(변경 없음)
+export async function previewPriceCap(pct?: number): Promise<PriceMatchPreviewResponse> {
+  const { data } = await api.get<PriceMatchPreviewResponse>('/smartstore/products/price-cap-preview/', {
+    params: pct ? { pct } : undefined,
+  });
+  return data;
+}
+export async function applyPriceCap(pct?: number): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+  const { data } = await api.post('/smartstore/products/price-cap-apply/', pct ? { pct } : {});
+  return data;
+}
+
 export async function createAccount(payload: Partial<SmartStoreAccount> & {
   login_pw?: string; commerce_api_key?: string; commerce_secret_key?: string;
 }): Promise<{ id: number }> {

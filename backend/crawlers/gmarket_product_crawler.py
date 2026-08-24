@@ -11,6 +11,7 @@
 """
 import json
 import logging
+import re
 import time
 
 from django.utils import timezone
@@ -19,8 +20,11 @@ logger = logging.getLogger('crawler')
 
 GOODS_MANAGE = 'https://www.esmplus.com/Home/v2/goods-manage'
 PAGE_SIZE = 500
-# ESM EA sellStatus 코드 → 라벨 (확인된 것만; 미확인은 코드 그대로)
-SELL_STATUS = {'11': '판매중', '21': '판매중', '22': '판매중지', '23': '품절', '24': '판매종료', '25': '판매불가'}
+# ESM EA sellStatus 코드 → 라벨.
+# 2026-08-24: 기존 매핑(21=판매중,22=판매중지,25=판매불가)이 실제 API 응답과 달라 상태가
+# 한 칸씩 밀려 저장되던 버그 발견·수정. goods-manage 화면 실측(판매중/판매불가/판매중지 건수)과
+# API sellStatus 원본코드를 직접 대조해 확정: 21=판매중지, 22=판매불가. 25는 존재하지 않는 코드(0건).
+SELL_STATUS = {'11': '판매중', '21': '판매중지', '22': '판매불가', '23': '품절', '24': '판매종료'}
 
 # 같은 origin(iframe=item.esmplus.com)에서 상품검색 API 호출
 # sellStatus 인자(3번째): JS 배열 문자열 — [] = 판매중(11,21), [22] = 판매중지, [25] = 판매불가
@@ -118,6 +122,41 @@ def _enter_goods_iframe(driver):
     return False
 
 
+def _get_precheck_breakdown(driver, log_fn):
+    """상품조회/수정(goods-manage) 화면 상단 요약통계에서 사전체크 건수를 읽어온다.
+    (2026-08-24: 11번가와 동일한 취지 — 크롤 시작 시 라이브 건수 vs 실제 반영 결과를
+    비교해 크롤 정합성을 검증. 지마켓/옥션 사이트별 분리는 시간이 오래 걸려 합산으로 단순화)
+    전체=판매중+판매불가+판매중지+SKU품절 이 정확히 일치함(2026-08-24 실측 확인).
+    soldout 필드는 지마켓 개념상 '품절'이 아니라 '판매불가'를 담는다(11번가와 스키마 공유 위해 재사용).
+    조회 실패 시 전부 None(판단불가) 반환."""
+    from selenium.webdriver.common.by import By
+    empty = {'total': None, 'selling': None, 'soldout': None, 'stopped': None}
+    try:
+        stat = driver.find_element(By.XPATH, "//*[contains(text(),'재고 10개 이하')]/ancestor::div[4]")
+        text = stat.text
+
+        # '전체'라는 단어가 위쪽 "광고 진행 중인 내 상품"(포커스 등)에도 "전체 0건" 식으로
+        # 여러 번 나와서 라벨 하나씩 독립 검색하면 엉뚱한 값을 잡는다(2026-08-24 발견).
+        # 실제 통계블록은 "전체 N건 재고 10개 이하 N건 판매 종료 7일 N건 ... 판매중 N건
+        # 판매불가 N건 판매중지 N건"이 끊기지 않고 이어지는 고정 시퀀스라, 그 시퀀스 전체를
+        # 한 번에 매칭해야 정확하다.
+        m = re.search(
+            r'전체\s*([\d,]+)\s*건\s*재고\s*10개\s*이하\s*[\d,]+\s*건\s*판매\s*종료\s*7일'
+            r'.*?판매중\s*([\d,]+)\s*건.*?판매불가\s*([\d,]+)\s*건.*?판매중지\s*([\d,]+)\s*건',
+            text, re.DOTALL)
+        if not m:
+            return empty
+        return {
+            'total': int(m.group(1).replace(',', '')),
+            'selling': int(m.group(2).replace(',', '')),
+            'soldout': int(m.group(3).replace(',', '')),
+            'stopped': int(m.group(4).replace(',', '')),
+        }
+    except Exception as e:
+        _log(log_fn, f'사전체크 조회 실패(판단불가): {e}')
+        return empty
+
+
 def _fetch_goods_by_status(driver, eid, log_fn, sell_status_filter):
     """sellStatus 필터별 상품 페이징 수집. sell_status_filter: [] = 판매중, [22] = 판매중지, [25] = 판매불가."""
     items = []
@@ -144,23 +183,22 @@ def _fetch_goods_by_status(driver, eid, log_fn, sell_status_filter):
 
 
 def _fetch_all_goods(driver, eid, log_fn):
-    """판매중 + 판매중지(22) + 판매불가(25) 를 각각 쿼리해 합산 반환.
-    sellStatus:[] = 판매중(11,21)만 반환, 판매중지/판매불가는 별도 쿼리 필요."""
-    # 판매중 (기본)
+    """기본(빈 필터) + 판매중지(21) + 판매불가(22) 를 각각 쿼리해 합산 반환(중복은 _save_items에서 제거).
+    (2026-08-24: sellStatus:[] 이 '판매중만' 반환한다는 기존 가정이 틀렸음을 실측으로 확인 —
+    실제로는 대부분(98%+)을 이미 포함해서 반환한다. 그래도 누락분(약 1~2%) 방지를 위해
+    기존처럼 상태별 보강 쿼리를 유지하되, 실제 코드(21=판매중지, 22=판매불가)로 정정."""
     items = _fetch_goods_by_status(driver, eid, log_fn, [])
-    _log(log_fn, f'[{eid}] 판매중: {len(items)}개')
+    _log(log_fn, f'[{eid}] 기본조회: {len(items)}개')
 
-    # 판매중지 (22) — 판매자가 직접 중지, 소수 예상
-    paused = _fetch_goods_by_status(driver, eid, log_fn, [22])
-    _log(log_fn, f'[{eid}] 판매중지: {len(paused)}개')
-    items.extend(paused)
+    stopped = _fetch_goods_by_status(driver, eid, log_fn, [21])   # 판매중지
+    _log(log_fn, f'[{eid}] 판매중지: {len(stopped)}개')
+    items.extend(stopped)
 
-    # 판매불가 (25) — 플랫폼 차단, 계정당 20-30개 예상
-    unavail = _fetch_goods_by_status(driver, eid, log_fn, [25])
+    unavail = _fetch_goods_by_status(driver, eid, log_fn, [22])   # 판매불가
     _log(log_fn, f'[{eid}] 판매불가: {len(unavail)}개')
     items.extend(unavail)
 
-    _log(log_fn, f'[{eid}] 전체: {len(items)}개')
+    _log(log_fn, f'[{eid}] 전체(중복포함): {len(items)}개')
     return items
 
 
@@ -277,12 +315,53 @@ def run_all_accounts(log_fn=None, account_filter=None):
                     _log(log_fn, f'[{a.login_id}] 상품 iframe 진입 실패')
                     failed += 1
                     continue
+
+                pre = _get_precheck_breakdown(driver, log_fn)
+                _log(log_fn, f'[{a.login_id}] 사전체크 전체 {pre["total"]} '
+                             f'(판매중 {pre["selling"]}/판매불가 {pre["soldout"]}/판매중지 {pre["stopped"]})')
+                a.last_precheck_total = pre['total']
+                a.last_precheck_selling = pre['selling']
+                a.last_precheck_soldout = pre['soldout']
+                a.last_precheck_stopped = pre['stopped']
+                check_started_at = timezone.now()
+                a.last_check_at = check_started_at
+
+                # 사용자 지시(2026-08-24, 11번가와 동일 순서로 통일): 다운로드/파싱 전에
+                # 기존 데이터를 먼저 삭제한다. 이후 수집이 실패하면 이 계정(그룹)은 다음 크롤
+                # 전까지 0건 상태가 되어 문제가 조용히 묻히지 않고 바로 드러난다.
+                # 공유ESM 그룹은 마스터 크롤이 그룹 전체를 재분배하므로 그룹 전 계정을 같이 지운다.
+                from apps.cpc.models import GmarketMyProduct as _GMP
+                group_login_ids = list(_owner_map(a).keys())
+                deleted_count, _ = _GMP.objects.filter(account__login_id__in=group_login_ids,
+                                                        account__platform='gmarket').delete()
+                _log(log_fn, f'[{a.login_id}] 다운로드 전 기존 데이터 삭제(그룹 {len(group_login_ids)}계정): {deleted_count}건')
+
                 items = _fetch_all_goods(driver, a.login_id, log_fn)
                 driver.switch_to.default_content()
                 n = _save_items(a, items)
                 total_items += n
                 done += 1
                 _log(log_fn, f'[{a.login_id}] 상품 {len(items)}건 조회 → {n}행 저장(누적)')
+
+                # 사전체크(라이브) vs 실제 반영(DB, 이번 크롤에서 touch된 것만) 비교 — 정합성 검증
+                from apps.cpc.models import GmarketMyProduct
+                from django.db.models import Count, Q
+                agg = GmarketMyProduct.objects.filter(
+                    account=a, synced_at__gte=check_started_at
+                ).aggregate(
+                    selling=Count('id', filter=Q(status_type='판매중')),
+                    stopped=Count('id', filter=Q(status_type='판매중지')),
+                    soldout=Count('id', filter=Q(status_type='판매불가')),
+                )
+                a.last_excel_total = n
+                a.last_excel_selling = agg['selling']
+                a.last_excel_stopped = agg['stopped']
+                a.last_excel_soldout = agg['soldout']
+                a.save(update_fields=[
+                    'last_precheck_total', 'last_precheck_selling', 'last_precheck_soldout',
+                    'last_precheck_stopped', 'last_check_at', 'last_excel_total',
+                    'last_excel_selling', 'last_excel_stopped', 'last_excel_soldout',
+                ])
             except Exception as e:
                 _log(log_fn, f'[{a.login_id}] 오류: {str(e)[:140]}')
                 failed += 1

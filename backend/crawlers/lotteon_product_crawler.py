@@ -158,6 +158,28 @@ def _login_and_get_token(account, log_fn=None):
             pass
 
 
+def _precheck_total(token, tr_no, log_fn=None):
+    """1페이지만 조회해 API 응답의 totalCount(전체 상품수)만 빠르게 읽어옴 — 전체 페이징 불필요."""
+    headers = {
+        'Content-Type': 'application/json; charset="UTF-8"',
+        'Accept': 'application/json',
+        'Origin': MAIN_URL,
+        'Referer': f'{MAIN_URL}/',
+        'User-Agent': _UA,
+        'Authorization': f'Bearer {token}',
+    }
+    try:
+        payload = dict(_BASE_PAYLOAD, trNo=tr_no, pageNo=1)
+        resp = requests.post(API_URL, headers=headers, json=payload, timeout=30)
+        if resp.status_code != 200:
+            _log(log_fn, f'사전체크 요청 실패 HTTP {resp.status_code}')
+            return None
+        return resp.json().get('totalCount')
+    except Exception as e:
+        _log(log_fn, f'사전체크 조회 실패(판단불가): {e}')
+        return None
+
+
 def _fetch_all_products(token, tr_no, log_fn=None):
     """토큰+trNo로 전체 상품(모든 판매상태) 페이지네이션 수집."""
     headers = {
@@ -240,13 +262,34 @@ def run_all_accounts(log_fn=None, account_filter=None):
                 if not token:
                     results.append({'login_id': account.login_id, 'error': '토큰 확보 실패(2FA 등)'})
                     continue
+
+                # 1) 사전체크 — API 1페이지 응답의 totalCount로 전체 상품수 먼저 확인
+                #    (11번가/지마켓과 동일 순서로 통일, 2026-08-24 사용자 지시)
+                precheck_total = _precheck_total(token, account.seller_no, log_fn)
+                account.last_precheck_total = precheck_total
+                account.last_check_at = timezone.now()
+                _log(log_fn, f'[lotteon:{account.login_id}] 사전체크 전체 {precheck_total}')
+
+                # 2) 다운로드 전에 기존 데이터 먼저 삭제 — 재수집 실패 시 0건으로 바로 드러나게
+                from apps.lotteon.models import LotteonMyProduct
+                deleted_count, _ = LotteonMyProduct.objects.filter(account=account).delete()
+                _log(log_fn, f'[lotteon:{account.login_id}] 다운로드 전 기존 데이터 삭제: {deleted_count}건')
+
+                # 3) 전체 재수집
                 rows = _fetch_all_products(token, account.seller_no, log_fn)
                 saved = _upsert_products(account, rows, log_fn)
                 account.last_crawled_at = timezone.now()
                 account.fail_count = 0
-                account.save(update_fields=['last_crawled_at', 'fail_count'])
-                _log(log_fn, f'[lotteon:{account.login_id}] 완료 — {saved}개 상품')
-                results.append({'login_id': account.login_id, 'saved': saved})
+
+                # 4) 사전체크 대비 실제 반영 건수 비교
+                account.last_excel_total = saved
+                account.save(update_fields=['last_crawled_at', 'fail_count', 'last_precheck_total',
+                                             'last_excel_total', 'last_check_at'])
+                diff = (precheck_total or 0) - saved
+                diff_note = f' [차이 {diff:+d}]' if precheck_total is not None and diff != 0 else ''
+                _log(log_fn, f'[lotteon:{account.login_id}] 완료 — {saved}개 상품{diff_note}')
+                results.append({'login_id': account.login_id, 'saved': saved,
+                                 'precheck_total': precheck_total, 'diff': diff})
             except Exception as e:
                 logger.exception('lotteon crawl error')
                 account.fail_count = (account.fail_count or 0) + 1

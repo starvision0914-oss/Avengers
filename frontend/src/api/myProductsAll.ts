@@ -17,9 +17,9 @@ export interface MyProductAllItem {
   category: string;
   product_image_url: string;
   synced_at: string | null;
-  purchase_cost: number | null;      // 11번가만
-  cost_diff: number | null;          // 11번가만
-  cost_pct?: number | null;          // 판매가/마켓가*100 (11번가·지마켓만)
+  purchase_cost: number | null;      // 11번가·지마켓·스마트스토어(쿠팡/롯데온은 데이터 없음)
+  cost_diff: number | null;
+  cost_pct?: number | null;          // 판매가/마켓가*100
 }
 
 export interface MyProductAllResponse {

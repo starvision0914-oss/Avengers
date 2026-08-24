@@ -41,6 +41,16 @@ export async function fetchLotteonMyAccounts(): Promise<LotteonAccount[]> {
   }));
 }
 
+export async function suspendAllNoMatchLotteonProducts(
+  accountId?: number, search?: string,
+): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+  const body: Record<string, string | number> = {};
+  if (accountId) body.account_id = accountId;
+  if (search) body.search = search;
+  const { data } = await api.post('/lotteon/my/products/suspend-no-match/', body);
+  return data;
+}
+
 export async function fetchLotteonMyProducts(
   page = 1, perPage = 50, accountId?: number,
   status?: string, search?: string, sort?: string, order: 'asc' | 'desc' = 'asc',

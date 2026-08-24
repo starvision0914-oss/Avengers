@@ -448,7 +448,10 @@ def _scrape_via_dom(driver, log, max_pages=50):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _upsert_products(account, products):
-    """bulk_create + ON DUPLICATE KEY UPDATE (MySQL). 1만건도 수초."""
+    """엑셀 파싱 성공(products 확보) 후 새 데이터를 삽입한다.
+    (2026-08-24, 사용자 지시: 기존 데이터 삭제는 다운로드 시작 '전'에 이미 끝난 상태 —
+    _run_for_account 에서 사전체크 직후 삭제. 여기선 순수 삽입만 수행.
+    상품코드 자체는 ProductCodeArchive에 별도 영구보존되므로 삭제돼도 조회 가능.)"""
     from apps.cpc.models import ElevenMyProduct
     now = timezone.now()
     # 같은 파일 내 product_no 중복 제거 (마지막 값 우선)
@@ -469,11 +472,7 @@ def _upsert_products(account, products):
     ) for pno, p in uniq.items()]
     if not objs:
         return 0
-    ElevenMyProduct.objects.bulk_create(
-        objs, update_conflicts=True,
-        update_fields=['product_name', 'sale_price', 'stock_quantity', 'status_type',
-                       'seller_product_code', 'category_id', 'product_image_url', 'synced_at'],
-        batch_size=1000)
+    ElevenMyProduct.objects.bulk_create(objs, batch_size=1000)
     return len(objs)
 
 
@@ -558,27 +557,38 @@ def _detect_seller_no(driver, log):
 
 
 PRODUCT_COUNT_URL = 'https://soffice.11st.co.kr/view/8006'
-TOTAL_COUNT_XPATH = '/html/body/div[3]/div[1]/form/div/div[1]/ul/li[1]/a/em'
+COUNT_TABS_XPATH = '/html/body/div[3]/div[1]/form/div/div[1]/ul'
 
 
-def _get_total_product_count(driver, log):
-    """'상품조회/수정' 화면의 '전체 상품 수' 탭에서 총 등록상품수를 읽어온다.
+def _get_precheck_breakdown(driver, log):
+    """'상품조회/수정' 화면의 탭(전체/판매중/품절/판매중지)에서 사전체크 건수를 읽어온다.
     (2026-08-23: 계정 자체가 11번가에서 제재/삭제되어 전체 0건인데도 대량엑셀 생성을
     기다리다 매번 시간초과로 실패하던 계정 다수 발견 → 다운로드 전에 미리 걸러냄)
-    조회 실패 시 None(판단불가) 반환 — 오판으로 다운로드를 건너뛰지 않도록 안전장치."""
+    (2026-08-24: 크롤 직전 라이브 건수 vs 엑셀 반영 결과를 비교하는 정합성 체크용으로 확장)
+    조회 실패 시 전부 None(판단불가) 반환 — 오판으로 다운로드를 건너뛰지 않도록 안전장치."""
+    empty = {'total': None, 'selling': None, 'soldout': None, 'stopped': None}
     try:
         driver.get(PRODUCT_COUNT_URL)
         time.sleep(3)
         _switch_to_first_iframe(driver)
-        el = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, TOTAL_COUNT_XPATH)))
-        m = re.search(r'([\d,]+)', el.text)
-        if not m:
-            return None
-        return int(m.group(1).replace(',', ''))
+        ul = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, COUNT_TABS_XPATH)))
+        lis = ul.find_elements(By.TAG_NAME, 'li')
+        texts = [li.text for li in lis[:4]]   # 전체상품수/판매중/품절/판매중지 순
+
+        def _num(s):
+            m = re.search(r'([\d,]+)', s or '')
+            return int(m.group(1).replace(',', '')) if m else None
+
+        if len(texts) < 4:
+            return empty
+        return {
+            'total': _num(texts[0]), 'selling': _num(texts[1]),
+            'soldout': _num(texts[2]), 'stopped': _num(texts[3]),
+        }
     except Exception as e:
         log(f'전체 상품수 조회 실패(판단불가, 다운로드 계속): {e}')
-        return None
+        return empty
 
 
 def _excel_download_today(driver, account, log):
@@ -719,15 +729,35 @@ def _extract_and_parse(fp, log):
 def _run_for_account(driver, account, log):
     """단일 계정 처리(대량엑셀 방식). 성공 시 (upserted, total), 실패 시 예외.
     (로그인은 _login_for_account 로 분리 — 호출자가 접속 재시도를 담당)"""
-    total_cnt = _get_total_product_count(driver, log)
-    log(f'전체 상품수: {total_cnt if total_cnt is not None else "판단불가"}')
+    pre = _get_precheck_breakdown(driver, log)
+    total_cnt = pre['total']
+    log(f'전체 상품수: {total_cnt if total_cnt is not None else "판단불가"} '
+        f'(판매중 {pre["selling"]}/품절 {pre["soldout"]}/판매중지 {pre["stopped"]})')
+    account.last_precheck_total = pre['total']
+    account.last_precheck_selling = pre['selling']
+    account.last_precheck_soldout = pre['soldout']
+    account.last_precheck_stopped = pre['stopped']
+    account.last_check_at = timezone.now()
     if total_cnt == 0:
         from apps.cpc.models import ElevenMyProduct
         log('전체 상품수 0건 → 받을 상품 없음, 다운로드 생략')
         marked = ElevenMyProduct.objects.filter(account=account).exclude(
             status_type__in=['판매중지', '판매종료', '품절']).update(status_type='판매중지')
         log(f'기존 데이터 {marked}건 판매중지로 정정')
+        # 계정 자체에 등록상품이 하나도 없음 = 사실상 폐쇄/제재 계정 → 모든 크롤링(광고비/ROAS/등급 등) 대상에서 제외
+        account.is_active = False
+        account.is_focused = False
+        account.last_excel_total = 0
+        log('전체상품수 0 → is_active=False (모든 크롤링에서 제외)')
         return marked, 0
+
+    # 사용자 지시(2026-08-24): 다운로드/파싱 전에 기존 데이터를 먼저 삭제한다.
+    # (다운로드가 이후 실패하면 이 계정은 다음 크롤 전까지 0건 상태가 됨 — 실패는
+    # CrawlerLog error + notify_failure 텔레그램 알림으로 반드시 보고됨, 조용히 묻히지 않음)
+    from apps.cpc.models import ElevenMyProduct
+    deleted_count, _ = ElevenMyProduct.objects.filter(account=account).delete()
+    log(f'다운로드 전 기존 데이터 삭제: {deleted_count}건')
+
     try:
         fp = _excel_download_today(driver, account, log)
     except Exception as e:
@@ -750,6 +780,23 @@ def _run_for_account(driver, account, log):
     if not products:
         raise Exception('수집된 상품 0건')
     upserted = _upsert_products(account, products)
+    # 엑셀 반영 후 DB 기준 상태별 집계 — 사전체크(라이브 탭)와 비교해 크롤 정합성 검증.
+    # synced_at >= 이번 크롤 시작시각(사전체크 시각)으로 범위를 좁혀야 함 — 안 그러면
+    # ElevenMyProduct에 누적된 과거(몇달 전) 판매중지/품절 이력까지 다 잡혀서 라이브 탭과
+    # 비교가 안 됨(이번 크롤에서 실제 반영된 것만 봐야 사과 대 사과 비교가 됨).
+    from apps.cpc.models import ElevenMyProduct
+    from django.db.models import Count, Q
+    agg = ElevenMyProduct.objects.filter(
+        account=account, synced_at__gte=account.last_check_at
+    ).aggregate(
+        selling=Count('id', filter=Q(status_type='판매중')),
+        stopped=Count('id', filter=Q(status_type='판매중지')),
+        soldout=Count('id', filter=Q(status_type='품절')),
+    )
+    account.last_excel_total = len(products)
+    account.last_excel_selling = agg['selling']
+    account.last_excel_stopped = agg['stopped']
+    account.last_excel_soldout = agg['soldout']
     return upserted, len(products)
 
 
@@ -771,6 +818,16 @@ def run_all_accounts(log_fn=None, account_filter=None, only_no_api_key=True, for
         emit('⛔ 11번가 글로벌 차단 모드 — product 크롤러 스킵')
         return {'collected': 0, 'failed': 0, 'aborted_due_to_global_block': True}
 
+    # 2026-08-24 발견: 이 함수가 차단여부만 확인하고 전역 락(preflight)은 잡지 않아,
+    # L코드/미매칭 판매중지 같은 다른 11번가 크롤과 동시 실행될 뻔한 사고 발생(IP차단 위험).
+    # 같은 플랫폼 내 순차 실행을 보장하려면 반드시 락을 잡아야 함.
+    ok, reason = guard.preflight('상품수집', wait=True)
+    if not ok:
+        emit(f'⏭️ product 크롤러 건너뜀 — {reason}')
+        return {'collected': 0, 'failed': 0, 'skipped': reason}
+    if reason != 'ok':
+        emit(f'⏳ 락 대기 후 시작: {reason}')
+
     qs = CrawlerAccount.objects.filter(platform='11st', is_active=True)
     if only_no_api_key:
         qs = qs.filter(api_key='')
@@ -782,6 +839,7 @@ def run_all_accounts(log_fn=None, account_filter=None, only_no_api_key=True, for
 
     if not accounts:
         emit('대상 계정 없음')
+        guard.release_global_lock()
         return {'collected': 0, 'failed': 0}
 
     # 신선도 필터
@@ -983,6 +1041,7 @@ def run_all_accounts(log_fn=None, account_filter=None, only_no_api_key=True, for
     finally:
         _safe_quit(driver)
         stop_display()
+        guard.release_global_lock()
 
     summary = f'11번가 상품 크롤러 완료: 성공={collected} 실패={failed}'
     if aborted:

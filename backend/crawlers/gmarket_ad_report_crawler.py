@@ -203,19 +203,27 @@ def _parse(ad_type, rows, login_id, year, month, sdt, edt):
 
 
 def _select_seller_on_page(driver, target_seller, log_fn=None):
-    """ESM 광고센터 페이지의 셀러 드롭다운으로 계정 전환 시도. 성공하면 True."""
+    """ESM 광고센터 페이지의 셀러 드롭다운으로 계정 전환 시도. 성공하면 True.
+    (2026-08-24) 2026-08-23 성능개선에서 implicitly_wait(0)로 낮춘 뒤 find_elements를 단발성으로
+    체크하게 바꿨는데, 그 결과 드롭다운이 아직 렌더링 안 된 순간을 못 기다려서 실제로는 존재하는
+    요소를 '없음'으로 오판 → starvisi/rejoice235/rejoice236/rejoice224 등 서브계정 셀러전환이
+    매번 실패하는 회귀가 발생했음(실측 확인). 완전 무제한 대기(과거 10초)로 되돌리지 않고,
+    후보 셀렉터 하나당 최대 3초까지만 짧게 폴링하는 WebDriverWait로 교체 — 렌더링 지연은
+    허용하면서도, 진짜 없는 페이지에서 낭비되는 시간은 최소화."""
     from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import Select
-    # 두 후보 id를 순서대로 시도 — 앞쪽이 없는 페이지에서는 find_elements 빈 결과가
-    # implicit_wait(10초)를 그대로 다 먹는다(셀러전환 실패 계정이 유독 느렸던 원인).
+    from selenium.webdriver.support.ui import Select, WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.common.exceptions import TimeoutException
     try:
         driver.implicitly_wait(0)
         for sel_id in ['SellerId', 'sellerId']:
-            els = driver.find_elements(By.ID, sel_id)
-            if not els:
+            try:
+                el = WebDriverWait(driver, 3, poll_frequency=0.3).until(
+                    EC.presence_of_element_located((By.ID, sel_id)))
+            except TimeoutException:
                 continue
             try:
-                sel = Select(els[0])
+                sel = Select(el)
                 opts = [o.get_attribute('value') for o in sel.options]
                 if target_seller not in opts:
                     _log(log_fn, f'  셀러 드롭다운에 {target_seller} 없음 (목록: {opts})')

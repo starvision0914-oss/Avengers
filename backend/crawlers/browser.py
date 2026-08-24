@@ -94,6 +94,30 @@ def _reap_orphans():
         logger.info(f'[browser] 고아 프로세스 {reaped}개 정리(reap)')
 
 
+def _wait_for_memory(min_available_mb=1200, max_wait=60):
+    """가용 메모리가 낮으면 잠깐 대기 후 재확인.
+    여러 크롤이 동시에 새 Chrome을 띄우다 시스템 메모리가 바닥나 프로세스가
+    통째로 OOM SIGKILL당하는 사고(2026-08-24, 11번가 L코드 판매중지 도중 무로그 소멸) 방지용.
+    SIGKILL은 파이썬에서 잡을 수 없으므로 애초에 새 Chrome을 안 띄우는 쪽으로 예방."""
+    waited = 0
+    while waited < max_wait:
+        try:
+            with open('/proc/meminfo') as f:
+                lines = f.read().splitlines()
+            avail_kb = None
+            for line in lines:
+                if line.startswith('MemAvailable:'):
+                    avail_kb = int(line.split()[1])
+                    break
+        except Exception:
+            return
+        if avail_kb is None or avail_kb // 1024 >= min_available_mb:
+            return
+        logger.warning(f'[browser] 가용메모리 부족({avail_kb // 1024}MB < {min_available_mb}MB) — 5초 대기')
+        time.sleep(5)
+        waited += 5
+
+
 _cleanup_registered = False
 
 
@@ -150,6 +174,7 @@ def create_driver(download_dir=None, kill_existing=True, user_data_dir=None, ena
 
     _register_cleanup()      # timeout/크래시 시 Xvfb 정리 보장
     _reap_orphans()          # 이전 크롤이 남긴 고아 Xvfb/chrome 솎아내기(좀비PC 방지)
+    _wait_for_memory()       # 메모리 부족 시 새 Chrome 안 띄우고 잠깐 대기(OOM 예방)
     if kill_existing:
         _kill_stale_chrome()
         stop_display()

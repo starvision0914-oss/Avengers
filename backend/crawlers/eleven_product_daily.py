@@ -102,9 +102,10 @@ def _gen_and_download(driver, sn, d0s, d1s, log):
     return csv_text
 
 
-def collect_account(driver, login_id, pw, d0: date, d1: date, log):
+def collect_account(driver, account, d0: date, d1: date, log):
     from apps.cpc.models import St11ProductDaily, St11KeywordDaily
-    sn = _login(driver, login_id, pw)
+    login_id = account.login_id
+    sn = _login(driver, account)
     if not sn:
         raise Exception('adoffice 로그인 실패')
     driver.set_script_timeout(180)
@@ -218,14 +219,14 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                 driver = None
                 try:
                     driver = _mk_driver()
-                    collect_account(driver, a.login_id, a.password_enc, d0, d1, log)
+                    collect_account(driver, a, d0, d1, log)
                     # 같은 세션에서 기간별 보고서+구글시트 (로그인 1회 공유).
                     # 광고비 0원 계정도 스킵하지 않고 업로드(0으로 표시) — 예전엔 0원이면 건너뛰어서
                     # 시트에 그 계정 행 자체가 안 남거나 예전 값이 그대로 남아있는 것처럼 보였음(2026-08-22).
                     if with_gsheet and sheet is not None:
                         try:
                             from .eleven_period_report import collect_period_for_account
-                            collect_period_for_account(driver, a.login_id, a.password_enc,
+                            collect_period_for_account(driver, a,
                                                        g_period, g_d0, g_d1, sheet, log)
                         except Exception as ge:
                             log(f'[{a.login_id}] 구글시트 실패(상품수집은 성공): {str(ge)[:120]}')

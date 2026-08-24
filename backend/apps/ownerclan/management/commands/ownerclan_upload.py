@@ -166,14 +166,19 @@ def _process_upload(file_path, task):
                 }
 
     # 2) 삽입/갱신 대상 분류 (파이썬 메모리 비교, DB 왕복 없음)
-    insert_batch = []   # (product_code, data)
-    update_batch = []   # (data, is_synced, id)
+    #    (2026-08-24) insert/update를 분리해서 UPDATE를 개별 WHERE id=%s 문으로 처리하던 기존
+    #    방식은 PyMySQL executemany가 UPDATE 문은 진짜 배치로 묶어주지 않아(다중행 재작성은
+    #    INSERT 구문에서만 동작) 행 하나마다 왕복이 발생 — 72,904건(대부분 UPDATE) 파일이
+    #    36분+ 걸리던 원인이었다. product_code가 UNIQUE 인덱스이므로 INSERT ~ ON DUPLICATE KEY
+    #    UPDATE 하나로 통합해 insert/update 전부 진짜 다중행 배치로 처리한다.
+    write_batch = []   # (product_code, data, is_synced)
     inserted = updated = skipped = 0
     for pc in codes:
         data = dedup[pc]
         ex = existing.get(pc)
         if ex is None:
-            insert_batch.append((pc, data))
+            write_batch.append((pc, data, 1))
+            inserted += 1
             continue
         old_data = ex['cur']
         if not any(_field_changed(old_data[f], data[f], f) for f in fields):
@@ -181,7 +186,14 @@ def _process_upload(file_path, task):
             continue
         orig_data = ex['orig']
         is_synced = 0 if any(_field_changed(orig_data[f], data[f], f) for f in fields) else 1
-        update_batch.append((data, is_synced, ex['id']))
+        write_batch.append((pc, data, is_synced))
+        updated += 1
+
+    task.result_data = {
+        'progress': 0, 'inserted': inserted, 'updated': updated,
+        'skipped': skipped, 'total_rows': total_rows,
+    }
+    task.save(update_fields=['result_data'])
 
     def _save_progress(done):
         progress = int(done * 100 / total_rows) if total_rows else 100
@@ -193,36 +205,26 @@ def _process_upload(file_path, task):
 
     WRITE_CHUNK = 2000
     with connections['default'].cursor() as cur:
-        # INSERT — executemany로 일괄 처리
-        insert_sql = (
+        # INSERT ~ ON DUPLICATE KEY UPDATE — insert/update 통합, PyMySQL이 진짜 다중행으로 재작성.
+        # 기존 행(update)은 orig_*/sale_status를 그대로 유지해야 하므로 SET절에서 제외한다.
+        upsert_sql = (
             f"INSERT INTO {_t()} (product_code, {', '.join(fields)}, {', '.join(orig_fields)}, "
             f"sale_status, is_synced, uploaded_at) "
-            f"VALUES ({', '.join(['%s'] * (1 + len(fields) * 2 + 3))})"
+            f"VALUES ({', '.join(['%s'] * (1 + len(fields) * 2 + 3))}) "
+            f"ON DUPLICATE KEY UPDATE "
+            + ', '.join(f'{f}=VALUES({f})' for f in fields)
+            + ", is_synced=VALUES(is_synced), uploaded_at=VALUES(uploaded_at)"
         )
-        for i in range(0, len(insert_batch), WRITE_CHUNK):
-            chunk = insert_batch[i:i + WRITE_CHUNK]
+        done = 0
+        for i in range(0, len(write_batch), WRITE_CHUNK):
+            chunk = write_batch[i:i + WRITE_CHUNK]
             params = [
-                [pc] + [data[f] for f in fields] + [data[f] for f in fields] + [1, 1, now]
-                for pc, data in chunk
+                [pc] + [data[f] for f in fields] + [data[f] for f in fields] + [1, is_synced, now]
+                for pc, data, is_synced in chunk
             ]
-            cur.executemany(insert_sql, params)
-            inserted += len(chunk)
-            _save_progress(inserted + updated + skipped)
-
-        # UPDATE — 모든 변경행이 동일한 SET 구조(전체필드+is_synced+uploaded_at)라 executemany 가능.
-        update_sql = (
-            f"UPDATE {_t()} SET {', '.join(f'{f}=%s' for f in fields)}, "
-            f"is_synced=%s, uploaded_at=%s WHERE id=%s"
-        )
-        for i in range(0, len(update_batch), WRITE_CHUNK):
-            chunk = update_batch[i:i + WRITE_CHUNK]
-            params = [
-                [data[f] for f in fields] + [is_synced, now, pid]
-                for data, is_synced, pid in chunk
-            ]
-            cur.executemany(update_sql, params)
-            updated += len(chunk)
-            _save_progress(inserted + updated + skipped)
+            cur.executemany(upsert_sql, params)
+            done += len(chunk)
+            _save_progress(done + skipped)
 
     _save_progress(total_rows)
 

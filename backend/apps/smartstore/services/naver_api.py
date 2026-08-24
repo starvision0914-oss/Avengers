@@ -238,6 +238,9 @@ def suspend_product_api(channel_product_no: str, token: str):
         da['unitCapacity'] = {'unitPriceYn': False}
     elif 'unitPriceYn' not in unit_cap:
         unit_cap['unitPriceYn'] = False
+    # 카테고리가 인증대상이 아닌데 productCertificationInfos가 남아있으면 PUT 400
+    # (2026-08-24, 스타주노 뽀로로 직소퍼즐: NotAllowCategory.../certificationInfos.kindType) → 제거
+    da.pop('productCertificationInfos', None)
 
     put_resp = requests.put(
         url,
@@ -266,6 +269,7 @@ def update_price_api(channel_product_no: str, new_price: int, token: str):
         da['unitCapacity'] = {'unitPriceYn': False}
     elif 'unitPriceYn' not in unit_cap:
         unit_cap['unitPriceYn'] = False
+    da.pop('productCertificationInfos', None)
 
     put_resp = requests.put(
         url,

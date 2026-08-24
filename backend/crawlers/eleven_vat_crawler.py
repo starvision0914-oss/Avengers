@@ -196,21 +196,33 @@ def run_vat_accounts(account_filter=None, start_ym=None, end_ym=None, log_fn=Non
     else:
         accounts = [a for a in accounts if a.api_key]   # 기본: 광고비 49계정
 
-    log(f"11번가 부가세 수집 시작 — {len(accounts)}계정, {start_ym}~{end_ym}")
-    collected, failed = 0, 0
-    for i, acct in enumerate(accounts, 1):
-        log(f"[{i}/{len(accounts)}] {acct.login_id} ({acct.seller_name})")
-        try:
-            rows = crawl_one_vat(acct, start_ym, end_ym, log_fn=log, save=save)
-            if rows is None:
+    # 다른 11번가 크롤과 락 공유(전역 동시실행 금지, IP차단 방지) — gmarket_vat_crawler와 동일 패턴
+    # (2026-08-24: 이 크롤러는 원래 preflight가 아예 없어서 다른 11번가 크롤과 동시 실행될 위험이 있었음).
+    # wait=True로 다른 크롤 끝날 때까지 대기 후 진행(예약 크롤이므로 스킵 대신 대기).
+    from apps.cpc import eleven_block_guard as guard
+    ok_lock, reason = guard.preflight('11번가부가세', platform='11st', wait=True, wait_timeout=10800)
+    if not ok_lock:
+        log(f"⛔ preflight 차단: {reason}")
+        return {'ok': 0, 'failed': 0, 'total': 0, 'skipped': reason}
+
+    try:
+        log(f"11번가 부가세 수집 시작 — {len(accounts)}계정, {start_ym}~{end_ym}")
+        collected, failed = 0, 0
+        for i, acct in enumerate(accounts, 1):
+            log(f"[{i}/{len(accounts)}] {acct.login_id} ({acct.seller_name})")
+            try:
+                rows = crawl_one_vat(acct, start_ym, end_ym, log_fn=log, save=save)
+                if rows is None:
+                    failed += 1
+                else:
+                    collected += 1
+            except Exception as e:
                 failed += 1
-            else:
-                collected += 1
-        except Exception as e:
-            failed += 1
-            log(f"{acct.login_id} 오류: {e}")
-        if i < len(accounts):
-            time.sleep(random.uniform(6, 11))   # 계정 간 사람처럼 대기
-    result = {'collected': collected, 'failed': failed, 'total': len(accounts)}
-    log(f"완료: {result}")
-    return result
+                log(f"{acct.login_id} 오류: {e}")
+            if i < len(accounts):
+                time.sleep(random.uniform(6, 11))   # 계정 간 사람처럼 대기
+        result = {'collected': collected, 'failed': failed, 'total': len(accounts)}
+        log(f"완료: {result}")
+        return result
+    finally:
+        guard.release_global_lock(platform='11st')

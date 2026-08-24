@@ -164,6 +164,55 @@ export async function fetchElevenMyAccounts(all?: boolean): Promise<{ accounts: 
   return data;
 }
 
+export interface PrecheckDiffCounts {
+  total: number | null; selling: number | null; soldout: number | null; stopped: number | null;
+}
+export interface PrecheckDiffItem {
+  account_id: number; login_id: string; seller_name: string; is_active: boolean;
+  last_check_at: string;
+  precheck: PrecheckDiffCounts; excel: PrecheckDiffCounts; diff: PrecheckDiffCounts;
+}
+export interface PrecheckDiffResponse {
+  count: number; checked_accounts: number; items: PrecheckDiffItem[];
+}
+// 크롤 사전체크(라이브) vs 실제 반영(DB) 정합성 — 차이나는 계정만 반환
+export async function fetchElevenPrecheckDiff(): Promise<PrecheckDiffResponse> {
+  const { data } = await api.get<PrecheckDiffResponse>(`${base}/precheck-diff/`);
+  return data;
+}
+
+export interface ElevenPriceMatchPreviewRow {
+  id: number; account_name: string; product_no: string; name: string;
+  current_price: number; target_price: number; diff: number;
+}
+export interface ElevenPriceMatchPreviewResponse {
+  total: number; rows: ElevenPriceMatchPreviewRow[]; preview_limit: number;
+}
+// 확인필요(역마진) 상품 판매가를 예비상품 마켓가로 맞추기 — 미리보기(변경 없음)
+export async function previewElevenPriceMatch(pct?: number): Promise<ElevenPriceMatchPreviewResponse> {
+  const { data } = await api.get<ElevenPriceMatchPreviewResponse>(`${base}/price-match-preview/`, {
+    params: pct ? { pct } : undefined,
+  });
+  return data;
+}
+// 실제 실행 — hulk API 기반 백그라운드 관리커맨드(계정별 로그인 1회 후 순차 처리)
+export async function applyElevenPriceMatch(pct?: number): Promise<{ status: string; message?: string; total?: number; error?: string }> {
+  const { data } = await api.post(`${base}/price-match-apply/`, pct ? { pct } : {});
+  return data;
+}
+
+// 고단가(판매가가 마켓가 대비 pct%+ 초과) 상품 판매가를 마켓가로 인하 — 미리보기(변경 없음)
+export async function previewElevenPriceCap(pct?: number): Promise<ElevenPriceMatchPreviewResponse> {
+  const { data } = await api.get<ElevenPriceMatchPreviewResponse>(`${base}/price-cap-preview/`, {
+    params: pct ? { pct } : undefined,
+  });
+  return data;
+}
+export async function applyElevenPriceCap(pct?: number): Promise<{ status: string; message?: string; total?: number; error?: string }> {
+  const { data } = await api.post(`${base}/price-cap-apply/`, pct ? { pct } : {});
+  return data;
+}
+
 // 선택 계정 등록상품(대량엑셀) 재크롤 트리거
 export async function triggerProductRecrawl(loginIds: string[]): Promise<{ status: string; error?: string }> {
   const { data } = await api.post('/cpc/crawler/trigger/', {
