@@ -221,6 +221,12 @@ export async function suspendAllNoMatchProducts(account_id?: number, search?: st
   return data;
 }
 
+/** 화면에서 직접 선택한 상품을 사유 무관 판매중지(범용, 2026-08-26). */
+export async function suspendSelectedProducts(product_ids: number[]): Promise<{ status: string; message?: string; success_count?: number; fail_count?: number; errors?: unknown[] }> {
+  const { data } = await api.post('/smartstore/products/suspend-selected/', { product_ids });
+  return data;
+}
+
 export async function syncProducts(account_id: number): Promise<{ synced: number; total_from_api: number; store_name: string; synced_at: string }> {
   const { data } = await api.post('/smartstore/products/sync/', { account_id });
   return data;

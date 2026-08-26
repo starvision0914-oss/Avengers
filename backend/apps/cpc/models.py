@@ -960,6 +960,7 @@ class LCodeStatus(models.Model):
     실제 판매상태 캐시. 대량(16만+)이라 한 번에 다 못 돌리고 매번 이어서(체크포인트) 처리한다."""
     l_code = models.CharField(max_length=20, unique=True)
     status = models.CharField(max_length=20)   # in_stock / soldout / not_found
+    price = models.IntegerField(null=True, blank=True)   # 도매마트 판매가(단가), 원 단위
     checked_at = models.DateTimeField()
 
     class Meta:

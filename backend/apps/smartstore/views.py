@@ -304,7 +304,8 @@ class ProductListView(APIView):
         nc_key = f"ss_needs:{account_id}:{status}:{search}:{needs_check_pct}"
         needs_total = cache.get(nc_key)
         if needs_total is None:
-            needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult).count()
+            needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult,
+                                     status_type='SALE').count()
             cache.set(nc_key, needs_total, 120)
         nm_key = f"ss_nomatch:{account_id}:{status}:{search}"
         no_match_total = cache.get(nm_key)
@@ -323,7 +324,7 @@ class ProductListView(APIView):
             cache.set(hm_key, high_margin_total, 120)
 
         if needs_check:
-            qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
+            qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_type='SALE')
         elif no_match:
             qs = (
                 qs.filter(seller_management_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='SALE')
@@ -485,6 +486,26 @@ class ProductStatsView(APIView):
 
 # ──── 품절처리 (W코드 기반) ────
 
+def _launch_smartstore_action(mode, product_pks, log_file):
+    """판매중지/가격맞추기/고단가인하를 완전히 독립된 프로세스(apply_smartstore_action)로 실행.
+    Django runserver 프로세스 안 daemon Thread로 돌리면 서버 재시작(pm2 restart 등) 시 그 순간
+    통째로 죽어 로그 한 줄 없이 유실되는 문제가 있었다(2026-08-26 실측) — 완전 분리로 해결."""
+    import json
+    import subprocess
+    import tempfile
+
+    with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False) as f:
+        json.dump(list(product_pks), f)
+        ids_file = f.name
+
+    script = (
+        'cd /home/rejoice888/Avengers/backend && /usr/bin/python3 manage.py apply_smartstore_action '
+        f"--mode {mode} --ids-file '{ids_file}' --log-file '{log_file}' >> {log_file} 2>&1"
+    )
+    subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def _get_suspend_targets(product_ids, select_all=False, filters=None):
     """선택된 상품의 seller_management_code(W*)로 전 계정에서 SALE+ownerclan_soldout=True 대상 조회"""
     filters = filters or {}
@@ -547,7 +568,6 @@ class SuspendAllNoMatchView(APIView):
     LOG_FILE = '/tmp/suspend_smartstore_nomatch.log'
 
     def post(self, request):
-        import threading, time
         from django.db.models import F
 
         kind = request.data.get('kind') or 'no_match'
@@ -589,41 +609,8 @@ class SuspendAllNoMatchView(APIView):
         for t in targets:
             store_groups.setdefault(t.account_id, {'account': t.account, 'items': []})['items'].append(t)
 
-        def _run():
-            from .services.naver_api import _get_access_token, suspend_product_api
-            with open(self.LOG_FILE, 'a') as log:
-                log.write(f'\n{time.strftime("%F %T")} {label} 전체 판매중지 시작 — {len(targets)}건 / {len(store_groups)}스토어\n')
-                success = fail = 0
-                for sid, group in store_groups.items():
-                    acc = group['account']
-                    if not acc.commerce_api_key or not acc.commerce_secret_key:
-                        fail += len(group['items'])
-                        log.write(f'  [{acc.store_name}] API키 미등록 — {len(group["items"])}건 스킵\n')
-                        continue
-                    try:
-                        token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
-                    except Exception as e:
-                        fail += len(group['items'])
-                        log.write(f'  [{acc.store_name}] 토큰 발급 실패: {e}\n')
-                        continue
-                    for item in group['items']:
-                        try:
-                            suspend_product_api(item.channel_product_no, token)
-                            SmartStoreProduct.objects.filter(pk=item.pk).update(status_type='SUSPENSION')
-                            success += 1
-                        except Exception as e:
-                            fail += 1
-                            log.write(f'  [{acc.store_name}] {item.product_no} 실패: {e}\n')
-                        time.sleep(1)
-                    log.flush()
-                log.write(f'{time.strftime("%F %T")} 완료 — 성공 {success} / 실패 {fail}\n')
+        _launch_smartstore_action('suspend', [t.pk for t in targets], self.LOG_FILE)
 
-        threading.Thread(target=_run, daemon=True).start()
-
-        by_store = {}
-        for t in targets:
-            name = t.account.display_name or t.account.store_name
-            by_store[name] = by_store.get(name, 0) + 1
         msg = (f'🛑 {label} 전체 판매중지 시작 — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
                f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
         return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
@@ -635,7 +622,6 @@ class PriceMatchApplyView(APIView):
     LOG_FILE = '/tmp/price_match_smartstore.log'
 
     def post(self, request):
-        import threading, time
         from django.db.models import F
 
         account_id = request.data.get('account_id')
@@ -660,41 +646,8 @@ class PriceMatchApplyView(APIView):
         for t in targets:
             store_groups.setdefault(t.account_id, {'account': t.account, 'items': []})['items'].append(t)
 
-        def _run():
-            from .services.naver_api import _get_access_token, update_price_api
-            with open(self.LOG_FILE, 'a') as log:
-                log.write(f'\n{time.strftime("%F %T")} 단가 마켓가 맞춤 시작(역마진 {pct}%+) — {len(targets)}건 / {len(store_groups)}스토어\n')
-                success = fail = 0
-                for sid, group in store_groups.items():
-                    acc = group['account']
-                    if not acc.commerce_api_key or not acc.commerce_secret_key:
-                        fail += len(group['items'])
-                        log.write(f'  [{acc.store_name}] API키 미등록 — {len(group["items"])}건 스킵\n')
-                        continue
-                    try:
-                        token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
-                    except Exception as e:
-                        fail += len(group['items'])
-                        log.write(f'  [{acc.store_name}] 토큰 발급 실패: {e}\n')
-                        continue
-                    for item in group['items']:
-                        try:
-                            update_price_api(item.channel_product_no, item.purchase_cost, token)
-                            SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=item.purchase_cost)
-                            success += 1
-                        except Exception as e:
-                            fail += 1
-                            log.write(f'  [{acc.store_name}] {item.product_no} 실패: {e}\n')
-                        time.sleep(1)
-                    log.flush()
-                log.write(f'{time.strftime("%F %T")} 완료 — 성공 {success} / 실패 {fail}\n')
+        _launch_smartstore_action('price_match', [t.pk for t in targets], self.LOG_FILE)
 
-        threading.Thread(target=_run, daemon=True).start()
-
-        by_store = {}
-        for t in targets:
-            name = t.account.display_name or t.account.store_name
-            by_store[name] = by_store.get(name, 0) + 1
         msg = (f'💰 단가 마켓가 맞춤 시작(역마진 {pct}%+) — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
                f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
         return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
@@ -734,7 +687,6 @@ class PriceCapApplyView(APIView):
     LOG_FILE = '/tmp/price_cap_smartstore.log'
 
     def post(self, request):
-        import threading, time
         from django.db.models import F
 
         account_id = request.data.get('account_id')
@@ -759,36 +711,7 @@ class PriceCapApplyView(APIView):
         for t in targets:
             store_groups.setdefault(t.account_id, {'account': t.account, 'items': []})['items'].append(t)
 
-        def _run():
-            from .services.naver_api import _get_access_token, update_price_api
-            with open(self.LOG_FILE, 'a') as log:
-                log.write(f'\n{time.strftime("%F %T")} 고단가 마켓가 인하 시작(마켓가 대비 {pct}%+ 초과) — {len(targets)}건 / {len(store_groups)}스토어\n')
-                success = fail = 0
-                for sid, group in store_groups.items():
-                    acc = group['account']
-                    if not acc.commerce_api_key or not acc.commerce_secret_key:
-                        fail += len(group['items'])
-                        log.write(f'  [{acc.store_name}] API키 미등록 — {len(group["items"])}건 스킵\n')
-                        continue
-                    try:
-                        token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
-                    except Exception as e:
-                        fail += len(group['items'])
-                        log.write(f'  [{acc.store_name}] 토큰 발급 실패: {e}\n')
-                        continue
-                    for item in group['items']:
-                        try:
-                            update_price_api(item.channel_product_no, item.purchase_cost, token)
-                            SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=item.purchase_cost)
-                            success += 1
-                        except Exception as e:
-                            fail += 1
-                            log.write(f'  [{acc.store_name}] {item.product_no} 실패: {e}\n')
-                        time.sleep(1)
-                    log.flush()
-                log.write(f'{time.strftime("%F %T")} 완료 — 성공 {success} / 실패 {fail}\n')
-
-        threading.Thread(target=_run, daemon=True).start()
+        _launch_smartstore_action('price_cap', [t.pk for t in targets], self.LOG_FILE)
 
         msg = (f'💰 고단가 마켓가 인하 시작(마켓가 대비 {pct}%+ 초과) — {len(store_groups)}스토어 총 {len(targets)}개(SALE만 대상). '
                f'네이버 API 특성상 1건당 약 1초 소요, 진행상황은 {self.LOG_FILE} 확인.')
@@ -796,6 +719,9 @@ class PriceCapApplyView(APIView):
 
 
 class SuspendProductsView(APIView):
+    """미매칭(W코드+오너클랜품절) 대상 판매중지 — 좁은 의미(자동 대상 산정), _get_suspend_targets 사용."""
+    LOG_FILE = '/tmp/suspend_smartstore_products.log'
+
     def post(self, request):
         product_ids = request.data.get('product_ids', [])
         select_all = request.data.get('select_all', False)
@@ -804,52 +730,29 @@ class SuspendProductsView(APIView):
         targets, _ = _get_suspend_targets(product_ids, select_all, filters)
         if not targets:
             return Response({'success_count': 0, 'fail_count': 0, 'errors': []})
+        _launch_smartstore_action('suspend', [t.pk for t in targets], self.LOG_FILE)
+        return Response({'status': 'started', 'message': f'판매중지 시작 — {len(targets)}건. 진행상황은 {self.LOG_FILE} 확인.',
+                          'total': len(targets)})
 
-        from .services.naver_api import _get_access_token, suspend_product_api
-        import time
 
-        # 계정별 그룹핑
-        store_groups = {}
-        for t in targets:
-            sid = t.account_id
-            if sid not in store_groups:
-                store_groups[sid] = {
-                    'account': t.account,
-                    'items': [],
-                }
-            store_groups[sid]['items'].append(t)
+class SuspendSelectedGeneralView(APIView):
+    """화면에서 직접 선택한 상품을 사유 무관 판매중지(범용) — W코드/오너클랜품절 여부와 무관하게
+    선택된 상품 그 자체를 대상으로 함(2026-08-26, 11번가/지마켓 '선택 판매중지'와 동일 개념으로 확장)."""
+    permission_classes = [IsAuthenticated]
+    LOG_FILE = '/tmp/suspend_smartstore_selected.log'
 
-        success_count = 0
-        errors = []
-
-        for sid, group in store_groups.items():
-            acc = group['account']
-            if not acc.commerce_api_key or not acc.commerce_secret_key:
-                for item in group['items']:
-                    errors.append({'product_no': item.product_no, 'error': 'API 키 미등록'})
-                continue
-
-            try:
-                token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
-            except Exception as e:
-                for item in group['items']:
-                    errors.append({'product_no': item.product_no, 'error': f'토큰 발급 실패: {e}'})
-                continue
-
-            for item in group['items']:
-                try:
-                    suspend_product_api(item.product_no, token)
-                    SmartStoreProduct.objects.filter(pk=item.pk).update(status_type='SUSPENSION')
-                    success_count += 1
-                except Exception as e:
-                    errors.append({'product_no': item.product_no, 'error': str(e)})
-                time.sleep(1)
-
-        return Response({
-            'success_count': success_count,
-            'fail_count': len(errors),
-            'errors': errors,
-        })
+    def post(self, request):
+        product_ids = request.data.get('product_ids', [])
+        if not product_ids:
+            return Response({'status': 'blocked', 'message': '선택된 상품이 없습니다.'}, status=400)
+        targets = list(SmartStoreProduct.objects.select_related('account').filter(
+            id__in=product_ids, status_type='SALE'
+        ))
+        if not targets:
+            return Response({'status': 'blocked', 'message': '판매중 상태의 선택 상품이 없습니다(이미 판매중지 등은 대상 제외).'}, status=400)
+        _launch_smartstore_action('suspend', [t.pk for t in targets], self.LOG_FILE)
+        msg = f'🛑 선택상품 판매중지 시작 — {len(targets)}건. 진행상황은 {self.LOG_FILE} 확인.'
+        return Response({'status': 'started', 'message': msg, 'total': len(targets)})
 
 
 # ──── 엑셀 다운로드 ────

@@ -18,6 +18,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--limit', type=int, default=0, help='이번 실행에서 최대 몇 건 처리(0=무제한, 락 제거될 때까지)')
         parser.add_argument('--recheck-days', type=int, default=14, help='이 일수보다 오래된 기존 결과도 재확인 대상에 포함')
+        parser.add_argument('--only-status', type=str, default='',
+                             help="콤마구분 상태값(soldout,not_found 등) — 지정 시 이 상태의 기존 결과만 "
+                                  "recheck-days 무시하고 재확인 대상에 포함(+ 신규 미확인 코드는 항상 포함)")
 
     def handle(self, *args, **opts):
         from apps.cpc.eleven_my_product_service import get_all_l_codes
@@ -50,12 +53,16 @@ class Command(BaseCommand):
         import random
 
         all_codes = get_all_l_codes()
-        existing = {r['l_code']: r['checked_at'] for r in LCodeStatus.objects.values('l_code', 'checked_at')}
+        rows = {r['l_code']: r for r in LCodeStatus.objects.values('l_code', 'checked_at', 'status')}
         now = timezone.now()
         recheck_cutoff = now - timezone.timedelta(days=opts['recheck_days'])
+        only_status = {s.strip() for s in opts['only_status'].split(',') if s.strip()}
 
-        never_checked = sorted(c for c in all_codes if c not in existing)
-        stale = sorted(c for c in all_codes if c in existing and existing[c] < recheck_cutoff)
+        never_checked = sorted(c for c in all_codes if c not in rows)
+        if only_status:
+            stale = sorted(c for c in all_codes if c in rows and rows[c]['status'] in only_status)
+        else:
+            stale = sorted(c for c in all_codes if c in rows and rows[c]['checked_at'] < recheck_cutoff)
         pending = never_checked + stale
         limit = opts['limit'] or len(pending)
         pending = pending[:limit]
@@ -83,7 +90,7 @@ class Command(BaseCommand):
                 else:
                     fail_streak = 0
                     LCodeStatus.objects.update_or_create(
-                        l_code=code, defaults={'status': status, 'checked_at': timezone.now()})
+                        l_code=code, defaults={'status': status, 'price': r.get('price'), 'checked_at': timezone.now()})
                 done += 1
                 if fail_streak >= 3:
                     self.stdout.write(self.style.ERROR('연속 3회 실패 — 중단'))

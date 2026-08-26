@@ -2,7 +2,7 @@ from django.urls import path
 
 from apps.lotteon.views import (
     LotteonDashboardView, LotteonAccountsView, LotteonMyProductListView, LotteonSuspendAllNoMatchView,
-    LotteonPrecheckDiffView,
+    LotteonSuspendSelectedView, LotteonPrecheckDiffView,
 )
 
 urlpatterns = [
@@ -10,5 +10,6 @@ urlpatterns = [
     path('accounts/', LotteonAccountsView.as_view()),
     path('my/products/', LotteonMyProductListView.as_view()),
     path('my/products/suspend-no-match/', LotteonSuspendAllNoMatchView.as_view()),
+    path('my/products/suspend-selected/', LotteonSuspendSelectedView.as_view()),
     path('my/products/precheck-diff/', LotteonPrecheckDiffView.as_view()),
 ]

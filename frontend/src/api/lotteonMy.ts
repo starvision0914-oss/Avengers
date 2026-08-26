@@ -51,6 +51,12 @@ export async function suspendAllNoMatchLotteonProducts(
   return data;
 }
 
+/** 화면에서 직접 선택한 상품을 판매종료(사유 무관, 비가역, 2026-08-26). */
+export async function suspendSelectedLotteonProducts(product_ids: number[]): Promise<{ status: string; message?: string; accounts?: number; total?: number; error?: string }> {
+  const { data } = await api.post('/lotteon/my/products/suspend-selected/', { product_ids });
+  return data;
+}
+
 export async function fetchLotteonMyProducts(
   page = 1, perPage = 50, accountId?: number,
   status?: string, search?: string, sort?: string, order: 'asc' | 'desc' = 'asc',

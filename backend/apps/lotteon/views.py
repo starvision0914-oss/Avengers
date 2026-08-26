@@ -85,6 +85,47 @@ class LotteonSuspendAllNoMatchView(views.APIView):
         return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
 
 
+class LotteonSuspendSelectedView(views.APIView):
+    """화면에서 직접 선택한 롯데온 상품을 판매종료(사유 무관, 범용) — [[project_11st_jinag7460_suspend_reject]]류
+    배치혼합 문제 방지를 위해 status_code='SALE'인 것만 대상(2026-08-26). 셀러가 쓸 수 있는 조치는
+    판매종료(END)뿐이고 비가역이므로, 프론트에서 강한 경고 확인을 반드시 거치게 한다."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        import subprocess
+        from apps.cpc.views import _write_targets_json_file, _crawl_lock_busy
+
+        product_ids = request.data.get('product_ids', [])
+        if not product_ids:
+            return Response({'status': 'blocked', 'message': '선택된 상품이 없습니다.'}, status=400)
+
+        rows = list(LotteonMyProduct.objects.select_related('account').filter(
+            id__in=product_ids, status_code='SALE',
+        ).values('account__login_id', 'seller_product_code'))
+        if not rows:
+            return Response({'status': 'blocked', 'message': '판매중 상태의 선택 상품이 없습니다.'}, status=400)
+
+        acc_map = {}
+        for r in rows:
+            acc_map.setdefault(r['account__login_id'], []).append(r['seller_product_code'])
+
+        targets_file = _write_targets_json_file(acc_map)
+        script = (f"cd /home/rejoice888/Avengers/backend && /usr/bin/python3 manage.py delete_loss_lotteon "
+                  f"--targets-file '{targets_file}' --real >> /tmp/delete_loss_lotteon.log 2>&1")
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        total = sum(len(v) for v in acc_map.values())
+        pid, busy = _crawl_lock_busy(LOTTEON_CRAWL_LOCKFILE)
+        queue_note = f' (다른 롯데온 작업 실행 중(PID {pid}) — 끝나는 대로 자동 시작됩니다)' if busy else ''
+        msg = (f'🛑 선택상품 판매종료 시작 — {len(acc_map)}계정 총 {total}개(비가역).{queue_note} '
+               f'진행상황은 /tmp/delete_loss_lotteon.log 확인.')
+        return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
+
+
 class LotteonAccountsView(views.APIView):
     permission_classes = [IsAuthenticated]
 

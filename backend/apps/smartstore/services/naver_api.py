@@ -240,7 +240,15 @@ def suspend_product_api(channel_product_no: str, token: str):
         unit_cap['unitPriceYn'] = False
     # 카테고리가 인증대상이 아닌데 productCertificationInfos가 남아있으면 PUT 400
     # (2026-08-24, 스타주노 뽀로로 직소퍼즐: NotAllowCategory.../certificationInfos.kindType) → 제거
-    da.pop('productCertificationInfos', None)
+    # (2026-08-24) 인증대상 아닌 카테고리에서 남은 productCertificationInfos가 400을 유발해 무조건
+    # 제거했었는데, KC인증 "대상" 카테고리에서는 반대로 이게 없으면 "인증 종류를 선택하셔야 합니다"
+    # 400이 남(2026-08-26 실측, 유진코리아몰 다수 상품). kindType이 비어있는 불완전한 항목만 제거하고
+    # 정상적으로 채워진 인증정보는 그대로 둔다.
+    certs = da.get('productCertificationInfos')
+    if isinstance(certs, list):
+        da['productCertificationInfos'] = [c for c in certs if c.get('certificationKindType')]
+        if not da['productCertificationInfos']:
+            da.pop('productCertificationInfos', None)
 
     put_resp = requests.put(
         url,
@@ -269,7 +277,15 @@ def update_price_api(channel_product_no: str, new_price: int, token: str):
         da['unitCapacity'] = {'unitPriceYn': False}
     elif 'unitPriceYn' not in unit_cap:
         unit_cap['unitPriceYn'] = False
-    da.pop('productCertificationInfos', None)
+    # (2026-08-24) 인증대상 아닌 카테고리에서 남은 productCertificationInfos가 400을 유발해 무조건
+    # 제거했었는데, KC인증 "대상" 카테고리에서는 반대로 이게 없으면 "인증 종류를 선택하셔야 합니다"
+    # 400이 남(2026-08-26 실측, 유진코리아몰 다수 상품). kindType이 비어있는 불완전한 항목만 제거하고
+    # 정상적으로 채워진 인증정보는 그대로 둔다.
+    certs = da.get('productCertificationInfos')
+    if isinstance(certs, list):
+        da['productCertificationInfos'] = [c for c in certs if c.get('certificationKindType')]
+        if not da['productCertificationInfos']:
+            da.pop('productCertificationInfos', None)
 
     put_resp = requests.put(
         url,

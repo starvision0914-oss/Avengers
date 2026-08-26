@@ -29,8 +29,9 @@ class Command(BaseCommand):
         _, running = _crawl_lock_busy(LCODE_LOCKFILE)
         pct = round(checked / total * 100, 1) if total else 0
 
+        done = checked >= total
         resumed = False
-        if not running and checked < total:
+        if not running and not done:
             try:
                 subprocess.Popen(
                     ['python3', 'manage.py', 'check_domemart_lcodes'],
@@ -40,14 +41,22 @@ class Command(BaseCommand):
             except Exception as e:
                 self.stderr.write(f'자동재개 실패: {e}')
 
-        status_line = '실행 중' if running else ('⛔ 중지 감지 → 자동 재개함' if resumed else '⛔ 중지됨(재개 실패)')
+        if running:
+            status_line = '실행 중'
+        elif done:
+            status_line = '✅ 완료'
+        elif resumed:
+            status_line = '⛔ 중지 감지 → 자동 재개함'
+        else:
+            status_line = '⛔ 중지됨(재개 실패)'
         body = (
             f"🛒 [L코드 조회 진행상황]\n"
             f"{status_line} · {checked:,}/{total:,}건 ({pct}%)\n"
             f"판매중 {counts['in_stock']:,} · 품절 {counts['soldout']:,} · 미확인 {counts['not_found']:,}"
         )
-        # watchdog(10분 주기)는 정상 실행 중일 땐 조용히 넘어가고, 재개시켰거나 완전 완료됐을 때만 알림
-        skip_alert = opts.get('watchdog') and running
+        # watchdog(10분 주기)는 정상 실행 중이거나 이미 완료된 상태(더 할 일 없음)면 조용히 넘어가고,
+        # 재개시켰을 때만 알림(완료 알림 자체는 1시간 주기 cron_lcode_progress가 담당)
+        skip_alert = opts.get('watchdog') and (running or done)
         if not skip_alert:
             try:
                 guard._send_telegram_alert(body)

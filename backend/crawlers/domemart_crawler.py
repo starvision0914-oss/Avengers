@@ -24,6 +24,7 @@ LOGIN_ID = 'rejoice888'
 LOGIN_PW = '@dlwodbs0'
 
 _COUNT_RE = re.compile(r'총\s*([0-9,]+)개의\s*상품')
+_PRICE_RE = re.compile(r'([0-9][0-9,]*)\s*원')
 
 
 def is_logged_out(driver):
@@ -101,7 +102,20 @@ def check_code(driver, code, retries=2):
             m = _COUNT_RE.search(body_text)
             count = int(m.group(1).replace(',', '')) if m else None
             has_soldout_word = '품절' in body_text
-            return {'code': code, 'count': count, 'has_soldout_word': has_soldout_word}
+            price = None
+            if count:
+                # 상품명 링크(a.em2) 바로 다음에 오는 <b>가 판매가(단가) — 같은 결과페이지에서
+                # 별도 페이지이동 없이 함께 추출(2026-08-26 실측: 배송비 안내문구 "4,230 원"과
+                # 혼동 방지 위해 상품명 링크 기준 상대위치로 특정).
+                try:
+                    price_el = driver.find_element(
+                        By.XPATH, "(//a[@class='em2'])[1]/following::b[1]")
+                    pm = _PRICE_RE.search(price_el.text or '')
+                    if pm:
+                        price = int(pm.group(1).replace(',', ''))
+                except Exception:
+                    pass
+            return {'code': code, 'count': count, 'has_soldout_word': has_soldout_word, 'price': price}
         except Exception as e:
             logger.warning('%s: 오류(%d/%d) %s', code, attempt + 1, retries, str(e)[:100])
             time.sleep(2)

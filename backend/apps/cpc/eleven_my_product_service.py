@@ -441,10 +441,13 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
 
     # 확인필요 = 역마진(나의상품 판매가가 예비상품 마켓가보다 needs_check_pct%+ 낮음, 기본 10%). 배지표시용, 캐시.
     # (2026-08-21 재정의 — 이전엔 cost_diff<0(단 1원 차이도 포함)이라 노이즈가 많았음. %는 사용자가 조정 가능)
+    # status_type='판매중' 고정(2026-08-26) — 화면 상태필터를 "전체"로 볼 때 판매중지/품절/판매금지까지
+    # 섞여 세서 "가격맞추기"(항상 판매중만 처리) 건수와 배지 숫자가 어긋났던 문제(6,514 vs 3,645) 수정.
     nc_key = f"emp_needs:{account_id}:{status}:{search}:{int(bool(focused_only))}:{needs_check_pct}"
     needs_total = cache.get(nc_key)
     if needs_total is None:
-        needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult).count()
+        needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult,
+                                 status_type='판매중').count()
         cache.set(nc_key, needs_total, 120)
     # 미매칭 = W코드(오너클랜 소싱)인데 예비상품 카탈로그에 그 코드 자체가 없음(purchase_cost NULL).
     # W코드 아닌 상품/한글 섞인 코드는 제외. status_type='판매중'만 — 이미 판매중지/삭제된 건 조치할 필요가
@@ -470,8 +473,8 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
         cache.set(hm_key, high_margin_total, 120)
 
     if needs_check:
-        # 확인필요만 보기 — 역마진 needs_check_pct%+ 행만, 가장 심한 순으로 맨 위에.
-        qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
+        # 확인필요만 보기 — 역마진 needs_check_pct%+ 행만, 가장 심한 순으로 맨 위에. status_type='판매중' 고정(배지와 동일 기준).
+        qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_type='판매중')
     elif no_match:
         qs = (
             qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
@@ -571,7 +574,9 @@ def _attach_purchase_cost(serialized):
     - purchase_cost: ownerclan.market_price (마켓가). 사용자 요청대로 마켓가 기준.
     - cost_diff: 판매가 - 마켓가
     - cost_pct: 판매가/마켓가 * 100 (100=원가와 동일, <100=역마진, >100=마진)"""
-    codes = [s['seller_product_code'] for s in serialized if s.get('seller_product_code')]
+    import re
+    _wdm_re = re.compile(r'^(WDM_|AUTO_)')
+    codes = [_wdm_re.sub('', s['seller_product_code']) for s in serialized if s.get('seller_product_code')]
     cost_map = {}
     if codes:
         from apps.ownerclan.models import OwnerclanProduct
@@ -579,7 +584,8 @@ def _attach_purchase_cost(serialized):
                   .values('product_code', 'market_price')):
             cost_map.setdefault(o['product_code'], o['market_price'])
     for s in serialized:
-        pc = cost_map.get(s.get('seller_product_code')) or None
+        stripped = _wdm_re.sub('', s['seller_product_code']) if s.get('seller_product_code') else None
+        pc = cost_map.get(stripped) or None
         if not pc:   # 0 또는 미존재 → 데이터 없음
             s['purchase_cost'] = None
             s['cost_diff'] = None
@@ -605,7 +611,8 @@ def refresh_purchase_costs(codes=None):
             return 0
     with connection.cursor() as c:
         if code_list is None:
-            # 전체
+            # 전체 — 오너클랜(W코드) 마켓가 우선, 없으면 도매마트 L코드(LCE_SX_/LCE_MX_) 도매가×1.5를 마켓가로 사용
+            # (사용자 요청 2026-08-26: L코드 상품은 도매마트 원가가 실제 원가이므로 ×1.5를 마켓가 기준으로 삼음)
             c.execute("""
                 UPDATE eleven_my_product e
                 JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(e.seller_product_code, '^(WDM_|AUTO_)', '')
@@ -616,9 +623,21 @@ def refresh_purchase_costs(codes=None):
             c.execute("""
                 UPDATE eleven_my_product e
                 LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(e.seller_product_code, '^(WDM_|AUTO_)', '')
+                JOIN l_code_status l ON l.l_code = SUBSTRING(e.seller_product_code, 8, 8) AND l.price IS NOT NULL
+                SET e.purchase_cost = ROUND(l.price * 1.5)
+                WHERE (e.seller_product_code LIKE 'LCE\\_SX\\_%' OR e.seller_product_code LIKE 'LCE\\_MX\\_%')
+                  AND (o.product_code IS NULL OR o.market_price = 0)
+            """)
+            updated += c.rowcount
+            c.execute("""
+                UPDATE eleven_my_product e
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(e.seller_product_code, '^(WDM_|AUTO_)', '')
+                LEFT JOIN l_code_status l ON l.l_code = SUBSTRING(e.seller_product_code, 8, 8)
+                    AND (e.seller_product_code LIKE 'LCE\\_SX\\_%' OR e.seller_product_code LIKE 'LCE\\_MX\\_%')
                 SET e.purchase_cost = NULL
                 WHERE e.purchase_cost IS NOT NULL
-                  AND (e.seller_product_code = '' OR o.product_code IS NULL OR o.market_price = 0)
+                  AND (e.seller_product_code = ''
+                       OR ((o.product_code IS NULL OR o.market_price = 0) AND l.price IS NULL))
             """)
             return updated
         # incremental — 청크로 IN 처리 (seller_product_code 인덱스 사용)
@@ -648,6 +667,8 @@ def refresh_gmarket_purchase_costs(codes=None):
             return 0
     with connection.cursor() as c:
         if code_list is None:
+            # 오너클랜(W코드) 마켓가 우선, 없으면 도매마트 L코드(LCE_SX_/LCE_MX_) 도매가×1.5를 마켓가로 사용
+            # (사용자 요청 2026-08-26). 지마켓은 코드 끝에 _00 등 접미가 붙어도 L코드 위치(8~15번째 문자)는 동일.
             c.execute("""
                 UPDATE gmarket_my_product g
                 JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(g.seller_product_code, '^(WDM_|AUTO_)', '')
@@ -658,9 +679,21 @@ def refresh_gmarket_purchase_costs(codes=None):
             c.execute("""
                 UPDATE gmarket_my_product g
                 LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(g.seller_product_code, '^(WDM_|AUTO_)', '')
+                JOIN l_code_status l ON l.l_code = SUBSTRING(g.seller_product_code, 8, 8) AND l.price IS NOT NULL
+                SET g.purchase_cost = ROUND(l.price * 1.5)
+                WHERE (g.seller_product_code LIKE 'LCE\\_SX\\_%' OR g.seller_product_code LIKE 'LCE\\_MX\\_%')
+                  AND (o.product_code IS NULL OR o.market_price = 0)
+            """)
+            updated += c.rowcount
+            c.execute("""
+                UPDATE gmarket_my_product g
+                LEFT JOIN ownerclan_product o ON o.product_code = REGEXP_REPLACE(g.seller_product_code, '^(WDM_|AUTO_)', '')
+                LEFT JOIN l_code_status l ON l.l_code = SUBSTRING(g.seller_product_code, 8, 8)
+                    AND (g.seller_product_code LIKE 'LCE\\_SX\\_%' OR g.seller_product_code LIKE 'LCE\\_MX\\_%')
                 SET g.purchase_cost = NULL
                 WHERE g.purchase_cost IS NOT NULL
-                  AND (g.seller_product_code = '' OR o.product_code IS NULL OR o.market_price = 0)
+                  AND (g.seller_product_code = ''
+                       OR ((o.product_code IS NULL OR o.market_price = 0) AND l.price IS NULL))
             """)
             return updated
         updated = 0

@@ -129,3 +129,5 @@
 - [재수집 먼저, 그다음 미매칭판매중지](feedback_recrawl_before_nomatch_suspend.md) — DB 오래된 스냅샷으로 타겟 뽑으면 시차/중복실행 혼란(가짜거부알럿) 생김. 11번가 status는 다음날 크롤 전까지 미갱신이 근본원인
 - [크롤링 문제확인 철저히](feedback_crawl_problem_check_thoroughness.md) — "문제있어?" 질문엔 crawling_status 필드만 보지 말고 최근3일 로그 전체 grep해서 보고(필드가 실패를 반영 안하는 경우 발견됨). 세션 무관 항상 적용
 - [11번가 엑셀나의상품 stale 검증함정](project_11st_excel_export_stale_status.md) — 판매중지 직후 검증할 때 엑셀재수집(crawl_11st_products) 쓰면 가짜"실패"(엑셀이 stale). 실시간 AJAX(SellProductAjaxAction getSellProductListJSON)로 검증할 것. 진짜 판매중지 API는 SellProductAction updateProductSelStat
+- [11번가 나의상품 그리드 실시간검증법](project_11st_jqxgrid_realtime_verify.md) — getSellProductListJSON 직접호출은 TOTAL_COUNT:0(파라미터 부족). 검증 정답은 /view/8006 검색 후 jQuery('#dvdataGrid').jqxGrid('getrows')로 selStatCd/selStatCdVal(span텍스트)/selPrc/selQty 직접조회 — DOM 20행 표시는 가상스크롤 착시(실제 데이터 아님), 배치 30건 가능
+- [11번가 판매중지 배치 혼합거부](project_11st_jinag7460_suspend_reject.md) — 배치에 이미판매중지 상품 1건이라도 섞이면 배치 전체 거부(부분처리 안됨), 순수판매중만 재구성하면 해결(jinag7460, 2026-08-26)

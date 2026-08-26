@@ -245,7 +245,11 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
             driver.implicitly_wait(3)
         except Exception:
             pass
-        for acct in qs:
+        from collections import deque
+        pending = deque(qs)
+        retried_logins = set()
+        while pending:
+            acct = pending.popleft()
             if guard.is_control_stop('gmarket'):
                 if log_fn: log_fn('🛑 강제중지 요청 — 중단')
                 break
@@ -349,6 +353,13 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
                         driver.implicitly_wait(3)
                     except Exception:
                         pass
+                    # 세션 끊김(aborted by navigation 등)으로 이 계정 처리가 미완료로 끝났을 뿐,
+                    # 계정 자체 문제는 아닐 가능성이 높음 — 새 세션으로 1회만 재시도(무한루프 방지,
+                    # 3일치 로그 실측: 25계정 중 매일 9~14개꼴로 이 사유로 그날 ON/OFF가 누락되던 문제).
+                    if acct.login_id not in retried_logins:
+                        retried_logins.add(acct.login_id)
+                        pending.append(acct)
+                        if log_fn: log_fn(f'[간편:{acct.login_id}] 세션 끊김 — 새 세션에서 재시도 예약')
                 else:
                     try: _dismiss_alert(driver)   # 잔여 알림 정리 → 다음 계정 보호(연쇄실패 방지)
                     except Exception: pass

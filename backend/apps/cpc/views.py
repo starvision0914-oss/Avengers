@@ -3678,7 +3678,7 @@ class ElevenMyProductListView(views.APIView):
             if focused_only:
                 qs = qs.filter(account__is_focused=True)
             if needs_check:
-                qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
+                qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_type='판매중')
             elif no_match:
                 qs = (
                     qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
@@ -3773,43 +3773,11 @@ class GmarketMyProductListView(views.APIView):
             qs = qs.filter(Q(product_name__icontains=search) | Q(product_no__icontains=search)
                            | Q(seller_product_code__icontains=search) | Q(account__login_id__icontains=search))
 
-        # 확인필요 = 역마진(나의상품 판매가가 예비상품 마켓가보다 10%+ 낮음). 현재 필터 기준 건수(배지표시용, 캐시).
-        from django.core.cache import cache as _ncache
-        nc_key = f"gmkt_needs:{account_id}:{login_id}:{market}:{status_q}:{search}:{needs_check_pct}"
-        needs_total = _ncache.get(nc_key)
-        if needs_total is None:
-            needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult).count()
-            _ncache.set(nc_key, needs_total, 120)
-        # 미매칭 = W코드(오너클랜 소싱)인데 예비상품 카탈로그에 그 코드 자체가 없음(purchase_cost NULL).
-        # W코드 아닌 상품/한글 섞인 코드는 제외. (2026-08-21 재정의 — 라이브상태 기반 제외 로직 삭제)
-        nm_key = f"gmkt_nomatch:{account_id}:{login_id}:{market}:{status_q}:{search}"
-        no_match_total = _ncache.get(nm_key)
-        if no_match_total is None:
-            no_match_total = (
-                qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
-                  .exclude(seller_product_code__regex=r'[가-힣]')
-            ).count()
-            _ncache.set(nm_key, no_match_total, 120)
-        # 고단가 = 판매가 60만원 이상 이거나, 예비상품 마켓가보다 50%+ 비쌈.
-        hm_key = f"gmkt_highmargin:{account_id}:{login_id}:{market}:{status_q}:{search}"
-        high_margin_total = _ncache.get(hm_key)
-        if high_margin_total is None:
-            high_margin_total = qs.filter(
-                Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
-            ).count()
-            _ncache.set(hm_key, high_margin_total, 120)
-        if needs_check:
-            qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
-        elif no_match:
-            qs = (
-                qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
-                  .exclude(seller_product_code__regex=r'[가-힣]')
-            )
-        elif high_margin:
-            qs = qs.filter(Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5))
         # 중복제외: 같은 (계정, 판매자코드)는 1개만(가장 빠른 id) — 같은 상품의 다중 상품번호/마켓 중복 제거.
         # 기존 `id__in=<keep_ids 서브쿼리>`는 48만행 semi-join이 매 페이지 재실행돼 ~353초였음.
         # 제거 대상(loser=그룹 내 min 초과분)은 ~3.9만개뿐 → loser id만 캐시하고 exclude.
+        # (2026-08-26) 배지(확인필요/미매칭/고단가) 집계보다 먼저 적용해야 "중복제외" 켠 화면의 실제 목록
+        # 건수와 배지 숫자가 일치한다 — 이전엔 배지를 중복 포함 qs로 먼저 계산해 최대 7천여건 차이가 났었음.
         dedup_on = bool(request.query_params.get('dedup'))
         if dedup_on:
             from django.db.models import Min
@@ -3824,6 +3792,43 @@ class GmarketMyProductListView(views.APIView):
                 _cache.set(sig, loser_ids, 180)
             if loser_ids:
                 qs = qs.exclude(id__in=loser_ids)
+
+        # 확인필요 = 역마진(나의상품 판매가가 예비상품 마켓가보다 10%+ 낮음). 현재 필터 기준 건수(배지표시용, 캐시).
+        # status_type='판매중' 고정(2026-08-26) — "가격맞추기"(항상 판매중만 처리) 건수와 배지 숫자 일치시킴.
+        from django.core.cache import cache as _ncache
+        nc_key = f"gmkt_needs:{account_id}:{login_id}:{market}:{status_q}:{search}:{needs_check_pct}:{int(dedup_on)}"
+        needs_total = _ncache.get(nc_key)
+        if needs_total is None:
+            needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult,
+                                     status_type='판매중').count()
+            _ncache.set(nc_key, needs_total, 120)
+        # 미매칭 = W코드(오너클랜 소싱)인데 예비상품 카탈로그에 그 코드 자체가 없음(purchase_cost NULL).
+        # W코드 아닌 상품/한글 섞인 코드는 제외. (2026-08-21 재정의 — 라이브상태 기반 제외 로직 삭제)
+        nm_key = f"gmkt_nomatch:{account_id}:{login_id}:{market}:{status_q}:{search}:{int(dedup_on)}"
+        no_match_total = _ncache.get(nm_key)
+        if no_match_total is None:
+            no_match_total = (
+                qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
+                  .exclude(seller_product_code__regex=r'[가-힣]')
+            ).count()
+            _ncache.set(nm_key, no_match_total, 120)
+        # 고단가 = 판매가 60만원 이상 이거나, 예비상품 마켓가보다 50%+ 비쌈.
+        hm_key = f"gmkt_highmargin:{account_id}:{login_id}:{market}:{status_q}:{search}:{int(dedup_on)}"
+        high_margin_total = _ncache.get(hm_key)
+        if high_margin_total is None:
+            high_margin_total = qs.filter(
+                Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
+            ).count()
+            _ncache.set(hm_key, high_margin_total, 120)
+        if needs_check:
+            qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_type='판매중')
+        elif no_match:
+            qs = (
+                qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
+                  .exclude(seller_product_code__regex=r'[가-힣]')
+            )
+        elif high_margin:
+            qs = qs.filter(Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5))
         from django.db.models import F, ExpressionWrapper, FloatField, Q as _Q
         from django.db.models.functions import NullIf
         # cost_pct = 판매가/마켓가*100 — 확인필요/고마진 화면에서 편차 20%+ 만 골라보기용.
@@ -4758,22 +4763,27 @@ class MyProductsAllView(views.APIView):
 
         depth = min(page * per_page, 5000)   # 병합 정렬을 위해 각 소스에서 가져올 상한
 
-        # 미매칭 총건수(배지표시용) — 필터 on/off 무관 항상 계산(11번가+지마켓+스마트스토어 합계, 쿠팡/롯데온은 매칭 인프라 없어 제외)
+        # 미매칭 총건수(배지표시용) — 필터 on/off 무관 항상 계산(11번가+지마켓+스마트스토어+롯데온 합계, 쿠팡은 매칭 인프라 없어 제외)
+        # (2026-08-26) 이전엔 code_field__startswith='W'만 써서 WDM_/AUTO_ 접두 W코드를 놓쳤고(각 사이트 자체
+        # 목록/필터는 iregex='^(WDM_|AUTO_)?W'를 씀 — 정의 불일치), 롯데온은 매칭 인프라가 아직 없다는 옛 주석
+        # 그대로 합계에서 통째로 빠져 있었다(2026-08-23 롯데온 purchase_cost 매칭 인프라 구축 이후로 stale).
         from django.core.cache import cache as _nm_cache
 
         def _nm_count(model, code_field, status_field, status_val):
             return (model.objects
-                    .filter(**{f'{code_field}__startswith': 'W', 'purchase_cost__isnull': True, status_field: status_val})
+                    .filter(**{f'{code_field}__iregex': r'^(WDM_|AUTO_)?W', 'purchase_cost__isnull': True, status_field: status_val})
                     .exclude(**{f'{code_field}__regex': r'[가-힣]'}).count())
 
-        nm_key = "all_nomatch_total"
+        nm_key = "all_nomatch_total_v2"
         no_match_total = _nm_cache.get(nm_key)
         if no_match_total is None:
             from apps.smartstore.models import SmartStoreProduct as _SSP
+            from apps.lotteon.models import LotteonMyProduct as _LMP
             no_match_total = (
                 _nm_count(ElevenMyProduct, 'seller_product_code', 'status_type', '판매중')
                 + _nm_count(GmarketMyProduct, 'seller_product_code', 'status_type', '판매중')
                 + _nm_count(_SSP, 'seller_management_code', 'status_type', 'SALE')
+                + _nm_count(_LMP, 'seller_product_code', 'status_code', 'SALE')
             )
             _nm_cache.set(nm_key, no_match_total, 180)
 
@@ -4782,14 +4792,16 @@ class MyProductsAllView(views.APIView):
             return model.objects.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult,
                                          **{status_field: status_val}).count()
 
-        nc_key = f"all_needscheck_total:{needs_check_pct}"
+        nc_key = f"all_needscheck_total_v2:{needs_check_pct}"
         needs_check_total = _nm_cache.get(nc_key)
         if needs_check_total is None:
             from apps.smartstore.models import SmartStoreProduct as _SSP2
+            from apps.lotteon.models import LotteonMyProduct as _LMP2
             needs_check_total = (
                 _needs_count(ElevenMyProduct, 'status_type', '판매중')
                 + _needs_count(GmarketMyProduct, 'status_type', '판매중')
                 + _needs_count(_SSP2, 'status_type', 'SALE')
+                + _needs_count(_LMP2, 'status_code', 'SALE')
             )
             _nm_cache.set(nc_key, needs_check_total, 180)
 
@@ -4990,8 +5002,14 @@ class MyProductsAllView(views.APIView):
         if search:
             lq = lq.filter(Q(product_name__icontains=search) | Q(pd_no__icontains=search)
                            | Q(account__login_id__icontains=search))
-        if needs_check or dedup_on or no_match:
-            lotteon_allowed = False   # 확인필요/중복제외/미매칭은 W코드 구매원가 매칭 인프라가 있는 플랫폼 전용 개념
+        if dedup_on:
+            lotteon_allowed = False   # 중복제외는 아직 롯데온 전용 로직 없음
+        elif needs_check:
+            lq = lq.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_code='SALE')
+        elif no_match:
+            # (2026-08-26) 롯데온도 2026-08-23부터 purchase_cost 매칭 인프라가 있음 — 다른 플랫폼과 동일 기준 적용.
+            lq = (lq.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_code='SALE')
+                    .exclude(seller_product_code__regex=r'[가-힣]'))
         _LOTTEON_SORT = {'product_name': 'product_name', 'sale_price': 'sale_price',
                          'status_type': 'status_code', 'seller_product_code': 'seller_product_code',
                          'login_id': 'account__login_id', 'seller_name': 'account__store_name', 'synced_at': 'synced_at'}
@@ -5002,7 +5020,7 @@ class MyProductsAllView(views.APIView):
         lotteon_rows = []
         if lotteon_allowed:
             from django.core.cache import cache as _cache
-            lcnt_key = f"lotteon_all_count:{status_q}:{search}"
+            lcnt_key = f"lotteon_all_count:{status_q}:{search}:{int(needs_check)}:{int(no_match)}"
             lotteon_total = _cache.get(lcnt_key)
             if lotteon_total is None:
                 lotteon_total = lq.count()
@@ -5017,7 +5035,9 @@ class MyProductsAllView(views.APIView):
                     'seller_product_code': p.seller_product_code, 'category': p.category_path,
                     'product_image_url': '',
                     'synced_at': p.synced_at.isoformat() if p.synced_at else None,
-                    'purchase_cost': None, 'cost_diff': None,
+                    'purchase_cost': p.purchase_cost,
+                    'cost_diff': (p.sale_price - p.purchase_cost) if (p.purchase_cost and p.sale_price is not None) else None,
+                    'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if (p.purchase_cost and p.sale_price is not None) else None,
                 })
 
         # 전체 다운로드(export=1) — 현재 필터(플랫폼 무관 통합)에 맞는 전체를 CSV로 스트리밍.

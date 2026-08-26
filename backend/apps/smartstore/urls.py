@@ -11,6 +11,7 @@ urlpatterns = [
     path('products/price-match-preview/', views.PriceMatchPreviewView.as_view()),
     path('products/suspend-preview/', views.SuspendPreviewView.as_view()),
     path('products/suspend/', views.SuspendProductsView.as_view()),
+    path('products/suspend-selected/', views.SuspendSelectedGeneralView.as_view()),
     path('products/suspend-all-no-match/', views.SuspendAllNoMatchView.as_view()),
     path('products/price-match-apply/', views.PriceMatchApplyView.as_view()),
     path('products/price-cap-preview/', views.PriceCapPreviewView.as_view()),
