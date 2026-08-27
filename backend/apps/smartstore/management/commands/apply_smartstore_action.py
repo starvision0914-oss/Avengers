@@ -38,6 +38,12 @@ class Command(BaseCommand):
         mode_label = {'suspend': '판매중지', 'price_match': '단가 마켓가 맞춤', 'price_cap': '고단가 인하'}[mode]
         _log(f'{time.strftime("%F %T")} {mode_label} 시작 — {len(targets)}건 / {len(store_groups)}스토어')
 
+        # 토큰 유효시간이 있어 대형 스토어(수천~1만+건)를 한 계정에서 계속 처리하다 보면
+        # 도중에 만료돼 그 뒤 전부 401로 연쇄실패하는 사고가 있었다(2026-08-26 실측: 유진코리아몰
+        # 11,907건 처리 중 약 3시간40분 지점에서 토큰 만료 → 남은 항목 전부 401). 15분마다
+        # 선제적으로 재발급 + 401을 만나면 즉시 재발급 후 1회 재시도.
+        TOKEN_REFRESH_SEC = 900
+
         success = 0
         fail = 0
         for sid, group in store_groups.items():
@@ -48,12 +54,19 @@ class Command(BaseCommand):
                 continue
             try:
                 token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
+                token_issued_at = time.time()
             except Exception as e:
                 fail += len(group['items'])
                 _log(f'  [{acc.store_name}] 토큰 발급 실패: {e}')
                 continue
 
             for item in group['items']:
+                if time.time() - token_issued_at > TOKEN_REFRESH_SEC:
+                    try:
+                        token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
+                        token_issued_at = time.time()
+                    except Exception as e:
+                        _log(f'  [{acc.store_name}] 토큰 재발급 실패: {e} — 기존 토큰으로 계속')
                 try:
                     if mode == 'suspend':
                         suspend_product_api(item.channel_product_no, token)
@@ -63,6 +76,22 @@ class Command(BaseCommand):
                         SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=item.purchase_cost)
                     success += 1
                 except Exception as e:
+                    if '401' in str(e):
+                        # 토큰 만료 의심 — 즉시 재발급 후 1회만 재시도(무한루프 방지)
+                        try:
+                            token = _get_access_token(acc.commerce_api_key, acc.commerce_secret_key)
+                            token_issued_at = time.time()
+                            if mode == 'suspend':
+                                suspend_product_api(item.channel_product_no, token)
+                                SmartStoreProduct.objects.filter(pk=item.pk).update(status_type='SUSPENSION')
+                            else:
+                                update_price_api(item.channel_product_no, item.purchase_cost, token)
+                                SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=item.purchase_cost)
+                            success += 1
+                            time.sleep(1)
+                            continue
+                        except Exception as e2:
+                            e = e2
                     fail += 1
                     _log(f'  [{acc.store_name}] {item.product_no} 실패: {e}')
                 time.sleep(1)

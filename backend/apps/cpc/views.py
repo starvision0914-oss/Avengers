@@ -3677,15 +3677,22 @@ class ElevenMyProductListView(views.APIView):
                                | Q(account__login_id__icontains=search) | Q(account__seller_name__icontains=search))
             if focused_only:
                 qs = qs.filter(account__is_focused=True)
+            # 고단가는 W코드 전용, 확인필요는 L코드 50%/W코드 needs_check_pct% — get_my_products와 동일
+            # 기준(2026-08-27 사용자 확정, [[feedback_lcode_price_exclusion]] 참고).
+            L_CODE_Q = Q(seller_product_code__istartswith='LCE_')
             if needs_check:
-                qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_type='판매중')
+                qs = qs.filter(
+                    (~L_CODE_Q & Q(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)) |
+                    (L_CODE_Q & Q(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * 0.5)),
+                    status_type='판매중',
+                )
             elif no_match:
                 qs = (
                     qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
                       .exclude(seller_product_code__regex=r'[가-힣]')
                 )
             elif high_margin:
-                qs = qs.filter(Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5))
+                qs = qs.filter(~L_CODE_Q & (Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)))
             qs = qs.order_by('account_id', 'product_no')
 
             class _Echo:
@@ -4199,8 +4206,9 @@ class GmarketDashboardView(views.APIView):
                             'auction_cpc', 'collected_at').first())
             if last:
                 bal[s['gmarket_id']] = last
-        # 광고비 — 판매예치금 거래내역(GmarketCostHistory)만 사용. 스냅샷 보충 제거.
+        # 광고비 — 기본은 판매예치금 거래내역(GmarketCostHistory) 기준(과거 날짜는 이걸로 충분히 정확).
         # market('gmarket'/'auction')로 분리 집계해 탭별 정확한 값 표시.
+        # '오늘' 구간은 아래에서 스냅샷으로 보강함(2026-08-27, 정산지연 오차 최소화 요청).
         from collections import defaultdict
         from apps.cpc.models import GmarketManualCost
         other = 'auction' if market == 'gmarket' else ('gmarket' if market == 'auction' else None)
@@ -4235,6 +4243,80 @@ class GmarketDashboardView(views.APIView):
             elif tx == '서버비용':
                 c['server'] += amt
             c['cnt'] += r['cnt']
+
+        # '오늘'이 조회범위에 포함되면, 아직 정산 전표가 안 올라온 당일 사용분을
+        # 잔액 스냅샷(GmarketDepositSnapshot, 실시간에 가까움)으로 보강한다.
+        # (2026-08-27 사용자 요청 — 거래내역은 지마켓 자체 정산 지연으로 1~2일 늦게 기록돼
+        #  '오늘' 광고비가 실제보다 낮게 표시되는 문제. 과거 날짜는 정산이 끝나 거래내역이
+        #  정확하므로 건드리지 않고, '오늘' 구간에만 max(거래내역, 스냅샷)으로 보강.
+        #  스냅샷은 '오늘 자정 이후 원시 누적값'을 그대로 쓴다 — 처음엔 (마지막-첫스냅샷) 델타로
+        #  계산했다가, 자정~첫 수집(보통 07~08시) 사이 이미 발생한 사용분(계정당 약 2~3천원,
+        #  전체 약 7만원)이 델타 계산에서 통째로 빠지는 실측 오차가 나서 원시값 방식으로 수정함
+        #  (사용자가 별도로 돌리는 실시간 수집 프로그램의 '합계'도 델타가 아니라 원시 현재값이라
+        #  이 방식이 그 기준과 정확히 맞음, 2026-08-27 실측: 1,015,751원 vs 1,022,934원 오차 0.7%).
+        #  서브계정(공유ESM)은 스냅샷이 마스터에만 잡혀 분리 불가라 이 보강에서 제외 —
+        #  서브는 거래내역이 이미 개별 기록되므로 원래도 정확함.
+        today = timezone.localdate()
+        if d0 <= today <= d1:
+            day_start = timezone.make_aware(datetime.combine(today, datetime.min.time()))
+            today_ledger = defaultdict(lambda: {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0})
+            for r in (GmarketCostHistory.objects
+                      .filter(seller_id__in=acct_ids,
+                              transaction_type__in=['CPC', 'AI매출업'],
+                              use_date=today)
+                      .exclude(comment__icontains='판매예치금')
+                      .values('seller_id', 'transaction_type', 'market')
+                      .annotate(spend=Sum('amount'))):
+                tl = today_ledger[r['seller_id']]
+                amt = abs(r['spend'] or 0)
+                if r['transaction_type'] == 'CPC':
+                    tl['auct_cpc' if r['market'] == 'auction' else 'gmkt_cpc'] += amt
+                else:
+                    tl['auct_ai' if r['market'] == 'auction' else 'ai'] += amt
+
+            # 마스터 → 서브 매핑. 스냅샷(잔액 페이지)은 세션이 같은 서브들의 사용액까지
+            # 합쳐서 보여준다(2026-08-27 실측: dlwodb000 스냅샷 83,116 = dlwodb000 거래내역
+            # 39,325 + starvisi 거래내역 43,791, 오차 0원으로 정확히 일치) — 그래서 마스터의
+            # 스냅샷값에서 서브들의 '오늘 거래내역'을 먼저 빼야 마스터 단독분만 남는다.
+            # 안 빼면 서브 몫이 마스터에도 또 잡혀 이중계산됨(사용자 지적으로 발견한 버그).
+            subs_by_master = defaultdict(list)
+            for a in accts:
+                if a.gmarket_origin_id and a.gmarket_origin_id != a.login_id:
+                    subs_by_master[a.gmarket_origin_id].append(a.login_id)
+
+            non_sub_accts = [a for a in accts if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
+            for a in non_sub_accts:
+                lid = a.login_id
+                last = (GmarketDepositSnapshot.objects
+                        .filter(gmarket_id=lid, collected_at__gte=day_start)
+                        .order_by('-collected_at').first())
+                if not last:
+                    continue
+                # 스냅샷 필드 의미(실측 확인, 2026-08-27 rejoice911 사례):
+                #  - gmarket_cpc: 크롤러가 이미 AI사용액을 빼고 저장(순수 지마켓 CPC만)
+                #  - ai_usage(spnGmktBillingMinusAmnt): 이름 그대로 '지마켓'쪽 AI사용액만 — 옥션 AI는 미포함
+                #  - auction_cpc: 옥션쪽은 AI 분리가 안 돼 CPC+AI가 섞인 합계값
+                #    (실측: rejoice911 auction_cpc=19,635 = 거래내역 auct_cpc 15,653 + auct_ai 3,982,
+                #     이걸 auct_cpc만과 비교해서 AI 3,982원을 중복으로 더 얹었던 버그를 여기서 수정)
+                snap_cpc = last.gmarket_cpc
+                snap_auct_combined = last.auction_cpc   # CPC+AI 합산(옥션)
+                snap_ai = last.ai_usage                 # 지마켓 AI만
+                for sub_lid in subs_by_master.get(lid, []):
+                    stl = today_ledger.get(sub_lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0}
+                    snap_cpc = max(0, snap_cpc - stl['gmkt_cpc'])
+                    snap_auct_combined = max(0, snap_auct_combined - stl['auct_cpc'] - stl['auct_ai'])
+                    snap_ai = max(0, snap_ai - stl['ai'])
+                tl = today_ledger.get(lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0}
+                c = cost[lid]
+                if snap_cpc > tl['gmkt_cpc']:
+                    c['gmkt_cpc'] += snap_cpc - tl['gmkt_cpc']
+                if snap_ai > tl['ai']:
+                    c['ai'] += snap_ai - tl['ai']
+                tl_auct_combined = tl['auct_cpc'] + tl['auct_ai']
+                if snap_auct_combined > tl_auct_combined:
+                    # 옥션쪽은 CPC/AI 분리 불가 — 부족분을 auct_cpc에 몰아서라도 총액은 정확히 맞춘다
+                    c['auct_cpc'] += snap_auct_combined - tl_auct_combined
+
         # 계정별 상품수
         prod = {r['account__login_id']: r['n'] for r in (
             GmarketMyProduct.objects.values('account__login_id').annotate(n=Count('id')))}
@@ -5982,6 +6064,60 @@ class AllMallProfitView(views.APIView):
                   .values('market').annotate(a=Sum('amount'))):
             mk = r['market'] or 'gmarket'
             ad[mk] = ad.get(mk, 0) + abs(r['a'] or 0)
+
+        # '오늘'이 조회범위에 포함되면 거래내역 정산지연을 스냅샷으로 보강 — GmarketDashboardView와
+        # 동일 로직(2026-08-27, /gmarket과 손익카드 숫자 불일치 사용자 지적으로 여기도 반영).
+        _today = today
+        if ms <= _today <= me:
+            from apps.cpc.models import GmarketDepositSnapshot as _GDS
+            _kst_early = _pytz.timezone('Asia/Seoul')
+            _day_start = _kst_early.localize(dt_dt.combine(_today, dt_dt.min.time()))
+            _today_ledger = {}
+            for r in (GmarketCostHistory.objects
+                      .filter(use_date=_today, transaction_type__in=['CPC', 'AI매출업'],
+                              seller_id__in=_visible_gmkt_ids)
+                      .exclude(comment__icontains='판매예치금')
+                      .values('seller_id', 'transaction_type', 'market')
+                      .annotate(spend=Sum('amount'))):
+                tl = _today_ledger.setdefault(r['seller_id'], {'gmkt_cpc': 0, 'auct': 0, 'ai': 0})
+                _amt = abs(r['spend'] or 0)
+                if r['transaction_type'] == 'CPC':
+                    if r['market'] == 'auction':
+                        tl['auct'] += _amt
+                    else:
+                        tl['gmkt_cpc'] += _amt
+                else:
+                    if r['market'] == 'auction':
+                        tl['auct'] += _amt
+                    else:
+                        tl['ai'] += _amt
+            _accts = list(_CrAcct.objects.filter(platform='gmarket', is_active=True, hide_from_dashboard=False))
+            _subs_by_master = {}
+            for _a in _accts:
+                if _a.gmarket_origin_id and _a.gmarket_origin_id != _a.login_id:
+                    _subs_by_master.setdefault(_a.gmarket_origin_id, []).append(_a.login_id)
+            for _a in _accts:
+                if _a.gmarket_origin_id and _a.gmarket_origin_id != _a.login_id:
+                    continue   # 서브는 거래내역이 이미 개별 정확 — 보강 대상 아님
+                lid = _a.login_id
+                last = (_GDS.objects.filter(gmarket_id=lid, collected_at__gte=_day_start)
+                        .order_by('-collected_at').first())
+                if not last:
+                    continue
+                snap_cpc, snap_auct, snap_ai = last.gmarket_cpc, last.auction_cpc, last.ai_usage
+                for sub_lid in _subs_by_master.get(lid, []):
+                    stl = _today_ledger.get(sub_lid) or {'gmkt_cpc': 0, 'auct': 0, 'ai': 0}
+                    snap_cpc = max(0, snap_cpc - stl['gmkt_cpc'])
+                    snap_auct = max(0, snap_auct - stl['auct'])
+                    snap_ai = max(0, snap_ai - stl['ai'])
+                tl = _today_ledger.get(lid) or {'gmkt_cpc': 0, 'auct': 0, 'ai': 0}
+                if snap_cpc > tl['gmkt_cpc']:
+                    ad['gmarket'] = ad.get('gmarket', 0) + (snap_cpc - tl['gmkt_cpc'])
+                if snap_ai > tl['ai']:
+                    ad['gmarket'] = ad.get('gmarket', 0) + (snap_ai - tl['ai'])
+                if snap_auct > tl['auct']:
+                    ad['auction'] = ad.get('auction', 0) + (snap_auct - tl['auct'])
+
         # 11번가도 거래내역(ElevenCostHistory) 기준으로 통일 — 전계정 CPC 차감 합계(지마켓과 동일 방식).
         _kst = _pytz.timezone('Asia/Seoul')
         _s = _kst.localize(dt_dt.combine(ms, dt_dt.min.time()))
@@ -5992,7 +6128,13 @@ class AllMallProfitView(views.APIView):
         # 스마트스토어 광고비 (SmartStoreAdCost)
         from apps.smartstore.models import SmartStoreAdCost as _SSAdCost
         _ss_ad = _SSAdCost.objects.filter(date__gte=ms, date__lte=me).aggregate(s=Sum('cost'))['s'] or 0
-        ad_map = {'gmarket': ad.get('gmarket', 0), 'auction': ad.get('auction', 0),
+        # 수동비용(바이럴 등, 광고센터 외부) — OverviewView와 동일하게 반영(2026-08-27 사용자 요청,
+        # 전에는 여기 빠져서 /overview 상단 카드와 쇼핑몰별 손익 카드 숫자가 어긋났음).
+        from apps.cpc.models import GmarketManualCost as _GMC
+        _manual_ad = abs(_GMC.objects.filter(
+            seller_id__in=_visible_gmkt_ids, use_date__gte=ms, use_date__lte=me
+        ).aggregate(s=Sum('amount'))['s'] or 0)
+        ad_map = {'gmarket': ad.get('gmarket', 0) + _manual_ad, 'auction': ad.get('auction', 0),
                   '11st': st11_ad, 'smartstore': _ss_ad}
 
         # 3) 플랫폼 행 구성

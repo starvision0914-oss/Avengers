@@ -439,15 +439,25 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
     needs_check_pct = min(max(needs_check_pct or 10, 1), 99)
     needs_check_mult = (100 - needs_check_pct) / 100.0
 
-    # 확인필요 = 역마진(나의상품 판매가가 예비상품 마켓가보다 needs_check_pct%+ 낮음, 기본 10%). 배지표시용, 캐시.
+    # L코드(도매마트, LCE_SX_/LCE_MX_) 구분 — 고단가/확인필요는 W코드(오너클랜)와 L코드(도매마트)를
+    # 서로 다른 기준으로 취급해야 함(2026-08-27 사용자 확정). purchase_cost는 두 소스 모두 채워지므로
+    # (refresh_purchase_costs, W=오너클랜market_price / L=도매마트가*1.5) 코드 접두어로 반드시 갈라야 함.
+    L_CODE_Q = Q(seller_product_code__istartswith='LCE_')
+
+    # 확인필요 = 역마진. W코드는 마켓가보다 needs_check_pct%+ 낮음(기본 10%, 사용자 조정가능),
+    # L코드는 고정 50%+ 낮을 때만(사용자 확정: "L코드는 역마진 확인필요 판매가의 50%이하일때만
+    # 가격을 높이고 있다" — 2026-08-27). 배지표시용, 캐시.
     # (2026-08-21 재정의 — 이전엔 cost_diff<0(단 1원 차이도 포함)이라 노이즈가 많았음. %는 사용자가 조정 가능)
     # status_type='판매중' 고정(2026-08-26) — 화면 상태필터를 "전체"로 볼 때 판매중지/품절/판매금지까지
     # 섞여 세서 "가격맞추기"(항상 판매중만 처리) 건수와 배지 숫자가 어긋났던 문제(6,514 vs 3,645) 수정.
+    needs_check_cond = (
+        (~L_CODE_Q & Q(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)) |
+        (L_CODE_Q & Q(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * 0.5))
+    )
     nc_key = f"emp_needs:{account_id}:{status}:{search}:{int(bool(focused_only))}:{needs_check_pct}"
     needs_total = cache.get(nc_key)
     if needs_total is None:
-        needs_total = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult,
-                                 status_type='판매중').count()
+        needs_total = qs.filter(needs_check_cond, status_type='판매중').count()
         cache.set(nc_key, needs_total, 120)
     # 미매칭 = W코드(오너클랜 소싱)인데 예비상품 카탈로그에 그 코드 자체가 없음(purchase_cost NULL).
     # W코드 아닌 상품/한글 섞인 코드는 제외. status_type='판매중'만 — 이미 판매중지/삭제된 건 조치할 필요가
@@ -462,26 +472,26 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
               .exclude(seller_product_code__regex=r'[가-힣]')
         ).count()
         cache.set(nm_key, no_match_total, 120)
-    # 고단가 = 판매가 60만원 이상 이거나, 예비상품 마켓가보다 50%+ 비쌈 — 단가오류/미갱신 등 확인 필요 신호.
+    # 고단가 = W코드 전용(사용자 확정: "고단가는 w코드만이야 ... l코드의 단가는 절대 건드리지 않는다" —
+    # 2026-08-27). 판매가 60만원 이상 이거나, 예비상품 마켓가보다 50%+ 비쌈 — 단가오류/미갱신 확인 신호.
     # (2026-08-21 재정의 — 절대금액 기준 추가: 미매칭이라 마켓가를 모르는 고가 상품도 이 필터로 걸리게 함)
+    high_margin_cond = ~L_CODE_Q & (Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5))
     hm_key = f"emp_highmargin:{account_id}:{status}:{search}:{int(bool(focused_only))}"
     high_margin_total = cache.get(hm_key)
     if high_margin_total is None:
-        high_margin_total = qs.filter(
-            Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5)
-        ).count()
+        high_margin_total = qs.filter(high_margin_cond).count()
         cache.set(hm_key, high_margin_total, 120)
 
     if needs_check:
-        # 확인필요만 보기 — 역마진 needs_check_pct%+ 행만, 가장 심한 순으로 맨 위에. status_type='판매중' 고정(배지와 동일 기준).
-        qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_type='판매중')
+        # 확인필요만 보기 — 가장 심한 순으로 맨 위에. status_type='판매중' 고정(배지와 동일 기준).
+        qs = qs.filter(needs_check_cond, status_type='판매중')
     elif no_match:
         qs = (
             qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
               .exclude(seller_product_code__regex=r'[가-힣]')
         )
     elif high_margin:
-        qs = qs.filter(Q(sale_price__gte=600000) | Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5))
+        qs = qs.filter(high_margin_cond)
 
     # cost_pct = 판매가/마켓가*100 (100=원가와동일, 낮을수록 역마진 심함, 높을수록 고마진 심함).
     # 확인필요/고마진 화면에서 편차 20%+ 만 골라보기용. min_abs_pct 지정 시 |cost_pct-100| >= 임계값만 남김.

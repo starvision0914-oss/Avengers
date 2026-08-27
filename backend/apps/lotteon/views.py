@@ -153,6 +153,7 @@ class LotteonMyProductListView(views.APIView):
 
     def get(self, request):
         from django.core.cache import cache
+        from django.db.models import F, Q as _Q
 
         account_id = request.query_params.get('account_id')
         page = int(request.query_params.get('page', 1))
@@ -162,6 +163,11 @@ class LotteonMyProductListView(views.APIView):
         sort = request.query_params.get('sort') or 'synced_at'
         order = request.query_params.get('order') or 'desc'
         no_match = request.query_params.get('no_match') == '1'
+        needs_check = request.query_params.get('needs_check') == '1'
+        high_margin = request.query_params.get('high_margin') == '1'
+        needs_check_pct_raw = request.query_params.get('needs_check_pct')
+        needs_check_pct = int(needs_check_pct_raw) if needs_check_pct_raw not in (None, '') else 20
+        needs_check_mult = (100 - min(max(needs_check_pct, 1), 99)) / 100.0
 
         qs = LotteonMyProduct.objects.select_related('account')
         if account_id:
@@ -188,16 +194,49 @@ class LotteonMyProductListView(views.APIView):
             ).count()
             cache.set(nm_key, no_match_total, 120)
 
+        # 확인필요(역마진)/고마진 — 11번가/지마켓/스마트스토어와 동일 정의, status_code='SALE'만
+        # (2026-08-27 신규 구축, 사용자 요청 "모두구축").
+        nc_key = f"lo_needs:{account_id}:{status_q}:{search}:{needs_check_pct}"
+        needs_check_total = cache.get(nc_key)
+        if needs_check_total is None:
+            needs_check_total = qs.filter(
+                purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_code='SALE',
+            ).count()
+            cache.set(nc_key, needs_check_total, 120)
+
+        hm_key = f"lo_highmargin:{account_id}:{status_q}:{search}"
+        high_margin_total = cache.get(hm_key)
+        if high_margin_total is None:
+            high_margin_total = qs.filter(
+                _Q(sale_price__gte=600000) | _Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5),
+                status_code='SALE',
+            ).count()
+            cache.set(hm_key, high_margin_total, 120)
+
         if no_match:
             qs = (
                 qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_code='SALE')
                   .exclude(seller_product_code__regex=r'[가-힣]')
             )
+        elif needs_check:
+            qs = qs.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_code='SALE')
+        elif high_margin:
+            qs = qs.filter(
+                _Q(sale_price__gte=600000) | _Q(purchase_cost__gt=0, sale_price__gte=F('purchase_cost') * 1.5),
+                status_code='SALE',
+            )
 
         f = self._SORT.get(sort, 'synced_at')
         qs = qs.order_by(('-' if order == 'desc' else '') + f, '-id')
 
-        total = (no_match_total if no_match else (qs.count() if status_allowed else 0))
+        if no_match:
+            total = no_match_total
+        elif needs_check:
+            total = needs_check_total
+        elif high_margin:
+            total = high_margin_total
+        else:
+            total = qs.count() if status_allowed else 0
         offset = (page - 1) * per_page
         rows = qs[offset:offset + per_page] if status_allowed else []
 
@@ -208,6 +247,8 @@ class LotteonMyProductListView(views.APIView):
             'status_type': p.status_code, 'status_label': LOTTEON_STATUS_MAP.get(p.status_code, p.status_code),
             'seller_product_code': p.seller_product_code, 'category': p.category_path,
             'product_image_url': '', 'purchase_cost': p.purchase_cost,
+            'cost_diff': (p.sale_price - p.purchase_cost) if (p.purchase_cost and p.sale_price is not None) else None,
+            'cost_pct': round(p.sale_price / p.purchase_cost * 100, 1) if (p.purchase_cost and p.sale_price is not None) else None,
             'synced_at': p.synced_at.isoformat() if p.synced_at else None,
         } for p in rows]
 
@@ -215,6 +256,8 @@ class LotteonMyProductListView(views.APIView):
             'items': items, 'total': total, 'page': page, 'per_page': per_page,
             'total_pages': (total + per_page - 1) // per_page if total else 0,
             'no_match_total': no_match_total,
+            'needs_check_total': needs_check_total,
+            'high_margin_total': high_margin_total,
         })
 
 

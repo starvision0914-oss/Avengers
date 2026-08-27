@@ -33,7 +33,8 @@ XP_DIALOG_CONFIRM = ["input[value='확인']"]
 XP_BATCH_MOD_BTN = ["[id$='btn_btchMod']"]
 XP_POPUP_IFRAME = ["[id$='cmNoPop_iframe']"]
 STATUS_DROPDOWN_BTN = 'mf_spdSlStatCd_button'
-STATUS_OPTION_END = 'mf_spdSlStatCd_itemTable_2'  # 0=판매중 1=품절 2=판매종료 (실측 고정 인덱스)
+STATUS_OPTION_SOUT = 'mf_spdSlStatCd_itemTable_1'  # 0=판매중 1=품절 2=판매종료 (실측 고정 인덱스)
+STATUS_OPTION_END = 'mf_spdSlStatCd_itemTable_2'
 CONFIRM_BTN = 'mf_btn_trigger1'   # 수정
 CANCEL_BTN = 'mf_btn_trigger11'   # 취소
 
@@ -75,6 +76,20 @@ def _click(driver, el):
         el.click()
     except Exception:
         driver.execute_script("arguments[0].click();", el)
+
+
+def _cdp_click(driver, el):
+    """WebSquare 커스텀 체크박스는 실제 <input>이 visibility:hidden이고 형제 <label>이 그래픽을
+    그리는 구조라, <input>에 JS click()을 줘도 프레임워크 내부 상태(checked)가 갱신되지 않는다
+    (2026-08-27 실측 — 11번가 jqxGrid와 동일 계열 함정). 신뢰된(trusted) 마우스 이벤트가 필요."""
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+    time.sleep(0.3)
+    r = driver.execute_script("var r=arguments[0].getBoundingClientRect(); return [r.x,r.y,r.width,r.height];", el)
+    x, y = r[0] + r[2] / 2, r[1] + r[3] / 2
+    driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type': 'mouseMoved', 'x': x, 'y': y})
+    driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type': 'mousePressed', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1})
+    time.sleep(0.1)
+    driver.execute_cdp_cmd('Input.dispatchMouseEvent', {'type': 'mouseReleased', 'x': x, 'y': y, 'button': 'left', 'clickCount': 1})
 
 
 def _login(driver, login_id, password, log_fn=None):
@@ -150,76 +165,198 @@ def _search_and_select_all(driver, codes, log_fn=None, select=True):
     if not select:
         return True
 
-    header_cb = _find(driver, XP_SELECT_ALL, timeout=4)
-    if not header_cb:
-        _log(log_fn, '  검색결과 없음(전체선택 체크박스 미노출) — 스킵')
+    # 헤더 체크박스는 WebSquare 커스텀 위젯이라 실제 <input>은 항상 visibility:hidden이고
+    # 형제 <label class="w2checkbox_label">가 그래픽을 그린다 — is_displayed()로 <input>의
+    # 노출 여부를 보던 기존 로직은 검색이 실제로 성공해도 항상 False라 매번 "검색결과 없음"으로
+    # 오판했다(2026-08-27 실측: 4335건/4건 두 실행 모두 100% 실패, 스크린샷+DOM조사로 원인 확인 —
+    # 이 기능은 2026-08-23 작성 이래 한 번도 실제로 성공한 적이 없었던 것으로 보임).
+    # <input> 존재 자체로 "결과 있음"을 판정하고, 선택은 반드시 <label> 형제를 신뢰된 클릭해야
+    # 프레임워크 내부 checked 상태가 갱신된다.
+    raw_cb = driver.find_elements(By.CSS_SELECTOR, XP_SELECT_ALL[0])
+    if not raw_cb:
+        _log(log_fn, '  검색결과 없음(헤더 체크박스 자체가 DOM에 없음) — 스킵')
         return False
-    _click(driver, header_cb)
+    hdr_input = raw_cb[0]
+    label = driver.execute_script(
+        "return arguments[0].parentElement.querySelector('label.w2checkbox_label') "
+        "|| arguments[0].nextElementSibling;", hdr_input)
+    if not label:
+        _log(log_fn, '  헤더 체크박스 라벨 못찾음 — 스킵')
+        return False
+    _cdp_click(driver, label)
     time.sleep(1)
+    checked = driver.execute_script("return !!arguments[0].checked;", hdr_input)
+    if not checked:
+        _log(log_fn, '  헤더 체크박스 클릭했지만 선택 안 됨(checked=False) — 스킵')
+        return False
     return True
 
 
-def _change_status_to_end(driver, log_fn=None):
-    """선택된 상품을 '판매종료'로 변경 시도 후 결과표(성공여부/실패사유)를 읽어 반환.
+def _change_status(driver, log_fn=None, status_option_id=STATUS_OPTION_END, status_label='판매종료'):
+    """선택된 상품을 지정 상태(품절/판매종료)로 변경 시도 후 결과표(성공여부/실패사유)를 읽어 반환.
     반환: {판매자상품코드: True/False(성공여부)} — 결과표에서 명시적으로 '성공'이 아니면 전부 실패로 간주(fail-closed)."""
     btn = _find(driver, XP_SALE_CHANGE_BTN)
     if not btn:
         _log(log_fn, '  ❌ "상품판매 변경" 버튼 못찾음')
         return {}
+    before_handles = driver.window_handles
     _click(driver, btn)
     time.sleep(2)
 
-    batch_btn = _find(driver, XP_BATCH_MOD_BTN, timeout=8)
-    if not batch_btn:
-        _log(log_fn, '  ❌ "일괄수정" 버튼 못찾음(상품정보일괄수정 탭 전환 실패)')
-        return {}
-    _click(driver, batch_btn)
-    time.sleep(1.5)
-
-    iframe = _find(driver, XP_POPUP_IFRAME, timeout=6)
-    if not iframe:
-        _log(log_fn, '  ❌ 일괄수정 팝업(iframe) 못찾음')
-        return {}
-    driver.switch_to.frame(iframe)
-    try:
-        dd = driver.find_elements(By.ID, STATUS_DROPDOWN_BTN)
-        if not dd:
-            _log(log_fn, '  ❌ 상태변경 드롭다운 못찾음')
-            return {}
-        _click(driver, dd[0])
+    # "상품판매 변경"은 새 탭("상품정보일괄수정")을 연다 — 그 탭으로 전환하지 않으면 이후 요소를
+    # 계속 옛 탭(상품 목록)에서 찾게 돼 못 찾는다(2026-08-27 실측으로 확인).
+    end = time.time() + 8
+    while time.time() < end and len(driver.window_handles) <= len(before_handles):
+        time.sleep(0.3)
+    opened_new_tab = len(driver.window_handles) > len(before_handles)
+    if opened_new_tab:
+        driver.switch_to.window(driver.window_handles[-1])
         time.sleep(1)
-        opt = driver.find_elements(By.ID, STATUS_OPTION_END)
-        if not opt:
-            _log(log_fn, '  ❌ "판매종료" 옵션 못찾음')
-            return {}
-        _click(driver, opt[0])
-        time.sleep(0.5)
+    else:
+        _log(log_fn, '  ⚠ 새 탭이 안 열림 — 현재 탭에서 계속 진행')
 
-        confirm = driver.find_elements(By.ID, CONFIRM_BTN)
-        if not confirm:
-            _log(log_fn, '  ❌ "수정" 버튼 못찾음')
+    try:
+        batch_btn = _find(driver, XP_BATCH_MOD_BTN, timeout=8)
+        if not batch_btn:
+            _log(log_fn, '  ❌ "일괄수정" 버튼 못찾음(상품정보일괄수정 탭 전환 실패)')
             return {}
-        _click(driver, confirm[0])
-        time.sleep(3)
+        _click(driver, batch_btn)
+        time.sleep(1.5)
 
-        # 결과표 파싱: 판매자상품코드 | 판매자상품명 | 성공여부 | 실패사유
-        results = {}
-        rows = driver.find_elements(By.CSS_SELECTOR, "table tr")
-        for r in rows:
-            cells = r.find_elements(By.TAG_NAME, 'td')
-            if len(cells) < 3:
-                continue
-            texts = [c.text.strip() for c in cells]
-            code = texts[0] if texts else ''
-            if not code:
-                continue
-            success_text = texts[2] if len(texts) > 2 else ''
-            results[code] = (success_text == '성공')
-            reason = texts[3] if len(texts) > 3 else ''
-            _log(log_fn, f'    [{code}] {"성공" if results[code] else f"실패({reason or success_text})"}')
-        return results
+        iframe = _find(driver, XP_POPUP_IFRAME, timeout=6)
+        if not iframe:
+            _log(log_fn, '  ❌ 일괄수정 팝업(iframe) 못찾음')
+            return {}
+        driver.switch_to.frame(iframe)
+        try:
+            dd = driver.find_elements(By.ID, STATUS_DROPDOWN_BTN)
+            if not dd:
+                _log(log_fn, '  ❌ 상태변경 드롭다운 못찾음')
+                return {}
+            _click(driver, dd[0])
+            time.sleep(1)
+            opt = driver.find_elements(By.ID, status_option_id)
+            if not opt:
+                _log(log_fn, f'  ❌ "{status_label}" 옵션 못찾음')
+                return {}
+            _click(driver, opt[0])
+            time.sleep(0.5)
+
+            confirm = driver.find_elements(By.ID, CONFIRM_BTN)
+            if not confirm:
+                _log(log_fn, '  ❌ "수정" 버튼 못찾음')
+                return {}
+            _click(driver, confirm[0])
+            time.sleep(3)
+
+            # 결과표 파싱: 판매자상품코드 | 판매자상품명 | 성공여부 | 실패사유
+            results = {}
+            rows = driver.find_elements(By.CSS_SELECTOR, "table tr")
+            for r in rows:
+                cells = r.find_elements(By.TAG_NAME, 'td')
+                if len(cells) < 3:
+                    continue
+                texts = [c.text.strip() for c in cells]
+                code = texts[0] if texts else ''
+                if not code:
+                    continue
+                success_text = texts[2] if len(texts) > 2 else ''
+                results[code] = (success_text == '성공')
+                reason = texts[3] if len(texts) > 3 else ''
+                _log(log_fn, f'    [{code}] {"성공" if results[code] else f"실패({reason or success_text})"}')
+            return results
+        finally:
+            driver.switch_to.default_content()
     finally:
-        driver.switch_to.default_content()
+        # 새로 연 "상품정보일괄수정" 탭을 닫고 원래(상품 목록) 탭으로 복귀 — 안 닫으면 다음
+        # 배치의 검색이 이 탭에서 실행돼 요소를 못 찾게 된다.
+        if opened_new_tab:
+            try:
+                if driver.current_window_handle != before_handles[0]:
+                    driver.close()
+            except Exception:
+                pass
+            driver.switch_to.window(before_handles[0])
+
+
+def _change_status_single(driver, code, status_index, status_label, log_fn=None):
+    """개별 상품 하나를 검색→"수정"(개별 상품수정 화면 진입)→판매상태 라디오 변경→저장→재조회 검증.
+    "상품정보일괄수정"(_change_status, 배치용) 플로우는 선택상품이 그 페이지로 전혀 전달되지 않고
+    별도 검색조건(담당CM/브랜드 필수, 다른 상품번호 체계)이 필요해 사실상 못 쓰는 상태로 확인됨
+    (2026-08-27 실측 — 이 기능이 2026-08-23 작성 이래 한 번도 실제로 성공한 적이 없었던 것으로 보임).
+    개별 상품수정 화면은 검증된 대안: 판매상태 라디오(w2radio, 0=판매중/1=품절/2=판매중지(비활성,
+    셀러가 못 씀)/3=판매종료)가 기본적으로 tr.gft_hide로 숨겨져 있는데(용도 불명, 아마 옵션별 개별
+    판매상태와 상품 전체 판매상태를 전환하는 UI인 듯) JS로 hide 클래스만 제거하면 정상 클릭·저장됨.
+    반환: True(저장 성공, 재조회로 확인됨) | False."""
+    _paste_and_search_single(driver, code, log_fn)
+    edit_btns = [e for e in driver.find_elements(By.XPATH, "//button[normalize-space(text())='수정']")
+                 if e.is_displayed()]
+    if not edit_btns:
+        _log(log_fn, f'  ❌ [{code}] "수정" 버튼 못찾음(검색결과 없음)')
+        return False
+    _click(driver, edit_btns[0])
+    time.sleep(4)
+
+    rad = driver.find_elements(By.CSS_SELECTOR, "[id$='_body_wfm_sale_rad_SlStatCd']")
+    if not rad:
+        _log(log_fn, f'  ❌ [{code}] 판매상태 라디오 못찾음')
+        return False
+    rad_div = rad[0]
+    rid = rad_div.get_attribute('id')
+    tr = driver.execute_script("return arguments[0].closest('tr');", rad_div)
+    driver.execute_script("arguments[0].classList.remove('gft_hide'); arguments[0].style.display='';", tr)
+    time.sleep(0.3)
+    opt_label = driver.find_elements(By.CSS_SELECTOR, f"label[for='{rid}_input_{status_index}']")
+    if not opt_label:
+        _log(log_fn, f'  ❌ [{code}] "{status_label}" 옵션 못찾음')
+        return False
+    _cdp_click(driver, opt_label[0])
+    time.sleep(1)
+    if not driver.execute_script(f"return document.getElementById('{rid}_input_{status_index}').checked;"):
+        _log(log_fn, f'  ❌ [{code}] "{status_label}" 선택 안 됨')
+        return False
+
+    save_btn = [b for b in driver.find_elements(By.CSS_SELECTOR, "[id$='_body_btn_SaveProduct']") if b.is_displayed()]
+    if not save_btn:
+        _log(log_fn, f'  ❌ [{code}] 저장 버튼 못찾음')
+        return False
+    _cdp_click(driver, save_btn[0])
+    time.sleep(2)
+    for _ in range(2):
+        try:
+            al = driver.switch_to.alert
+            _log(log_fn, f'  [{code}] 저장 alert: {al.text}')
+            al.accept()
+            time.sleep(1.5)
+        except Exception:
+            break
+
+    # 재조회 검증(클릭성공=성공판정 하지 않음) — 그리드 판매상태 컬럼을 직접 읽는다.
+    _paste_and_search_single(driver, code, log_fn)
+    # rows[0]은 헤더(컬럼명) — 실제 데이터는 rows[1]부터.
+    rows = [r for r in driver.find_elements(By.CSS_SELECTOR, "[role='row']") if r.text.strip()]
+    row_text = rows[1].text if len(rows) > 1 else ''
+    ok = status_label in row_text
+    _log(log_fn, f'  [{code}] 재조회 결과: {row_text[:80]!r} → {"성공" if ok else "실패(반영안됨)"}')
+    return ok
+
+
+def _paste_and_search_single(driver, code, log_fn=None):
+    """상품 조회/수정 목록 화면으로 돌아가 단일 코드로 재검색(그리드 상태 확인/재진입용)."""
+    driver.get(MAIN_URL)
+    time.sleep(2)
+    _enter_product_page(driver, log_fn)
+    inner_code_radio = _find_by_text(driver, '판매자내부상품번호')
+    if inner_code_radio:
+        _click(driver, inner_code_radio)
+        time.sleep(0.3)
+    ta = _find(driver, XP_SEARCH_TA)
+    ta.clear()
+    ta.send_keys(code)
+    time.sleep(0.3)
+    btn = _find(driver, XP_SEARCH_BTN)
+    _click(driver, btn)
+    time.sleep(3)
 
 
 def _delete_selected(driver, log_fn=None):
@@ -300,6 +437,28 @@ def run_delete(targets, mode='validate', log_fn=None):
 
                 acc_ended = 0
                 acc_failed = 0
+
+                if mode in ('soldout', 'real'):
+                    # "상품정보일괄수정"(배치) 팝업은 선택상품이 전혀 전달 안 되고 별도 검색조건
+                    # (담당CM/브랜드 필수)이 필요해 사실상 동작 안 함(2026-08-27 실측 확인) — 검증된
+                    # 개별 상품수정 화면 플로우로 코드 하나씩 처리한다.
+                    status_index = 1 if mode == 'soldout' else 3
+                    status_label = '품절' if mode == 'soldout' else '판매종료'
+                    db_status = 'SOUT' if mode == 'soldout' else 'END'
+                    for code in codes:
+                        ok = _change_status_single(driver, code, status_index, status_label, log_fn)
+                        if ok:
+                            LotteonMyProduct.objects.filter(
+                                account=acc, seller_product_code=code).update(status_code=db_status)
+                            acc_ended += 1
+                        else:
+                            acc_failed += 1
+                    summary['ended'] += acc_ended
+                    summary['failed'] += acc_failed
+                    summary['accounts'] += 1
+                    results.append({'login_id': eid, 'ended': acc_ended, 'requested': len(codes), 'failed': acc_failed})
+                    continue
+
                 chunks = [codes[i:i + CHUNK_SIZE] for i in range(0, len(codes), CHUNK_SIZE)]
                 for ci, chunk in enumerate(chunks, 1):
                     _log(log_fn, f'  배치 {ci}/{len(chunks)} ({len(chunk)}개)')
@@ -323,14 +482,6 @@ def run_delete(targets, mode='validate', log_fn=None):
                         acc_ended += len(gone)
                         acc_failed += len(still_there)
                         continue
-
-                    res = _change_status_to_end(driver, log_fn)
-                    ok_codes = [c for c, v in res.items() if v]
-                    if ok_codes:
-                        LotteonMyProduct.objects.filter(
-                            account=acc, seller_product_code__in=ok_codes).update(status_code='END')
-                    acc_ended += len(ok_codes)
-                    acc_failed += len(chunk) - len(ok_codes)
 
                 summary['ended'] += acc_ended
                 summary['failed'] += acc_failed

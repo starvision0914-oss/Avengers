@@ -633,3 +633,129 @@ def preflight(name, wait=False, wait_timeout=10800, poll=20, platform='11st'):
         if ok:
             return True, f'ok (락 대기 {waited}s)'
     return False, f'락 대기 시간초과({wait_timeout}s, 직전 holder={holder})'
+
+
+# ===== 광고 정기크론 강제선점(preempt) =====
+# (2026-08-27 사용자 요청) 16~20시대 지마켓 광고 관련 정기크론은 반드시 정시 실행돼야 하므로,
+# 그 시각에 다른 지마켓 작업(무엇이든)이 돌고 있으면 강제종료 후 우선실행한다.
+# 강제종료된 작업은 원래 커맨드라인을 큐에 저장해뒀다가, 광고크론이 끝나면 그대로 재실행(resume)한다.
+def _preempt_queue_path(platform='gmarket'):
+    return Path(f'/tmp/avengers_{platform}_preempt_queue.json')
+
+
+def _kill_pid_gracefully(pid, term_wait=12):
+    """SIGTERM으로 정상종료 기회를 준다(browser.py의 SIGTERM 핸들러가 Xvfb/chrome까지 정리함).
+    term_wait초 내 안 죽으면 SIGKILL. 최종적으로 죽었으면 True."""
+    import signal as _signal
+    try:
+        os.kill(pid, _signal.SIGTERM)
+    except Exception:
+        return not _pid_alive(pid)
+    waited = 0
+    while waited < term_wait:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(1)
+        waited += 1
+    try:
+        os.kill(pid, _signal.SIGKILL)
+    except Exception:
+        pass
+    time.sleep(1)
+    return not _pid_alive(pid)
+
+
+def _queue_preempted(platform, cmdline, holder_name):
+    import json as _json
+    p = _preempt_queue_path(platform)
+    try:
+        items = _json.loads(p.read_text(encoding='utf-8')) if p.exists() else []
+    except Exception:
+        items = []
+    items.append({'cmd': cmdline, 'name': holder_name, 'queued_at': _now().isoformat()})
+    try:
+        p.write_text(_json.dumps(items), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def preempt_and_acquire(name, platform='gmarket', log_fn=None):
+    """정기 광고크론 전용 락 획득. 락을 다른 작업이 쥐고 있으면 그 작업을 강제종료하고
+    (원래 커맨드라인은 큐에 저장) 즉시 이 작업이 락을 잡는다. 일반 preflight()와 달리
+    대기/스킵하지 않는다 — 광고크론의 정시실행이 최우선이라는 사용자 지시에 따름."""
+    def _log(m):
+        if log_fn:
+            log_fn(m)
+        logger.info(m)
+
+    ok, holder = acquire_global_lock(name, platform)
+    if ok:
+        return True, 'ok'
+
+    lock = _lock_path(platform)
+    try:
+        parts = lock.read_text(encoding='utf-8').strip().split('|')
+        pid = int(parts[0]); holder_name = parts[1] if len(parts) > 1 else holder
+    except Exception:
+        pid, holder_name = 0, holder
+
+    if pid and _pid_alive(pid):
+        cmdline = None
+        try:
+            with open(f'/proc/{pid}/cmdline', 'rb') as f:
+                raw = f.read()
+            cmdline = [x for x in raw.decode('utf-8', errors='replace').split('\x00') if x]
+        except Exception:
+            pass
+        _log(f'⛔→▶ {holder_name}(pid={pid}) 강제종료 후 {name} 우선실행')
+        killed = _kill_pid_gracefully(pid)
+        if not killed:
+            _log(f'⚠ {holder_name}(pid={pid}) 강제종료 확인 실패 — 그래도 락 회수 시도')
+        try:
+            if lock.exists():
+                lock.unlink()
+        except Exception:
+            pass
+        if cmdline:
+            _queue_preempted(platform, cmdline, holder_name)
+
+    ok, holder = acquire_global_lock(name, platform)
+    if ok:
+        return True, 'ok(선점)'
+    return False, f'선점 실패(holder={holder})'
+
+
+def resume_preempted(platform='gmarket', log_fn=None):
+    """preempt_and_acquire가 강제종료하며 큐에 저장해둔 작업을 그대로 재실행.
+    우선 광고크론이 끝나 락을 반납한 뒤 호출."""
+    import json as _json
+    import subprocess
+    p = _preempt_queue_path(platform)
+    if not p.exists():
+        return 0
+    try:
+        items = _json.loads(p.read_text(encoding='utf-8'))
+    except Exception:
+        items = []
+    try:
+        p.unlink()
+    except Exception:
+        pass
+    if not items:
+        return 0
+    resumed = 0
+    for it in items:
+        cmd = it.get('cmd')
+        if not cmd:
+            continue
+        try:
+            subprocess.Popen(cmd, stdout=open('/tmp/avengers_preempt_resume.log', 'a'),
+                              stderr=subprocess.STDOUT, start_new_session=True,
+                              cwd='/home/rejoice888/Avengers/backend')
+            resumed += 1
+            if log_fn:
+                log_fn(f'▶ 재개: {it.get("name")} ({" ".join(cmd)[:100]})')
+        except Exception as e:
+            if log_fn:
+                log_fn(f'⚠ 재개 실패: {it.get("name")} — {e}')
+    return resumed

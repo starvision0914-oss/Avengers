@@ -1,133 +1,134 @@
-- [서버 IP](project_server_ip.md) — 현재 단일 호스트 IP는 192.168.45.100 (2026-06-12 사용자 확정). 직전 192.168.1.16, 폐기 192.168.2.16
-- [지마켓 dlwod777 수동관리](project_gmarket_dlwod777_manual_only.md) — 상품 모두 삭제하고 직접 올린 것만 남김, 삭제/판매중지 자동화 금지(직접 관리, 2026-08-20)
-- [한글 영타 입력](feedback_korean_qwerty_input.md) — 사용자가 한글을 영문QWERTY로 그대로 침(rmflrh=그리고). 두벌식 디코딩해 이해, 변환기 ~/qwerty2hangul.py
-- [PUBLIC 공유폴더 참조자료](reference_public_share.md) — /home/rejoice888/PUBLIC에 참조 자료를 보관, 작업 시 참조
-- [ai100 이전 프로젝트](reference_ai100.md) — betona1/ai100 이전 프로젝트 소스, 현재 /tmp/ai100에 위치
-- [도매매/스피드고 참조](reference_domeggook.md) — 도매매 스피드고 자동화 프로젝트 정보
-- [크롤링 필수원칙](feedback_crawling_rule.md) — 사람처럼 페이싱 + 접속 3회 실패 시 중지·다음계정 진행 (모든 크롤러)
-- [매출 정의](project_sales_revenue_def.md) — 매출=정산받는금액(주문매출−수수료), 11번가 대시보드는 platform='11st' 필터 필수
-- [타임존 함정](feedback_timezone_pitfalls.md) — KST에서 toISOString().slice(0,10) 금지(말일 누락), MySQL __date 조회 금지(USE_TZ시 0건), aware(UTC)에서 tzinfo 떼고 datetime.now()(KST) 비교 금지(+9h 오차 — is_recently_synced 신선도스킵 무력화됐었음, 2026-06-11 수정)
-- [11번가 일시적 실패](project_11st_transient_fails.md) — 수집실패 94%는 다음회차 자동회복(일시적), 알림은 연속2회+1일1회 게이팅(guard.notify_failure)
-- [11번가 매출 전역매칭](project_11st_sales_match_global.md) — 상품ROAS 매출은 판매자코드 전역 매칭(광고계정≠매출계정 흔함, 계정한정 금지)
-- [11번가 IP차단 방지](project_11st_ip_block_prevention.md) — 동시 크롤 절대금지(전역락 preflight), IP차단은 HTTP/ping으로 확인, 자동해제(일시적)
-- [11번가 OTP 알림수신](project_11st_otp_notification.md) — OTP가 RCS/푸시(알림)로 옴, adb dumpsys notification에서 읽음(문자함 X)
-- [11번가 적자삭제](project_11st_loss_delete.md) — 셀러오피스 iframe(Content_ifrm_8006), 텍스트셀렉터, real은 백그라운드 실행+동시크롤 금지
-- [11번가 적자삭제 select_all 버그](project_11st_loss_delete_selectall_bug.md) — pre-checked 가정으로 select_all 생략→real 0건 삭제(무위). 검색필터 미적용(9→20행)+선택안됨. 데이터손상 없음(잔여0 가드)
-- [11번가 영구정지 계정](project_11st_perma_banned.md) — rejoice43/tmxkqlwus12/rejoice777은 AD OFFICE 접속불가, ROAS판단 제외(PERMA_BANNED_EIDS)
-- [11번가 쿠키오판/다운로드실패](project_11st_cookie_intro_loop.md) — 광고비 대량실패 근본원인: 쿠키만료시 /view/intro 오판 무한루프 + implicit_wait hang (2026-06-11 수정·검증)
-- [지마켓 ESM 상품수집](project_gmarket_esm_products.md) — ESM본포털 로그인(지마켓탭)→상품관리 ItemsMng→엑셀다운(ItemMngEvent.Search+aExcelDownload)→GmarketMyProduct 누적
-- [플랫폼별 락 분리](project_platform_lock_split.md) — 크롤 락을 11st/gmarket 별도 파일로 분리해 동시 실행 가능. preflight 등에 platform 인자(기본 11st 하위호환). 분리는 메모리 0, 동시실행시만 사용
-- [지마켓 공유ESM 그룹](project_gmarket_esm_groups.md) — 222=223,224 / 234=235,236 / dlwodb000=starvisi / tmxkqlwus·dlwodbs222=단독. 공유ESM 서브 id가 대시보드 광고비 0, id별 정확수집 구현 필요
-- [지마켓 ESM 주문 직접크롤 엔드포인트](project_gmarket_esm_order_endpoint.md) — 주문/배송 직접크롤 가능(샵마인 불필요). Home/v2/new-order 안 post-tx.esmplus.com iframe(JSON API), 정산은 GmktSellBalanceManagement 결합. 원가는 ESM에 없음
-- [지마켓 상품별 광고비 리포트 크롤](project_gmarket_ad_product_report.md) — CPC(cpc/report/groupReport)+AI매출업(Remarketing/Report/GroupReport) 상품별. calendar i.icon_calendar→a[data-type=TM]이번달→ApplyCalendarDate, 엑셀다운. 계정당 ~56s. 검증 2026-06-12
-- [지마켓 상품 ROAS 페이지](project_gmarket_roas_page.md) — /gmarket-roas. ROAS 2종(광고전환 conv_amount / 실매출=상품번호→MyProduct판매자코드→매출자료 전역매칭). 총비용=참고용. 기간 월단위·최대1년(일별불가). 적자=광고비3000·클릭15·ROAS100이하. views.py 신규→pm2 restart 필수
-- [지마켓 광고비 출처](project_gmarket_adcost_source.md) — 광고비 신뢰값=광고센터 스냅샷(GmarketDepositSnapshot, CPC/AI), 거래내역(GmarketCostHistory)과 다름. 대시보드 CPC/AI=스냅샷, 계정정렬=display_order(config User번호)
-- [11번가 광고비 부분유실/재시도](project_11st_cost_partial_loss.md) — ElevenCostHistory엔 cost_type 컬럼 없음→한쪽만 성공 저장시 범위삭제로 반대편 유실. 양쪽성공시만 저장+다운로드 2회 재시도(2026-06-11)
-- [11번가 판매상태 출처/고장난sync](project_11st_myproduct_status_source.md) — ROAS비고 판매상태=ElevenMyProduct.status_type, 진짜출처=crawl_11st_products(Selenium엑셀). sync_eleven_my_products(OpenAPI ProductSearch)는 buyer전체카탈로그라 0건+무한페이징 지뢰, cron금지
-- [크롤 락 파서 버그](project_crawl_lock_parser_bug.md) — views._crawl_lock_busy가 'pid|name|time' 락을 통째 int변환→삭제. 대시보드 status폴링이 실행중 락을 5초마다 지워 자동갱신·동시실행가드 무력화(IP위험). split('|')[0]로 수정(2026-06-11)
-- [크롤러 좀비PC](project_crawler_zombie_pc.md) — 고아(PPID=1) Xvfb/chrome 누적(~3.5GB)→크롤 응답이상. browser.py 리퍼+atexit/SIGTERM로 해결(2026-06-12)
-- [지마켓 복수아이디 서브 광고비 수집법](project_gmarket_subaccount_token.md) — 옥션(Iac)아닌 **G마켓(GmktSellBalanceManagement)** 페이지에서 #sellerId 서브선택+btnSearch클릭+표파싱. rejoice224 복구·실측일치(2026-06-12). 235/236·크롤러영구수정 남음
-- [지마켓 상품상태(비고)](project_gmarket_product_status.md) — 상품ROAS 출력 비고열 출처=GmarketMyProduct.status_type(코드'11'/한글 혼재), 정규화 _gmkt_status_label, 카탈로그미존재=삭제
-- [지마켓 나의상품 중복제외](project_gmarket_myproduct_dedup.md) — 나의상품 460,082개: product_no 중복0, 판매자코드 중복38,925. dedup토글(account+seller_code Min(id) 1개)→421,157. 헤더정렬(서버사이드)+계정선택다운로드
-- [지마켓 CPC 키워드 수집](project_gmarket_keyword_report.md) — cpc/report/groupReport 키워드탭 상품번호검색→키워드실적. 컬럼12칸(영역명 끼어 끝에서 매핑), GmarketKeywordReport, keyword-crawl/upload API, ROAS모달 키워드칩
-- [지마켓 로그인 캡차 대응](project_gmarket_captcha_login.md) — ESM 이미지캡차는 사람이 1회 풀어 쿠키재발급(manual_login_relay.py, 텔레그램 답장 인식). 자동풀이 금지(계정정지). X락 잔존·self-kill 주의
-- [5분 진행보고 요구](feedback_progress_report_5min.md) — 장시간/크롤 작업 중 사용자는 5분마다 진행보고 요구. 문제는 근본원인까지 파고들어 먼저 보고
-- [지마켓 광고비+키워드 통합크롤](project_gmarket_adcost_keyword_combined.md) — 상품별광고비+ROAS≥200키워드를 로그인1회로 통합(ad_report --with-keywords, 매일 08:00 cron). 단독 키워드cron 제거
-- [지마켓 키워드크롤 락 함정](project_gmarket_keyword_lock_gotcha.md) — crawl_gmarket_keywords는 guard가 락 자동획득. 수동락(echo $$>lock) 만들면 preflight self-오판→스킵. -9 kill시 guard락·blocked_until 스테일 잔존, 재실행 전 삭제
-- [11번가 광고 ON/OFF·입찰 자동화(adoffice)](project_11st_adoffice_ad_control.md) — 사용자 GUI도구가 adoffice.11st.co.kr 셀렉터 보유=17시 자동중지·입찰조정 열쇠. Avengers 통합 대기. diag_adoffice.py 작성완료·미실행, 원본 PUBLIC에 보존
-- [문자수신 2경로·워치독 오경보](project_sms_paths_and_watchdog.md) — 문자=앱 네트워크푸시(주)+adb-USB(백업/OTP). USB죽어도 문자정상(하트비트로 확인). adb_watchdog 5분 도배 경보를 하트비트 인지형으로 수정(2026-06-13)
-- [상품코드 영구보존고](project_product_code_archive.md) — ProductCodeArchive로 상품번호↔판매자코드 영구보존(삭제돼도 조회). 매일 03시 스냅샷 크론. archive_product_codes 명령(--snapshot/--ingest-csv). 구축 1,045,811건(2026-06-13)
-- [예비상품 파이프라인](project_ownerclan_reserve_pipeline.md) — 예비상품(/ownerclan)=오너클랜 등록대기 스테이징→복사→나의상품(/myproduct-wholesale). UI 통일 기준=예비상품(헤더검색제거·그리드·중복삭제·번호페이징, my/products/dedupe 신규)
-- [11번가 나의상품 쿼리성능](project_eleven_my_query_perf.md) — /myproduct 느림: 조인필터(is_focused)가 synced_at 인덱스 무력화→45만행 filesort(268초). account_id IN으로 변경(0.08초)+COUNT 120초캐시. ownerclan 초기화는 TRUNCATE
-- [전페이지 성능감사 2026-06](project_perf_audit_2026-06.md) — 전 페이지 로딩 감사·수정: dedup 353→4.2초, roas연 178→3.2초, dashboard 9→1.1초, sales 41→1.1초 등. 인덱스(cpc0034/sales0005)+N+1일괄화+캐시(LocMem). 패턴: 조인필터→id IN, OR월→범위, 계정루프→GROUP BY
-- [11번가 구글시트 업로드](project_11st_gsheet_upload.md) — 기간별보고서(일자별 27컬럼, 합계+날짜별, 누락날짜 빈행)→계정별 구글시트. crawl_11st_period_gsheet(1일=전월/그외=당월). 페이지 /cpc/focus/report/period. ⚠️상품별/키워드 올리면 오염+셀한도초과
-- [덮어쓰기 전 양식검증](feedback_verify_before_overwrite.md) — 실데이터(시트) 덮어쓰기 전 원본 양식 먼저 확인+1계정 소량 테스트. 추측남발 말고 실제 URL/네트워크 캡처
-- [11번가 광고그룹 전략설정](project_11st_ad_strategy_schedule.md) — /ad-settings 신탭. 계정→캠페인(실시간조회 필수, DB0건)→시간·요일 노출스케줄 일괄적용. DOM 미검증=드라이런 먼저
-- [지마켓 키워드 단일실행만](project_gmarket_keyword_single_only.md) — 키워드 백필 동시2개=캡차확산(풀로그인빈도↑가 트리거)+stale25%누락+속도이득0. 단일+쿠키우선+계정간90초. Tier A 5.7초/상품. 락분리(gmarket_b) 봉인(2026-06-14 실증)
-- [11번가 장시간 인증 배치분할](project_11st_tmxkzhfldk8_crash.md) — verify_11st_logins 전체 연속실행이 ~26계정 후 SIGTERM(누적 크롬/리소스). tmxkzhfldk8은 단독선 정상. 배치 나눠 돌리고 죽으면 미완료분 --only 재개
-- [11번가 구매원가 출처](project_eleven_purchase_cost.md) — 구매원가=오너클랜 ownerclan_price(공급가), market_price(권장판매가) 아님. 가짜역마진 15169→125 수정(2026-06-15). 확인필요(역마진) 필터+배지. 잔여=단위불일치·오염7건
-- [지마켓·11번가 시간별 광고비 텔레그램](project_gmarket_11st_hourly_adcost.md) — 시간별 증가분 알림(지마켓09-19 CPC/AI, 11번가17-23 CPC) + 광고비 cron 중복통합. crontab 수정 전 백업필수(sed # 사고)
-- [지마켓 판매불가 탐지](project_gmarket_unavailable_detection.md) — 판매불가는 goods API서 제외돼 판매중으로 박제 → 누락=판매불가 규칙(_gmarket_realsales+mark_gmarket_unavailable). 적자리스트 77.6%가 실은 판매불가였음
-- [지마켓 광고효율 딥리서치](project_gmarket_ad_efficiency.md) — 승자10%가 전환92%, 적자82%가 전환1%. 진짜 손익분기 ROAS~450%(원가22%마진). 진단엔진 gmarket_ad_diagnose 매일09:30 텔레그램. AI저활용
-- [11번가 주말 광고OFF](project_11st_weekend_ad_off.md) — 주말(토/일) 광고 의도적 OFF→상품ROAS리포트 주말 데이터 없음은 정상(크론정상). OFF리스트는 최근 전환시차일 제외하고 집계
-- [지마켓 시간별 광고비 오탐스킵](project_gmarket_hourly_false_skip.md)
-- [스마트스토어 중복상품 제재](project_smartstore_duplicate_product_warning.md) — 복수 스토어 간 동일 상품 중복 등록 시 네이버 제재. 아이리스.(id=7)/아이리스홈(id=8) 상품 공유 금지
-- [스마트스토어 API 설정 현황](project_smartstore_api_setup.md) — 계정별 Commerce API 키 설정(2026-06-29). 유진스타일(id=14) 403미해결, 정성스런스토어(id=18) 이용정지 — pgrep이 'while pgrep crawl_gmarket_ad_report' 모니터셸을 오탐→매시간 스킵(06-16/14 0건). manage.py 실행형으로 패턴수정(2026-06-17)
-- [지마켓 광고제어 누적/진행상태 가드](project_gmarket_adcontrol_busy_guard.md) — 광고ON/OFF는 단일브라우저 순차+전역락. 대시보드 스레드가 ps에 안잡혀 진행상태 오표시+가드없어 누적 → adcontrol busy 마커로 중복 즉시스킵·정확한 상태(2026-06-21)
-- [11번가 verify 쿠키미저장/OTP24h인증판정](project_11st_verify_cookie_bug.md) — "OTP완료인데 인증안됨"=verify가 쿠키 미저장(수정)+도구가 OTP24h로 판정(실제 크롤은 쿠키72h로 정상). dlrmsgh014 등
-- [11번가 0629 제재위험 상품 삭제대기](project_11st_product_pending_delete.md) — 0629 엑셀 9개(BB탄2+캐릭터IP7) 다음 상품수정 시 삭제. 정식라이선스 없음 확인.
-- [네이버 상품별 광고비 ROAS 시스템](project_naver_ad_product_roas.md) — 내부API(ads.naver.com POST+쿠키) 역공학. 3시간마다 쿠키갱신크론+매일08:30수집. /naver-roas 페이지. 아이리스26,221개·스타쇼핑14,295개(2026년 소급완료)
-- [스마트스토어 Commerce API 등록현황](project_smartstore_commerce_api_status.md) — 2026-07-01 재확인: 전체 17개 계정 API 등록완료(이전 7개미등록 기록은 stale). 8번 아이리스홈 활성화됨
-- [스마트스토어 클린위반 시스템](project_smartstore_clean_violation_system.md) — 전 16계정 크롤러+UI(/smartstore 클린위반 배지·모달). PUT channel-products, statusType='SALE' 필수, 원산지국내='00', 농산물 unitPriceYn:false 필수. 위반4건 재심사완료(2026-06-30)
-- [스타비젼 상품명 AI최적화](project_starvision_product_name_opt.md) — SALE 997개 상품명+속성 AI 최적화 완료(990개 성공, 2026-06-30)
-- [스마트스토어 상품명 최적화 대기](project_ss_product_name_pending.md) — 미완료 6개 계정(유진컴퍼니·아이리스홈·스타윈블리·스타컴퍼니·주노그노·유진대기업) 상품등록 완료 후 진행 예정
-- [11번가 jinag7460 상품명최적화](project_11st_jinag7460_name_opt.md) — 등급1위계정 15,395건 분석완료, 트리밍적용 배치 진행중, 카테고리키워드 3,341건 2단계 대기
-- [대량 상품명최적화 무API방법](feedback_bulk_name_opt_no_api_method.md) — API키 없이 세션내 처리: 위험스캔 우선→애매한건 상세페이지 이미지확인→기계적처리는 스크립트→카테고리키워드는 연관성필터 필수
-- [스마트스토어 예상클린위반+AI프롬프트](project_smartstore_predicted_violation_and_prompt.md) — 클린위반102건 실측기반 휴리스틱 스캔(중복상품85%)+대시보드버튼, 상품명/키워드/속성 AI프롬프트+복사버튼 구축(2026-07-02)
-- [항상 존댓말 사용](feedback_formal_speech.md) — 사용자가 반말 대신 항상 존댓말 사용 요청(2026-07-03), 사용자가 반말해도 응답은 존댓말 유지
-- [쿠팡 연동 구축](project_coupang_integration.md) — 오픈API(주문/상품, HMAC서명 '?'제외 필수+IP화이트리스트 계정별등록)+부가세크롤러+상품명최적화 프롬프트2종. 7계정 완료(2026-07-03)
-- [스마트스토어 광고비 수집 범위](project_smartstore_adcost_scope.md) — 실제 광고계정은 3개(rejoice999/666/888)뿐, 나머지 15스토어는 광고 미집행. 스타쇼핑몰AI(rejoice888) 비즈머니 소진→7/1부터 광고중지(정상,버그아님, 2026-07-06)
-- [쿠팡 유진문구 상품명최적화](project_coupang_jujinmungu_name_opt.md) — 14,912건 API없이 스크립트로 J열 생성완료. 21건(무기5+캐릭터라이선스미확인16) 검토필요, 원본유지
-- [지마켓 광고제어 버그 3종 수정](project_gmarket_ad_control_bugs_2026-07-07.md) — 로그인실패 무재시도/그룹인식 고정3초대기/재시도크론 __date버그. AI저녁ON은 정상설계(다음날 시작일 예약)
-- [지마켓 상태확인 안전수칙](feedback_gmarket_status_check_safety.md) — on/off 명령은 액션! 확인만 하려면 crawl_gmarket_cpc_status/crawl_gmarket_ai(읽기전용) 사용, 실수로 액션명령 써서 사고 2회
-- [클린위반 스캔 오탐사전](project_clean_violation_false_positives.md) — 표창=상장, 삼단봉=합법호신, 에어건=워터건/공구, 레플리카=스포츠공정식용어, 스틸레토=하이힐, 정글도=캠핑도구
-- [크론로그 미로테이션 함정](project_cron_log_no_rotation.md) — 로그 몇주씩 누적+날짜없는 타임스탬프로 원인조사 혼란. DB History테이블이 진실, 로그는 참고용
-- [롯데온 발견+11번가OTP크론](project_lotteon_and_11st_otp_cron.md) — SalesRecord에 lotteon 이미 존재(미문서화, 크롤러유무 미확인). 11번가 OTP 매일10시 자동점검 신규등록
-- [지마켓 살생물제 규제대응](project_gmarket_biocide_regulation.md) — 모기향등 화학상품 전플랫폼 1,224건 확정(오탐필터링 방법론 포함). 실제 판매중지는 미실행, 마감07-08 13시
-- [롯데온 연동 시도](project_lotteon_integration_attempt.md) — 신규계정3개, 2FA(OTP) 채팅릴레이 3회실패로 미완료. VNC(192.168.45.100:5905)로 이어가야함
-- [2026-07-07 시스템 전체점검](project_system_audit_2026-07-07.md) — 대체로 정상, profit-dashboard 1.2초/미동기화상품비율/스케줄외크롤/좀비프로세스 재발견(시점스냅샷)
-- [11번가 rejoice666 상품명최적화](project_11st_rejoice666_name_opt.md) — 등급3계정 13,486개 중 약430건 진행(배치1~3), 나머지 대기. 이어하려면 offset430부터
-- [11번가 400에러(원산지/인증정보)](project_11st_400_certification_origin_errors.md) — 상품명+홍보문구 동시저장시 RAW_MATERIAL/ORIGIN/CERTIFICATION 400. 반응형 재시도로 자동대응(_apply_11st_decisions.py), CERTIFICATION은 진짜 인증정보없인 불가
-- [폰 무선adb(같은WiFi)](project_phone_wireless_adb_wifi.md) — USB탈피 시도. 네이트가 기본브라우저라 Tailscale구글로그인 막힘(크롬으로교체), 최종 같은WiFi+adb tcpip로 성공하나 불안정. 정식무선디버깅 토글 미완료. 크롬원격데스크톱 발견삭제(은행앱 원격탐지 차단원인)
-- [스마트스토어 공유로그인 대시보드버그](project_smartstore_dual_login_dashboard_bug.md) — 아이리스./아이리스홈스토어 같은로그인 공유로 매출이 한쪽에만 몰림(dict충돌). shop_name기반 재매칭으로 수정(2026-07-07)
-- [롯데온 로그인 성공](project_lotteon_login_success.md) — rejoice234 2FA 자동화 성공. WebSquare는 ActionChains클릭 필요(일반.click() 안먹음), 코드는 파일폴링 0.5초로 3분타임아웃 극복. scripts/_lotteon_login_otp.py 완성
-- [11번가 오피스 포인트 0원 버그](project_11st_office_point_zero_bug.md) — 셀러오피스 페이지개편으로 절대경로XPath 깨짐→포인트/상품수 조용히 0저장(tmxkql21 등 4계정). 라벨기반(li앵커) 탐색+핵심3항목 미검출시 예외로 수정(2026-07-08)
-- [롯데온 API 구현완료](project_lotteon_api_implementation.md) — apps/lotteon 완성(2026-07-08): 상품=soapi Bearer토큰, 광고비=ad.lotteon.com 세션쿠키, 공식오픈API 미사용. cron 미등록
-- [OsanApp 진행상황](project_osanapp_status.md) — 오산 이야기 앱 데이터 채움+커밋 완료(2026-07-10). 실기기 테스트는 방화벽+Expo Go SDK57 미지원으로 미해결
-- [sudo 비대화형 세션 한계](feedback_sudo_noninteractive.md) — Bash 도구에서 sudo 절대 실행 불가(터미널 없음), 비밀번호 받아도 무용. VNC/SSH서 직접 실행 요청할 것
-- [사용자 기술 배경지식 낮음](feedback_low_tech_literacy_guidance.md) — URL/스크린샷/터미널 개념부터 설명 필요, 한번에 한단계씩, AskUserQuestion으로 증상 좁히기 효과적
-- [오산 홈페이지 프로젝트](project_osan_homepage.md) — Avengers와 독립된 신규 워드프레스(오산 지역정보+커뮤니티+쇼핑몰+블로그 208개글). 이미지는 위키미디어커먼즈 라이선스만 사용, 도메인 미구매로 비공개 상태
-- [롯데온 부가세 크롤러](project_lotteon_vat_crawler.md) — 화면단위 세션토큰 스코프 함정(상품화면 토큰으로 부가세API 401). /tax 버튼 통합완료(2026-07-10)
-- [네이버 검색어 리포트](project_naver_search_term_report.md) — "키워드"차원은 빈값, "검색어"(expKeyword)만 유효. 상품/소재차원과 상호배타라 상품별매칭 API로 불가능(재확인 불필요)
-- [window.open+Bearer인증 실패패턴](feedback_window_open_bearer_auth.md) — 엑셀다운로드 등 백엔드API를 window.open직접호출시 토큰누락 401. 클라이언트 Blob CSV가 기본해법
-- [스마트스토어 상품동기화 12일 중단](project_smartstore_product_sync_outage.md) — cron --skip-products 방치(0628~0710), DB synced_at으로만 드러남. 점검시 로그뿐아니라 신선도 확인 필수
-- [Overview 대시보드 수정](project_overview_dashboard_fixes.md) — 쿠팡·롯데온이 OverviewView서 누락돼있던 버그 수정. 새플랫폼 추가시 하드코딩된 플랫폼목록 여러곳 grep 필요. 구매가+쇼핑몰클릭모달(적자/우수/엑셀) 추가
-- [매출업로드 중복 레이스컨디션](project_sales_upload_dedup_fix.md) — 같은파일 8초간격 재업로드로 90행 중복(594,308원). 3분 idempotency가드 추가. 진짜중복판별은 order_datetime+금액+수량까지 봐야함(order_date만은 오탐)
-- [쿠팡 계정명 지마켓매칭](project_coupang_seller_name_gmarket_match.md) — login_id기준 지마켓 seller_name 복사로 정정(999/666 라벨 뒤바뀜 등 발견). 신규계정도 이 관례 따를것
-- [오산 코스피뉴스 시리즈](project_osan_kospi_news_series.md) — 200/200개 완성(2026-07-12). 배치8부터 제목 "키워드 중심"으로 전환, 상장폐지/데이터부족 기업은 유사업종 교체
-- [오산 블로그 208개 분량보강](project_osan_blog_expansion_status.md) — 2026-07-13 전체 완료(208/208, 1500자+). API키 없이 직접작성 방식, 문단길이 항상 과소평가됨
-- [토큰 대량소모 작업 전 확인](feedback_ask_before_token_heavy_work.md) — 반복 웹서치+생성형 대량작업(10회+)은 시작 전 진행여부 확인 필수(비용청구 우려, 사용자 직접 언급). "그만물어보고"류 지시보다 이게 우선
-- [오너클랜 API 발견·인증성공](project_ownerclan_api_discovery.md) — 정식 GraphQL API 확인(화면스크래핑 불필요), 인증·상품조회 테스트 성공(2026-07-11). 크롤러 자체(계정모델/서비스/커맨드/UI)는 미완성 — 중단 상태에서 이어가야 함
-- [사이드바 정리 2026-07-11](project_sidebar_reorg_2026-07-11.md) — dashboard→overview 흡수, 쿠팡·롯데온→스마트스토어 탭통합, /blog="오너클랜크롤러"로 재명명(예비상품과 이름충돌 주의)
-- [오너클랜 DB 다운로드](project_ownerclan_db_export.md) — 전체 15만행 CSV 스트리밍 다운로드 구축완료. orig_*/거대텍스트필드 제외. ProcessingProduct는 동적생성모델(grep 주의)
-- [오산 도메인 연결](project_osan_domain_connect.md) — osanguy.com DNS/DDNS 완료(dynadot.com/set_ddns 엔드포인트), 방화벽(ufw)·siteurl변경·SSL은 미완료
-- [도구거부=토큰소진 가능성](feedback_tool_denial_may_be_quota.md) — "도구 거부됨"이 항상 의도적 거부는 아님, 사용량 소진으로도 동일 신호 발생. 이유 캐묻지 말고 "계속해줘"하면 바로 진행
-- [지마켓 광고비 collected_at 함정](project_gmarket_adcost_collected_at_gotcha.md) — gmarket_product_adcost/keyword_report는 당월 range delete+reinsert라 collected_at 단순 날짜그룹핑하면 가짜 결측일 오판. year/month 필드+cron로그 교차검증 필수
-- [2026-07 지마켓/11번가 크롤 스케쥴 진단](project_gmarket_11st_july_schedule_audit.md) — 7월 전체 정상. IP프리즈 2회(7/3, 자동복구)·계정단위 3회스킵만 있었고 systemic 장애 없음. club앱 무관 AttributeError 잔존, 좀비프로세스 2개 경미
-- [지마켓 일별vs월별 저장구조 검토](project_gmarket_daily_vs_monthly_design.md) — 11번가처럼 일별저장 전환이 정합성상 더 견고하나 기술적으로 가능함만 확인, 실제 전환은 보류(2026-07-12)
-- [스킵보다 짧게라도 작성](feedback_no_skip_write_short.md) — 대량 콘텐츠 생성시 데이터 부족해도 건너뛰지 말고 짧게 작성. 스킵률 체감 30%+면 먼저 확인
-- [오산 블로그 작성 프롬프트](reference_osan_blog_prompt.md) — content_gen.py에 위치, 시스템프롬프트+요청프롬프트 하드코딩
-- [코스피 1000개 확장 20개+함정](project_osan_kospi_1000_expansion.md) — 600→1000 목표, 동시세션 병행중. 회사명 검색오염(삼천리↔자전거 등) 신규발견, 중복체크 전체텍스트+WP검색 이중화로 개선
-- [서버 재부팅 2026-07-13](project_server_reboot_2026-07-13.md) — 재부팅시 지마켓/11번가 크롤 강제종료(자동회복). PM2 systemd등록으로 자동재기동, USB/VNC는 수동확인 필요할수도
-- [오산 생활정보 100키워드 확장](project_osan_life_100keywords.md) — 애드센스용 10카테고리 100키워드, 기존 5개카테고리 재사용(신규생성X). life_helper.php 발행도구, wp-load.php 이중require 버그 수정완료
-- [오너클랜 /owner 페이지 범위](project_ownerclan_owner_page_scope.md) — /ownerclan(예비상품)과 /owner(오너클랜크롤러) 혼동주의. /owner는 계정정보크롤링만 지시됨, 상품자동수집("새 상품 가져오기")은 아직 미지시·보류 상태(2026-07-14)
-- [TopNav를 사이드바로 오해](feedback_topnav_not_sidebar.md) — Avengers엔 세로 사이드바 없음(Sidebar.tsx는 죽은코드), "사이드바"=상단 TopNav. 페이지별 숨김 금지, 글자크기 20px로 전체앱 확대(2026-07-14)
-- [워드프레스 DB 백업 누락](project_wordpress_backup_gap.md) — 오산홈페이지 DB가 자동백업(backup_all.sh) 대상서 빠져있었음(7/13 이후 무방비), 재부팅 전 발견·수정(2026-07-20)
-- [오산홈페이지 오라클 이전](project_osan_homepage.md) — 2026-07-23 완료. 실서버=오라클(193.123.163.185), 로컬(45.100)은 안전장치. 캐시엔 WP_CACHE/WPCACHEHOME 상수, wp-content 쓰기권한 g+w 필요했던 함정 기록
-- [고단가 콘텐츠 배치 작성](project_highcpc_content_batch.md) — 애드센스 수익화용 부동산/건강/금융/법률 글 대량작성 진행중. "이어서 써줘"라고만 하면 진행목록 파일 보고 자동 이어감
-- [부동산 제목 스타일 확정](feedback_realestate_title_style.md) — 검색어 일치형 유지(클릭유도형 제안 금지), 클릭률보다 구매의도 높은 트래픽·CPC 우선
-- [WebSearch 막혀도 트렌드 RSS는 가능](feedback_trends_rss_bypass.md) — curl로 구글트렌드 RSS 직접 조회하면 세션한도 무관, 뉴스스니펫 포함. 스니펫에 없는 사실은 창작 금지
-- [11번가 전략설정 캠페인 조회 레이스](project_11st_ad_strategy_campaign_race.md) — 캠페인 생성 직후 조회하면 11번가서버 반영지연으로 0개. list_campaigns 재시도(8초×2) 추가·pm2 재시작(2026-08-12)
-- [지마켓 상품별광고비 락충돌 전체스킵](project_gmarket_ad_report_lock_collision.md) — 08:01 간편ON과 08:20 상품별광고비 크론 겹침→락대기 30분초과시 25계정 전부 "실패" 표시(개별실패 아님). 조치 보류(지켜보기), 재크롤 버튼으로 해결
-- [지마켓 상품별광고비 상태표시 3종 수정](project_gmarket_ad_report_status_fixes.md) — 실행중 ps오판→파일마커, 강제중지 버튼 신설, 광고0원계정 상시"실패"오표시→완료로그 병행판정(2026-08-22)
-- [멈춤보고 전 교차확인](feedback_verify_before_reporting_stopped.md) — 로그파일 mtime만 보고 "멈췄다" 단정 금지, DB최신기록+워치독크론로그까지 교차확인 후 보고(L코드 사례 2026-08-23)
-- [유진대기업 이용정지 제외](project_ss_jujindaegieop_suspended.md) — 계정17 네이버 이용정지로 is_active=False 처리, ID/PW/API키 보존, 해제확인시 재활성화
-- [지마켓 판매중지 로그성공≠실제반영](project_gmarket_suspend_success_not_sticking.md) — 미매칭판매중지 로그엔 ok:True/대량stopped인데 실제DB엔 484건만 반영(잔여34,679건). 근본원인 확정: stop_only모드 재조회검증 없이 클릭성공=성공판정+야간크롤이 매일 진짜상태로 원복
-- [롯데온 미매칭 인프라 구축](project_lotteon_nomatch_suspend.md) — purchase_cost필드+매칭함수+미매칭필터 구축(2026-08-23), 실측 SALE미매칭 0건
-- [롯데온 판매중지는 셀러가 못함](project_lotteon_stp_not_seller_action.md) — 판매중지(STP)=롯데 법령/정책위반 강제조치 전용, 셀러가 쓸수있는 상태변경은 판매중/품절/판매종료 3개뿐(판매중지 옵션 자체가 없음). 실사이트 UI셀렉터 확보완료(2FA 불필요), 목표상태를 품절로 할지 사용자확인 필요
-- [tmxkql111/222 지마켓·롯데온 공용ID](project_lotteon_gmarket_shared_loginid.md) — 이 로그인ID는 두 플랫폼에 다 등록돼있어 오류보고시 플랫폼 헷갈리기 쉬움. 실제 8/23 오류는 롯데온 2FA실패였는데 지마켓으로 오보고한 사례
-- [재수집 먼저, 그다음 미매칭판매중지](feedback_recrawl_before_nomatch_suspend.md) — DB 오래된 스냅샷으로 타겟 뽑으면 시차/중복실행 혼란(가짜거부알럿) 생김. 11번가 status는 다음날 크롤 전까지 미갱신이 근본원인
-- [크롤링 문제확인 철저히](feedback_crawl_problem_check_thoroughness.md) — "문제있어?" 질문엔 crawling_status 필드만 보지 말고 최근3일 로그 전체 grep해서 보고(필드가 실패를 반영 안하는 경우 발견됨). 세션 무관 항상 적용
-- [11번가 엑셀나의상품 stale 검증함정](project_11st_excel_export_stale_status.md) — 판매중지 직후 검증할 때 엑셀재수집(crawl_11st_products) 쓰면 가짜"실패"(엑셀이 stale). 실시간 AJAX(SellProductAjaxAction getSellProductListJSON)로 검증할 것. 진짜 판매중지 API는 SellProductAction updateProductSelStat
-- [11번가 나의상품 그리드 실시간검증법](project_11st_jqxgrid_realtime_verify.md) — getSellProductListJSON 직접호출은 TOTAL_COUNT:0(파라미터 부족). 검증 정답은 /view/8006 검색 후 jQuery('#dvdataGrid').jqxGrid('getrows')로 selStatCd/selStatCdVal(span텍스트)/selPrc/selQty 직접조회 — DOM 20행 표시는 가상스크롤 착시(실제 데이터 아님), 배치 30건 가능
-- [11번가 판매중지 배치 혼합거부](project_11st_jinag7460_suspend_reject.md) — 배치에 이미판매중지 상품 1건이라도 섞이면 배치 전체 거부(부분처리 안됨), 순수판매중만 재구성하면 해결(jinag7460, 2026-08-26)
+- [서버 IP](project_server_ip.md) — 192.168.45.100(확정)
+- [지마켓 dlwod777 수동관리](project_gmarket_dlwod777_manual_only.md) — 삭제/판매중지 자동화 금지
+- [한글 영타 입력](feedback_korean_qwerty_input.md) — 영문QWERTY로 그대로 침, 두벌식 디코딩
+- [PUBLIC 공유폴더](reference_public_share.md) — ~/PUBLIC에 참조자료 보관
+- [ai100 이전 프로젝트](reference_ai100.md) — betona1/ai100, /tmp/ai100
+- [도매매/스피드고 참조](reference_domeggook.md) — 스피드고 자동화 프로젝트 정보
+- [크롤링 필수원칙](feedback_crawling_rule.md) — 사람처럼 페이싱+3회실패시 중지
+- [매출 정의](project_sales_revenue_def.md) — 매출=정산금액, platform='11st' 필터필수
+- [타임존 함정](feedback_timezone_pitfalls.md) — KST slice/MySQL __date/aware-naive 비교 금지
+- [11번가 일시적 실패](project_11st_transient_fails.md) — 94%자동회복, 알림은 연속2회 게이팅
+- [11번가 매출 전역매칭](project_11st_sales_match_global.md) — 판매자코드 전역매칭(계정한정 금지)
+- [11번가 IP차단 방지](project_11st_ip_block_prevention.md) — 동시크롤 금지(전역락), HTTP확인
+- [11번가 OTP 알림수신](project_11st_otp_notification.md) — RCS/푸시로 옴, adb dumpsys notification
+- [11번가 적자삭제](project_11st_loss_delete.md) — 셀러오피스 iframe, real은 동시크롤금지
+- [11번가 적자삭제 select_all 버그](project_11st_loss_delete_selectall_bug.md) — 가정오류로 real 0건삭제
+- [11번가 영구정지 계정](project_11st_perma_banned.md) — rejoice43등 ROAS판단 제외
+- [11번가 쿠키오판/다운로드실패](project_11st_cookie_intro_loop.md) — intro오판 무한루프+hang, 수정됨
+- [지마켓 ESM 상품수집](project_gmarket_esm_products.md) — ItemsMng→엑셀다운→GmarketMyProduct
+- [플랫폼별 락 분리](project_platform_lock_split.md) — 11st/gmarket 락파일 분리
+- [지마켓 공유ESM 그룹](project_gmarket_esm_groups.md) — 222=223,224/234=235,236 서브id 이슈
+- [지마켓 ESM 주문 직접크롤](project_gmarket_esm_order_endpoint.md) — post-tx.esmplus.com iframe API
+- [지마켓 상품별 광고비 리포트](project_gmarket_ad_product_report.md) — CPC/AI매출업 리포트+엑셀다운
+- [지마켓 상품 ROAS 페이지](project_gmarket_roas_page.md) — /gmarket-roas, ROAS2종, 월단위
+- [지마켓 광고비 출처](project_gmarket_adcost_source.md) — 신뢰값=광고센터 스냅샷
+- [11번가 광고비 부분유실/재시도](project_11st_cost_partial_loss.md) — 양쪽성공시만 저장+재시도
+- [11번가 판매상태 출처/고장난sync](project_11st_myproduct_status_source.md) — 출처=crawl_11st_products
+- [크롤 락 파서 버그](project_crawl_lock_parser_bug.md) — 락 통째삭제 버그, split('|')[0] 수정
+- [크롤러 좀비PC](project_crawler_zombie_pc.md) — 고아 Xvfb/chrome 누적, 리퍼로 해결
+- [지마켓 복수아이디 서브 광고비](project_gmarket_subaccount_token.md) — GmktSellBalanceManagement 서브선택
+- [지마켓 상품상태(비고)](project_gmarket_product_status.md) — 출처=status_type 정규화
+- [지마켓 나의상품 중복제외](project_gmarket_myproduct_dedup.md) — dedup토글(seller_code Min id)
+- [지마켓 CPC 키워드 수집](project_gmarket_keyword_report.md) — 키워드탭 상품번호검색
+- [지마켓 로그인 캡차 대응](project_gmarket_captcha_login.md) — 사람이 1회풀어 쿠키재발급, 자동풀이금지
+- [5분 진행보고 요구](feedback_progress_report_5min.md) — 5분마다 보고, 근본원인까지 파고들기
+- [지마켓 광고비+키워드 통합크롤](project_gmarket_adcost_keyword_combined.md) — 로그인1회 통합(08:00)
+- [지마켓 키워드크롤 락 함정](project_gmarket_keyword_lock_gotcha.md) — 수동락 만들면 오판스킵
+- [11번가 광고 ON/OFF 자동화(adoffice)](project_11st_adoffice_ad_control.md) — GUI셀렉터=17시자동중지 열쇠
+- [문자수신 2경로·워치독](project_sms_paths_and_watchdog.md) — 앱푸시(주)+adb-USB(백업)
+- [상품코드 영구보존고](project_product_code_archive.md) — 매일03시 스냅샷, 삭제돼도 조회가능
+- [예비상품 파이프라인](project_ownerclan_reserve_pipeline.md) — /ownerclan→/myproduct-wholesale
+- [11번가 나의상품 쿼리성능](project_eleven_my_query_perf.md) — 조인필터 인덱스무력화, account_id IN 수정
+- [전페이지 성능감사 2026-06](project_perf_audit_2026-06.md) — 인덱스+N+1일괄화+캐시
+- [11번가 구글시트 업로드](project_11st_gsheet_upload.md) — 기간별보고서→계정별시트
+- [덮어쓰기 전 양식검증](feedback_verify_before_overwrite.md) — 원본양식 확인+소량테스트 필수
+- [11번가 광고그룹 전략설정](project_11st_ad_strategy_schedule.md) — /ad-settings, 캠페인 실시간조회 필수
+- [지마켓 키워드 단일실행만](project_gmarket_keyword_single_only.md) — 동시2개=캡차확산, 단일원칙
+- [11번가 장시간 인증 배치분할](project_11st_tmxkzhfldk8_crash.md) — 전체연속실행 SIGTERM위험
+- [11번가 구매원가 출처](project_eleven_purchase_cost.md) — market_price(마켓가), ownerclan_price 아님
+- [지마켓·11번가 시간별 광고비 텔레그램](project_gmarket_11st_hourly_adcost.md) — 증가분 알림
+- [지마켓 판매불가 탐지](project_gmarket_unavailable_detection.md) — API제외시 판매중 박제, 누락=판매불가
+- [지마켓 광고효율 딥리서치](project_gmarket_ad_efficiency.md) — 손익분기 ROAS~450%
+- [11번가 주말 광고OFF](project_11st_weekend_ad_off.md) — 주말데이터 없음은 정상
+- [지마켓 시간별 광고비 오탐스킵](project_gmarket_hourly_false_skip.md) — pgrep 모니터셸 오탐 수정
+- [스마트스토어 중복상품 제재](project_smartstore_duplicate_product_warning.md) — 동일상품 등록시 제재, 공유금지
+- [스마트스토어 API 설정 현황](project_smartstore_api_setup.md) — 계정별 Commerce API 키 설정
+- [지마켓 광고제어 누적/진행상태 가드](project_gmarket_adcontrol_busy_guard.md) — busy마커로 중복스킵
+- [11번가 verify 쿠키미저장/OTP판정](project_11st_verify_cookie_bug.md) — 쿠키 미저장 버그, 수정됨
+- [11번가 제재위험 상품 삭제대기](project_11st_product_pending_delete.md) — 라이선스없음 확인, 다음수정시 삭제
+- [네이버 상품별 광고비 ROAS](project_naver_ad_product_roas.md) — 내부API 역공학, /naver-roas
+- [스마트스토어 Commerce API 등록현황](project_smartstore_commerce_api_status.md) — 전체계정 등록완료
+- [스마트스토어 클린위반 시스템](project_smartstore_clean_violation_system.md) — /smartstore 배지·모달
+- [스타비젼 상품명 AI최적화](project_starvision_product_name_opt.md) — SALE 997개 완료
+- [스마트스토어 상품명 최적화 대기](project_ss_product_name_pending.md) — 미완료 6개계정, 등록후 진행
+- [11번가 jinag7460 상품명최적화](project_11st_jinag7460_name_opt.md) — 등급1위계정 트리밍 진행중
+- [대량 상품명최적화 무API방법](feedback_bulk_name_opt_no_api_method.md) — 위험스캔→상세확인→스크립트
+- [스마트스토어 예상클린위반+AI프롬프트](project_smartstore_predicted_violation_and_prompt.md) — 휴리스틱 스캔+프롬프트
+- [항상 존댓말 사용](feedback_formal_speech.md) — 반말해도 응답은 항상 존댓말
+- [쿠팡 연동 구축](project_coupang_integration.md) — HMAC서명+부가세크롤러, 7계정완료
+- [스마트스토어 광고비 수집 범위](project_smartstore_adcost_scope.md) — 광고계정 3개뿐(정상)
+- [쿠팡 유진문구 상품명최적화](project_coupang_jujinmungu_name_opt.md) — 14,912건 완료
+- [지마켓 광고제어 버그 3종 수정](project_gmarket_ad_control_bugs_2026-07-07.md) — 로그인재시도등 3버그 수정
+- [지마켓 상태확인 안전수칙](feedback_gmarket_status_check_safety.md) — on/off는 액션! 확인은 읽기전용
+- [클린위반 스캔 오탐사전](project_clean_violation_false_positives.md) — 표창=상장, 에어건=워터건 등
+- [크론로그 미로테이션 함정](project_cron_log_no_rotation.md) — 로그누적 혼란, DB가 진실
+- [롯데온 발견+11번가OTP크론](project_lotteon_and_11st_otp_cron.md) — lotteon 미문서화 발견
+- [지마켓 살생물제 규제대응](project_gmarket_biocide_regulation.md) — 화학상품 1,224건 확정
+- [롯데온 연동 시도](project_lotteon_integration_attempt.md) — 신규3계정, 2FA릴레이 실패 미완료
+- [2026-07-07 시스템 전체점검](project_system_audit_2026-07-07.md) — 대체로 정상(시점스냅샷)
+- [11번가 rejoice666 상품명최적화](project_11st_rejoice666_name_opt.md) — 약430건, offset430부터
+- [11번가 400에러(원산지/인증정보)](project_11st_400_certification_origin_errors.md) — 반응형재시도 자동대응
+- [폰 무선adb(같은WiFi)](project_phone_wireless_adb_wifi.md) — 같은WiFi+tcpip 성공하나 불안정
+- [스마트스토어 공유로그인 대시보드버그](project_smartstore_dual_login_dashboard_bug.md) — 매출 쏠림버그 수정
+- [롯데온 로그인 성공](project_lotteon_login_success.md) — 2FA자동화, WebSquare ActionChains
+- [11번가 오피스 포인트 0원 버그](project_11st_office_point_zero_bug.md) — XPath깨짐, 라벨기반 수정
+- [롯데온 API 구현완료](project_lotteon_api_implementation.md) — apps/lotteon, cron미등록
+- [OsanApp 진행상황](project_osanapp_status.md) — 데이터완료, 실기기테스트 미해결
+- [sudo 비대화형 세션 한계](feedback_sudo_noninteractive.md) — Bash로 불가, VNC/SSH서 요청
+- [사용자 기술 배경지식 낮음](feedback_low_tech_literacy_guidance.md) — 개념부터, 한번에 한단계씩
+- [오산 홈페이지 프로젝트](project_osan_homepage.md) — 독립 워드프레스, 오라클서버 이전완료
+- [롯데온 부가세 크롤러](project_lotteon_vat_crawler.md) — 토큰스코프 함정, /tax 통합완료
+- [네이버 검색어 리포트](project_naver_search_term_report.md) — "검색어"차원만 유효
+- [window.open+Bearer인증 실패패턴](feedback_window_open_bearer_auth.md) — 401, Blob CSV가 해법
+- [스마트스토어 상품동기화 12일 중단](project_smartstore_product_sync_outage.md) — cron방치, 신선도확인 필수
+- [Overview 대시보드 수정](project_overview_dashboard_fixes.md) — 쿠팡·롯데온 누락 수정
+- [매출업로드 중복 레이스컨디션](project_sales_upload_dedup_fix.md) — idempotency가드 추가
+- [쿠팡 계정명 지마켓매칭](project_coupang_seller_name_gmarket_match.md) — login_id기준 복사관례
+- [오산 코스피뉴스 시리즈](project_osan_kospi_news_series.md) — 200/200개 완성
+- [오산 블로그 208개 분량보강](project_osan_blog_expansion_status.md) — 전체완료(1500자+)
+- [토큰 대량소모 작업 전 확인](feedback_ask_before_token_heavy_work.md) — 대량반복작업 시작전 확인필수
+- [오너클랜 API 발견·인증성공](project_ownerclan_api_discovery.md) — GraphQL 확인, 크롤러 미완성
+- [사이드바 정리 2026-07-11](project_sidebar_reorg_2026-07-11.md) — dashboard→overview 흡수
+- [오너클랜 DB 다운로드](project_ownerclan_db_export.md) — 전체CSV 스트리밍 구축완료
+- [오산 도메인 연결](project_osan_domain_connect.md) — DNS/DDNS 완료, SSL 미완료
+- [도구거부=토큰소진 가능성](feedback_tool_denial_may_be_quota.md) — 의도적 거부 아닐수도, 진행
+- [지마켓 광고비 collected_at 함정](project_gmarket_adcost_collected_at_gotcha.md) — range delete라 날짜오판
+- [2026-07 지마켓/11번가 크롤 스케쥴 진단](project_gmarket_11st_july_schedule_audit.md) — 7월 전체정상
+- [지마켓 일별vs월별 저장구조 검토](project_gmarket_daily_vs_monthly_design.md) — 전환가능성만 확인, 보류
+- [스킵보다 짧게라도 작성](feedback_no_skip_write_short.md) — 데이터부족해도 짧게 작성
+- [오산 블로그 작성 프롬프트](reference_osan_blog_prompt.md) — content_gen.py에 하드코딩
+- [코스피 1000개 확장 함정](project_osan_kospi_1000_expansion.md) — 회사명 검색오염, 이중체크
+- [서버 재부팅 2026-07-13](project_server_reboot_2026-07-13.md) — PM2 systemd 자동재기동
+- [오산 생활정보 100키워드 확장](project_osan_life_100keywords.md) — 10카테고리, life_helper.php
+- [오너클랜 /owner 페이지 범위](project_ownerclan_owner_page_scope.md) — /ownerclan과 혼동주의
+- [TopNav를 사이드바로 오해](feedback_topnav_not_sidebar.md) — "사이드바"=상단 TopNav
+- [워드프레스 DB 백업 누락](project_wordpress_backup_gap.md) — 자동백업 대상서 빠짐, 수정
+- [고단가 콘텐츠 배치 작성](project_highcpc_content_batch.md) — "이어서"=진행목록파일 확인
+- [부동산 제목 스타일 확정](feedback_realestate_title_style.md) — 검색어일치형 유지
+- [WebSearch 막혀도 트렌드 RSS 가능](feedback_trends_rss_bypass.md) — curl로 세션한도 무관 조회
+- [11번가 전략설정 캠페인 조회 레이스](project_11st_ad_strategy_campaign_race.md) — 생성직후 반영지연, 재시도
+- [지마켓 상품별광고비 락충돌 전체스킵](project_gmarket_ad_report_lock_collision.md) — 크론겹침시 전부"실패"
+- [지마켓 상품별광고비 상태표시 3종 수정](project_gmarket_ad_report_status_fixes.md) — ps오판 등 3종 수정
+- [멈춤보고 전 교차확인](feedback_verify_before_reporting_stopped.md) — mtime만 보고 단정금지
+- [유진대기업 이용정지 제외](project_ss_jujindaegieop_suspended.md) — is_active=False 처리
+- [지마켓 판매중지 로그성공≠실제반영](project_gmarket_suspend_success_not_sticking.md) — 야간크롤이 상태 원복
+- [롯데온 미매칭 인프라 구축](project_lotteon_nomatch_suspend.md) — purchase_cost+매칭함수
+- [롯데온 판매중지는 셀러가 못함](project_lotteon_stp_not_seller_action.md) — 셀러가능상태 3개뿐
+- [tmxkql111/222 지마켓·롯데온 공용ID](project_lotteon_gmarket_shared_loginid.md) — 오류보고시 플랫폼 혼동주의
+- [재수집 먼저, 그다음 미매칭판매중지](feedback_recrawl_before_nomatch_suspend.md) — 재수집 선행필수
+- [크롤링 문제확인 철저히](feedback_crawl_problem_check_thoroughness.md) — 최근3일 로그 전체 grep 필수
+- [지마켓 ESM+ 새벽 정기점검](project_gmarket_esm_maintenance_window.md) — 02-05시 실패는 버그아님
+- [11번가 엑셀나의상품 stale 검증함정](project_11st_excel_export_stale_status.md) — 실시간AJAX로 검증할것
+- [11번가 나의상품 그리드 실시간검증법](project_11st_jqxgrid_realtime_verify.md) — jqxGrid getrows 직접조회
+- [11번가 판매중지 배치 혼합거부](project_11st_jinag7460_suspend_reject.md) — 섞이면 전체거부, 순수재구성
+- [L코드 진행률 100% 오표시 버그](project_lcode_progress_pct_bug.md) — 구조적 오류로 완료오인, 로그파싱 수정

@@ -8,6 +8,7 @@ apply_11st_price_match와 반대 방향(역마진=너무 쌈 / 고단가=너무 
 import time
 import random
 
+import requests as _requests
 from django.core.management.base import BaseCommand
 from django.db.models import F
 
@@ -54,9 +55,12 @@ class Command(BaseCommand):
         total_ok = total_fail = 0
         try:
             for acct in accounts:
+                # 고단가는 W코드 전용 — L코드(도매마트, LCE_ 접두)는 절대 대상 아님(2026-08-27
+                # 사용자 확정: "고단가는 w코드만이야 ... l코드의 단가는 절대 건드리지 않는다").
                 qs = (ElevenMyProduct.objects
                       .filter(account=acct, status_type='판매중', purchase_cost__gt=0,
                               sale_price__gt=F('purchase_cost') * mult)
+                      .exclude(seller_product_code__istartswith='LCE_')
                       .order_by('-id'))
                 if options['limit']:
                     qs = qs[:options['limit']]
@@ -80,13 +84,35 @@ class Command(BaseCommand):
 
                 for p in products:
                     try:
+                        # 11번가는 판매가를 10원 단위로만 받음 — 마켓가(purchase_cost)에 5원
+                        # 끝자리가 섞여있으면 400(판매가는 10원 단위로...) 거부됨(2026-08-27 실측,
+                        # 전체 매칭상품의 11%가 10원단위 아님). 원가 이하로 내려가지 않도록 올림.
+                        target_price = -(-p.purchase_cost // 10) * 10
                         detail = _get_hulk_detail(sess, p.product_no)
                         old_price = detail.get('sellPrice')
-                        detail['sellPrice'] = p.purchase_cost
-                        success = _put_hulk_update(sess, p.product_no, detail)
+                        detail['sellPrice'] = target_price
+                        try:
+                            success = _put_hulk_update(sess, p.product_no, detail)
+                        except _requests.exceptions.HTTPError as e:
+                            # RAW_MATERIAL 반응형 대응 — apply_11st_price_match.py와 동일(2026-08-27)
+                            body = e.response.text if e.response is not None else ''
+                            if 'RAW_MATERIAL' in body and detail.get('origin', {}).get('code'):
+                                detail['origin']['code'] = None
+                                success = _put_hulk_update(sess, p.product_no, detail)
+                                self.stdout.write(f'  [{p.product_no}] (RAW_MATERIAL 대응 재시도)')
+                            elif '최대 80%인하' in body or '최대 80% 인하' in body:
+                                # 11번가는 1회 가격수정당 최대 80% 인하까지만 허용 — 목표가가 그
+                                # 한도(기존가의 20%)보다 낮으면 한도까지만 내림(2026-08-27 실측).
+                                floor_price = -(-int(old_price * 0.2) // 10) * 10
+                                detail['sellPrice'] = floor_price
+                                target_price = floor_price
+                                success = _put_hulk_update(sess, p.product_no, detail)
+                                self.stdout.write(f'  [{p.product_no}] (80%인하한도 대응, {floor_price}원까지만)')
+                            else:
+                                raise
                         if success:
-                            ElevenMyProduct.objects.filter(pk=p.pk).update(sale_price=p.purchase_cost)
-                            self.stdout.write(f'  [{p.product_no}] OK {old_price} -> {p.purchase_cost}')
+                            ElevenMyProduct.objects.filter(pk=p.pk).update(sale_price=target_price)
+                            self.stdout.write(f'  [{p.product_no}] OK {old_price} -> {target_price}')
                             total_ok += 1
                         else:
                             self.stdout.write(f'  [{p.product_no}] 저장실패(status!=200)')

@@ -11,6 +11,7 @@ Selenium으로 화면을 매번 조작하는 것보다 훨씬 빠르고 안정�
 import time
 import random
 
+import requests as _requests
 from django.core.management.base import BaseCommand
 from django.db.models import F
 
@@ -57,9 +58,15 @@ class Command(BaseCommand):
         total_ok = total_fail = total_skip = 0
         try:
             for acct in accounts:
+                # L코드(도매마트)는 --pct 기준이 아니라 고정 50%(마켓가*0.5 이하일 때만) 인상 —
+                # 2026-08-27 사용자 확정: "L코드는 역마진 확인필요 판매가의 50%이하일때만 가격을
+                # 높이고 있다". W코드는 기존대로 --pct 기준.
                 qs = (ElevenMyProduct.objects
-                      .filter(account=acct, status_type='판매중', purchase_cost__gt=0,
-                              sale_price__lte=F('purchase_cost') * mult)
+                      .filter(account=acct, status_type='판매중', purchase_cost__gt=0)
+                      .filter(
+                          Q(seller_product_code__istartswith='LCE_', sale_price__lte=F('purchase_cost') * 0.5) |
+                          (~Q(seller_product_code__istartswith='LCE_') & Q(sale_price__lte=F('purchase_cost') * mult))
+                      )
                       .order_by('-id'))
                 if options['limit']:
                     qs = qs[:options['limit']]
@@ -83,13 +90,29 @@ class Command(BaseCommand):
 
                 for p in products:
                     try:
+                        # 11번가는 판매가를 10원 단위로만 받음 — 마켓가(purchase_cost)에 5원
+                        # 끝자리가 섞여있으면 400(판매가는 10원 단위로...) 거부됨(2026-08-27 실측,
+                        # 전체 매칭상품의 11%가 10원단위 아님). 원가 이하로 내려가지 않도록 올림.
+                        target_price = -(-p.purchase_cost // 10) * 10
                         detail = _get_hulk_detail(sess, p.product_no)
                         old_price = detail.get('sellPrice')
-                        detail['sellPrice'] = p.purchase_cost
-                        success = _put_hulk_update(sess, p.product_no, detail)
+                        detail['sellPrice'] = target_price
+                        try:
+                            success = _put_hulk_update(sess, p.product_no, detail)
+                        except _requests.exceptions.HTTPError as e:
+                            # RAW_MATERIAL(원재료="상세설명 참조"인데 origin.code가 같이 남아있으면 400)
+                            # — _apply_11st_decisions.py에서 검증된 반응형 대응과 동일 패턴(2026-08-27
+                            # 실측: apply_11st_price_match 240건 실패 중 201건이 이 원인).
+                            body = e.response.text if e.response is not None else ''
+                            if 'RAW_MATERIAL' in body and detail.get('origin', {}).get('code'):
+                                detail['origin']['code'] = None
+                                success = _put_hulk_update(sess, p.product_no, detail)
+                                self.stdout.write(f'  [{p.product_no}] (RAW_MATERIAL 대응 재시도)')
+                            else:
+                                raise
                         if success:
-                            ElevenMyProduct.objects.filter(pk=p.pk).update(sale_price=p.purchase_cost)
-                            self.stdout.write(f'  [{p.product_no}] OK {old_price} -> {p.purchase_cost}')
+                            ElevenMyProduct.objects.filter(pk=p.pk).update(sale_price=target_price)
+                            self.stdout.write(f'  [{p.product_no}] OK {old_price} -> {target_price}')
                             total_ok += 1
                         else:
                             self.stdout.write(f'  [{p.product_no}] 저장실패(status!=200)')
