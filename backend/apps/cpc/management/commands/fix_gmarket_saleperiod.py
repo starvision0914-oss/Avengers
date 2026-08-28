@@ -15,6 +15,9 @@ class Command(BaseCommand):
         parser.add_argument('--account', type=str, help='특정 계정 login_id')
         parser.add_argument('--all', action='store_true', help='활성 전체 계정')
         parser.add_argument('--limit', type=int, help='이번 실행에서 실제로 저장할 최대 건수(테스트용)')
+        parser.add_argument('--scan', action='store_true', help='실제 수정 없이 계정별 대상 건수만 조회')
+        parser.add_argument('--skip-auction', action='store_true',
+                             help='옥션(상품번호 F접두) 제외, 지마켓만 처리(2026-08-28: 옥션 저장실패 반복 확인)')
 
     def handle(self, *args, **options):
         from crawlers.gmarket_saleperiod_fix import run_saleperiod_fix
@@ -28,5 +31,6 @@ class Command(BaseCommand):
             return
 
         res = run_saleperiod_fix(login_ids=login_ids, limit=options['limit'],
-                                  log_fn=lambda m: self.stdout.write(m))
+                                  log_fn=lambda m: self.stdout.write(m), scan_only=options['scan'],
+                                  skip_auction=options['skip_auction'])
         self.stdout.write(str(res))

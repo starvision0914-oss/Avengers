@@ -63,6 +63,33 @@ def _get(customer_id: str, access_license: str, secret_key: str, path: str, para
     return r
 
 
+def _put(customer_id: str, access_license: str, secret_key: str, path: str, body, params: dict = None) -> requests.Response:
+    ts = str(round(time.time() * 1000))
+    message = f"{ts}.PUT.{path}"
+    sig = hmac.new(bytes(secret_key, "utf-8"), message.encode("utf-8"), digestmod=hashlib.sha256).digest()
+    headers = {
+        "X-Timestamp": ts,
+        "X-API-KEY": access_license,
+        "X-Customer": str(customer_id),
+        "X-Signature": base64.b64encode(sig).decode(),
+        "Content-Type": "application/json",
+    }
+    r = requests.put(BASE_URL + path, headers=headers, params=params, json=body, timeout=15)
+    if not r.ok:
+        logger.warning("Naver SearchAd API PUT error %s %s: %s", path, r.status_code, r.text[:300])
+    return r
+
+
+def set_ad_lock(customer_id: str, access_license: str, secret_key: str, ncc_ad_id: str, lock: bool) -> bool:
+    """개별 상품광고(SHOPPING_PRODUCT_AD) ON/OFF — userLock 필드 토글. NCC API의 PUT은
+    부분수정 시 ?fields=<field1,field2>로 대상 필드를 명시해야 함(2026-08-28 실측 —
+    안 붙이면 400 "Required request parameter 'fields'...")."""
+    path = f"/ncc/ads/{ncc_ad_id}"
+    r = _put(customer_id, access_license, secret_key, path,
+             {"nccAdId": ncc_ad_id, "userLock": lock}, params={"fields": "userLock"})
+    return r.ok
+
+
 def fetch_campaigns(customer_id: str, access_license: str, secret_key: str) -> list:
     r = _get(customer_id, access_license, secret_key, "/ncc/campaigns")
     return r.json() or [] if r.ok else []

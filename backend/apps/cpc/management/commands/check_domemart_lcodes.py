@@ -21,6 +21,9 @@ class Command(BaseCommand):
         parser.add_argument('--only-status', type=str, default='',
                              help="콤마구분 상태값(soldout,not_found 등) — 지정 시 이 상태의 기존 결과만 "
                                   "recheck-days 무시하고 재확인 대상에 포함(+ 신규 미확인 코드는 항상 포함)")
+        parser.add_argument('--all-status', action='store_true',
+                             help="나의상품 status_type 필터(기본 판매중만) 없이 판매중지/품절/판매금지 등 "
+                                  "전체 상태의 나의상품에 있는 L코드까지 대상에 포함(get_all_l_codes(status_filter=False))")
 
     def handle(self, *args, **opts):
         from apps.cpc.eleven_my_product_service import get_all_l_codes
@@ -52,7 +55,7 @@ class Command(BaseCommand):
     def _run(self, opts, get_all_l_codes, LCodeStatus, dm):
         import random
 
-        all_codes = get_all_l_codes()
+        all_codes = get_all_l_codes(status_filter=not opts['all_status'])
         rows = {r['l_code']: r for r in LCodeStatus.objects.values('l_code', 'checked_at', 'status')}
         now = timezone.now()
         recheck_cutoff = now - timezone.timedelta(days=opts['recheck_days'])

@@ -718,6 +718,133 @@ class PriceCapApplyView(APIView):
         return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
 
 
+def _smartstore_loss_rows(account_id=None, roas_max=100, cost_min=2000, clicks_min=10):
+    """스마트스토어 상품별 적자 판정 — 11번가(_eleven_product_rows)와 동일 원칙: 광고센터
+    전환매출이 아니라 **실매출(SalesRecord, 정산 기준)** 로 ROAS를 계산해 오탐(광고센터엔 안
+    잡히는 자연유입/직접구매 매출로 실제론 흑자인 상품이 적자로 오판되는 것)을 원천 차단한다
+    (2026-08-28, 지마켓 delete_loss_gmarket.py의 150% 사후보정 방식보다 안전 — 애초에
+    광고센터 숫자를 판정에 쓰지 않음). 매출 매핑이 안 되는 상품은 "적자"로 단정하지 않고 제외.
+    반환: [{account_id, id(SmartStoreProduct pk), product_no, seller_code, name, cost,
+            clicks, sales, roas}...] — status_type='SALE'만."""
+    from apps.cpc.views import _bare_seller_code
+
+    today = date.today()
+    since = today.replace(day=1)
+
+    # NaverAdProductReport는 매일 재동기화되며 since_date는 고정(월초)이고 until_date만
+    # 매일 전진하는 "누적 스냅샷"이다 — since_date만으로 필터링하면 그 달의 스냅샷이 전부
+    # 잡혀서(예: 22개) cost를 실제 지출의 ~10배로 합산하는 심각한 버그가 있었음(2026-08-28
+    # 실측: 잘못된 합산 5,473,679원 vs 최신 스냅샷만 524,896원 — SmartStoreAdCost 대시보드
+    # 합계 543,759원과 일치). 반드시 가장 최근 until_date 한 스냅샷만 사용해야 한다.
+    base_qs = NaverAdProductReport.objects.filter(since_date=since)
+    if account_id:
+        base_qs = base_qs.filter(account_id=account_id)
+    latest_until = base_qs.aggregate(Max('until_date'))['until_date__max']
+    ad_qs = base_qs.filter(until_date=latest_until) if latest_until else base_qs.none()
+    agg = {}
+    for r in ad_qs.values('account_id', 'product_no').annotate(
+        cost=Sum('cost'), clicks=Sum('click'), conv_amount=Sum('conversion_amount'),
+    ):
+        key = (r['account_id'], r['product_no'])
+        a = agg.setdefault(key, {'cost': 0, 'clicks': 0})
+        a['cost'] += r['cost'] or 0
+        a['clicks'] += r['clicks'] or 0
+
+    # NaverAdProductReport.product_no는 실제로 mallProductId(=SmartStoreProduct.channel_product_no)와
+    # 매칭된다 — product_no(우리 내부 표시번호)가 아님(2026-08-28 실측: product_no 매칭 2/7480,
+    # channel_product_no 매칭 1998/2000).
+    prod_qs = SmartStoreProduct.objects.filter(
+        channel_product_no__in={k[1] for k in agg}, status_type='SALE',
+    ).select_related('account')
+    if account_id:
+        prod_qs = prod_qs.filter(account_id=account_id)
+    prod_by_key = {(p.account_id, p.channel_product_no): p for p in prod_qs}
+
+    codes = set()
+    for p in prod_by_key.values():
+        if p.seller_management_code:
+            codes.add(p.seller_management_code)
+            codes.add(_bare_seller_code(p.seller_management_code))
+    sales_by_code = {}
+    if codes:
+        d_from = since - datetime.timedelta(days=45)  # 광고비 집계기간(이번달)보다 넉넉히
+        for s in (SalesRecord.objects.filter(platform='smartstore', product_code__in=list(codes),
+                                             order_date__gte=d_from, order_date__lte=today)
+                  .values('product_code').annotate(s=Sum('total_price'))):
+            sales_by_code[s['product_code']] = s['s'] or 0
+
+    rows = []
+    for (aid, pno), a in agg.items():
+        p = prod_by_key.get((aid, pno))
+        if not p:
+            continue
+        cost = a['cost']; clicks = a['clicks']
+        sc = p.seller_management_code or ''
+        mapped = bool(sc)
+        sales = sum(sales_by_code.get(x, 0) for x in {sc, _bare_seller_code(sc)}) if sc else 0
+        roas = round(sales / cost * 100, 2) if cost else 0
+        if not mapped:
+            continue  # 매출 근거 없음 → 적자로 단정하지 않음(11번가와 동일 원칙)
+        if roas > roas_max:
+            continue
+        if cost < cost_min:
+            continue
+        if clicks < clicks_min:
+            continue
+        rows.append({
+            'account_id': aid, 'id': p.id, 'product_no': p.product_no,
+            'channel_product_no': pno, 'seller_code': sc,
+            'name': p.name, 'cost': cost, 'clicks': clicks, 'sales': sales, 'roas': roas,
+        })
+    return rows
+
+
+class LossProductsView(APIView):
+    """스마트스토어 적자상품 조회(실매출 ROAS 기준) — 11번가 적자상품 화면과 동일 개념."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        account_id = request.query_params.get('account_id')
+        roas_max = float(request.query_params.get('roas_max', 100))
+        cost_min = float(request.query_params.get('cost_min', 2000))
+        clicks_min = float(request.query_params.get('clicks_min', 10))
+        rows = _smartstore_loss_rows(
+            account_id=int(account_id) if account_id else None,
+            roas_max=roas_max, cost_min=cost_min, clicks_min=clicks_min,
+        )
+        rows.sort(key=lambda r: r['roas'])
+        return Response({'total': len(rows), 'items': rows})
+
+
+class LossProductsSuspendView(APIView):
+    """스마트스토어 적자상품(실매출 ROAS 기준) 판매중지 — 이미 검증된 API 판매중지
+    (_launch_smartstore_action)를 재사용. 선택 없이 서버가 현재 조건으로 계산."""
+    LOG_FILE = '/tmp/suspend_smartstore_loss.log'
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        d = request.data
+        account_id = d.get('account_id')
+        roas_max = float(d.get('roas_max', 100))
+        cost_min = float(d.get('cost_min', 2000))
+        clicks_min = float(d.get('clicks_min', 10))
+        rows = _smartstore_loss_rows(
+            account_id=int(account_id) if account_id else None,
+            roas_max=roas_max, cost_min=cost_min, clicks_min=clicks_min,
+        )
+        if not rows:
+            return Response({'status': 'blocked', 'message': '⛔ 적자상품(SALE) 대상이 없습니다.'}, status=400)
+
+        by_store = {}
+        for r in rows:
+            by_store[r['account_id']] = by_store.get(r['account_id'], 0) + 1
+
+        _launch_smartstore_action('suspend', [r['id'] for r in rows], self.LOG_FILE)
+        msg = (f'🛑 적자상품(실매출 ROAS≤{roas_max}%) 전체 판매중지 시작 — {len(by_store)}스토어 총 {len(rows)}개. '
+               f'진행상황은 {self.LOG_FILE} 확인.')
+        return Response({'status': 'started', 'message': msg, 'accounts': len(by_store), 'total': len(rows)})
+
+
 class SuspendProductsView(APIView):
     """미매칭(W코드+오너클랜품절) 대상 판매중지 — 좁은 의미(자동 대상 산정), _get_suspend_targets 사용."""
     LOG_FILE = '/tmp/suspend_smartstore_products.log'

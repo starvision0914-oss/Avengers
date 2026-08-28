@@ -13,7 +13,7 @@ import random
 
 import requests as _requests
 from django.core.management.base import BaseCommand
-from django.db.models import F
+from django.db.models import F, Q
 
 from apps.cpc.models import CrawlerAccount, ElevenMyProduct
 from apps.cpc.management.commands.optimize_11st_product_names import (

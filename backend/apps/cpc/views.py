@@ -1041,16 +1041,25 @@ class OverviewView(views.APIView):
         q['end'] = end_d.isoformat()
         q.pop('date', None)
         q.pop('period', None)
-        # /gmarket 페이지 기본값(종합=지마켓+옥션)과 일치시킴 — GmarketDashboardView 자체 기본값은 'gmarket' 단독이라
-        # market 파라미터를 안 넘기면 Overview만 옥션 매출이 빠진 채 집계되는 불일치가 있었음.
-        q.setdefault('market', 'combined')
-        request._request.GET = q
+        # 지마켓/옥션을 별도 카드로 분리(2026-08-27 사용자 요청) — 예전엔 'combined'로 한 번만 불러
+        # '지마켓' 라벨에 옥션이 섞여 들어갔음(쇼핑몰별 손익 카드는 원래도 분리라 숫자가 안 맞았음).
+        q_gmkt = q.copy(); q_gmkt['market'] = 'gmarket'
+        q_auct = q.copy(); q_auct['market'] = 'auction'
 
         # 지마켓 = 거래내역 기반(기간합산 정확) / 11번가 = 기간 거래 집계
+        request._request.GET = q_gmkt
         g = GmarketDashboardView().get(request).data
+        request._request.GET = q_auct
+        ga = GmarketDashboardView().get(request).data
+        request._request.GET = q
         e = ElevenSummaryView().get(request).data
         gt = g.get('totals', {}) or {}
+        gat = ga.get('totals', {}) or {}
         et = e.get('totals', {}) or {}
+
+        # GmarketManualCost(바이럴 등) 이중계산 문제는 GmarketDashboardView 자체에서 옥션 탭은
+        # 0으로 두도록 근본 수정됨(2026-08-28) — 여기서 다시 빼면 오히려 옥션 광고비가 잘못
+        # 음수로 내려가므로 더 이상 보정하지 않는다.
 
         def acct_stats(platform):
             qs = CrawlerAccount.objects.filter(platform=platform, is_active=True)
@@ -1061,7 +1070,7 @@ class OverviewView(views.APIView):
         g_total, g_normal, g_failed = acct_stats('gmarket')
         e_total, e_normal, e_failed = acct_stats('11st')
 
-        g_ad = gt.get('ad_spend', 0) or 0                                  # G마켓 = CPC+AI+서버(+옥션)
+        g_ad = gt.get('ad_spend', 0) or 0                                  # G마켓 단독 = CPC+AI+서버(옥션 별도)
         e_ad = et.get('cpc_spend', 0) or 0                                 # 11번가 = CPC
         g_bal = gt.get('balance', 0) or 0                                  # G마켓 예치금
         e_bal = et.get('point', 0) or 0                                    # 11번가 = 셀러포인트만 (캐시는 내 돈 아님 → 제외)
@@ -1080,6 +1089,14 @@ class OverviewView(views.APIView):
              'balance': g_bal, 'accounts': g_total, 'normal': g_normal, 'failed': g_failed,
              'sales': g_sales, 'profit': g_profit, 'net_after_ad': g_net,
              'orders': gt.get('orders', 0) or 0,
+             'last_collected': None},
+            {'key': 'auction', 'label': '옥션', 'color': '#8bc34a',
+             'ad_cost': gat.get('ad_spend', 0) or 0,
+             'cpc': gat.get('cpc_spend', 0) or 0, 'ai': gat.get('ai_spend', 0) or 0,
+             'balance': gat.get('balance', 0) or 0, 'accounts': g_total, 'normal': g_normal, 'failed': g_failed,
+             'sales': gat.get('revenue', 0) or 0, 'profit': gat.get('profit', 0) or 0,
+             'net_after_ad': gat.get('net_after_ad', 0) or 0,
+             'orders': gat.get('orders', 0) or 0,
              'last_collected': None},
             {'key': '11st', 'label': '11번가', 'color': '#ff5a2e',
              'ad_cost': e_ad, 'cpc': e_ad, 'ai': 0,
@@ -1160,15 +1177,22 @@ class OverviewView(views.APIView):
             'orders': lt_orders, 'last_collected': None,
         })
 
+        a_ad = gat.get('ad_spend', 0) or 0
+        a_bal = gat.get('balance', 0) or 0
+        a_sales = gat.get('revenue', 0) or 0
+        a_profit = gat.get('profit', 0) or 0
+        a_net = gat.get('net_after_ad', 0) or 0
         totals = {
-            'ad_cost': g_ad + e_ad + ss_ad,
-            'balance': g_bal + e_bal,
+            # 지마켓이 옥션과 분리되면서(2026-08-27) 그랜드토탈에 옥션분(a_*)을 빠뜨리면
+            # '지마켓 단독'으로 줄어든 만큼 전체 합계가 실제보다 작게 나오는 버그가 생겨 여기 추가.
+            'ad_cost': g_ad + a_ad + e_ad + ss_ad,
+            'balance': g_bal + a_bal + e_bal,
             'accounts': g_total + e_total + ss_accounts + cp_accounts + lt_accounts,
             'normal': g_normal + e_normal + ss_accounts + cp_accounts + lt_accounts,
             'failed': g_failed + e_failed,
-            'sales': g_sales + e_sales + ss_settlement + cp_sales + lt_sales,
-            'profit': g_profit + e_profit + ss_settlement + cp_profit + lt_profit,
-            'net_after_ad': g_net + e_net + ss_net + cp_profit + lt_profit,
+            'sales': g_sales + a_sales + e_sales + ss_settlement + cp_sales + lt_sales,
+            'profit': g_profit + a_profit + e_profit + ss_settlement + cp_profit + lt_profit,
+            'net_after_ad': g_net + a_net + e_net + ss_net + cp_profit + lt_profit,
         }
 
         return Response({
@@ -4214,11 +4238,16 @@ class GmarketDashboardView(views.APIView):
         other = 'auction' if market == 'gmarket' else ('gmarket' if market == 'auction' else None)
         acct_ids = [a.login_id for a in accts] + [a.login_id for a in hidden_test_accts]
         cost = defaultdict(lambda: {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0, 'server': 0, 'manual': 0, 'cnt': 0})
-        # 수동 비용(광고센터 외부 — 바이럴 등) — 크롤러가 안 건드리는 별도 테이블, market 무관하게 전체 반영.
-        for r in (GmarketManualCost.objects
-                  .filter(seller_id__in=acct_ids, use_date__gte=d0, use_date__lte=d1)
-                  .values('seller_id').annotate(spend=Sum('amount'))):
-            cost[r['seller_id']]['manual'] += r['spend'] or 0
+        # 수동 비용(광고센터 외부 — 바이럴 등) — GmarketManualCost는 market 구분이 없는 필드라
+        # 지마켓/옥션 두 탭을 각각 조회하면 전액이 양쪽에 다 잡혀 두 탭 광고비를 합산하면
+        # 159,500원 같은 금액이 이중계산되는 버그가 있었다(2026-08-28 사용자 지적으로 발견 —
+        # OverviewView는 이미 옥션 쪽에서 빼는 임시조치가 있었지만 이 뷰(탭) 자체는 미수정 상태).
+        # OverviewView와 동일하게 지마켓에만 귀속시킨다 — market='auction' 탭에서는 0으로 둔다.
+        if market != 'auction':
+            for r in (GmarketManualCost.objects
+                      .filter(seller_id__in=acct_ids, use_date__gte=d0, use_date__lte=d1)
+                      .values('seller_id').annotate(spend=Sum('amount'))):
+                cost[r['seller_id']]['manual'] += r['spend'] or 0
         for r in (GmarketCostHistory.objects
                   .filter(seller_id__in=acct_ids,
                           transaction_type__in=['CPC', 'AI매출업', '서버비용'],
@@ -4417,7 +4446,7 @@ class GmarketDashboardView(views.APIView):
                 ai = c['auct_ai']
                 auction = c['gmkt_cpc'] + c['ai']   # 참고용(他마켓)
             server = c['server']
-            manual = c['manual']   # 광고센터 외부 수동비용(바이럴 등) — market 토글 무관하게 항상 반영
+            manual = c['manual']   # 광고센터 외부 수동비용(바이럴 등) — 지마켓 탭에만 귀속(옥션 탭은 0, 이중계산 방지)
             spend = cpc + ai + server + manual   # 광고비합계 = 현재 마켓(지마켓/옥션 토글)만 — 마켓별 완전 분리
             pc = (prod_mkt.get((lid, 'gmarket'), 0) + prod_mkt.get((lid, 'auction'), 0)) if market == 'combined' else prod_mkt.get((lid, market), 0)
             sl = sales.get(lid) or {'revenue': 0, 'profit': 0, 'orders': 0}

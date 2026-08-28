@@ -969,3 +969,26 @@ class LCodeStatus(models.Model):
 
     def __str__(self):
         return f'{self.l_code}:{self.status}'
+
+
+class GmarketSalePeriodStatus(models.Model):
+    """지마켓 L코드 판매중 상품의 판매기간(dispEndDate)+할인설정 상태 캐시(2026-08-28).
+    fix_gmarket_saleperiod --scan/실행 시 조회한 결과를 저장 — 계정별로 판매기간이 임박한
+    상품이 얼마나 남았는지 재조회 없이 바로 파악하기 위함(도매마트 LCodeStatus와 동일 패턴)."""
+    account = models.ForeignKey(CrawlerAccount, on_delete=models.CASCADE, related_name='gmarket_saleperiod_status')
+    product_no = models.CharField(max_length=50, db_index=True)
+    goods_no = models.CharField(max_length=50, blank=True, default='')
+    disp_end_date = models.CharField(max_length=30, blank=True, default='')  # 'YYYY-MM-DD HH:MM:SS' 원문
+    discount_type = models.IntegerField(null=True, blank=True)
+    discount_amt = models.IntegerField(null=True, blank=True)
+    needs_fix = models.BooleanField(default=True)   # 판매기간·할인 중 하나라도 설정된 상태(=조치 필요)
+    checked_at = models.DateTimeField()
+
+    class Meta:
+        db_table = 'gmarket_saleperiod_status'
+        constraints = [models.UniqueConstraint(fields=['account', 'product_no'], name='uniq_gmkt_saleperiod_acct_pno')]
+        indexes = [models.Index(fields=['needs_fix']), models.Index(fields=['disp_end_date']),
+                   models.Index(fields=['checked_at'])]
+
+    def __str__(self):
+        return f'{self.account_id}:{self.product_no}:{self.disp_end_date}'
