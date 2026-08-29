@@ -26,7 +26,11 @@ def _real_run_progress():
         line = line.strip()
         m = _DONE_RE.match(line)
         if m:
-            done, total, is_finished = int(m.group(1).replace(',', '')), int(m.group(2).replace(',', '')), True
+            done, total = int(m.group(1).replace(',', '')), int(m.group(2).replace(',', ''))
+            # (2026-08-29) '완료: X/Y 처리' 줄은 진짜 전체완료뿐 아니라 연속3회실패 등으로 조기중단됐을
+            # 때도 똑같이 찍힌다 — X==Y일 때만 진짜 완료로 인정. 아니면 워치독이 죽은 프로세스를
+            # '이미 다 끝남'으로 오판해 56분+ 방치하는 사고가 실제로 있었음(2026-08-29 21:47 크롬연결끊김).
+            is_finished = (done == total)
             continue
         m = _LINE_RE.match(line)
         if m:

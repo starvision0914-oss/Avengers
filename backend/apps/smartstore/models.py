@@ -222,3 +222,27 @@ class SmartStoreCrawlLog(models.Model):
     class Meta:
         db_table = 'smartstore_crawl_log'
         ordering = ['-started_at']
+
+
+class SmartStoreNameOptLog(models.Model):
+    """상품명/검색태그/상품정보제공고시 상세페이지 대조 작업 이력 — 처리완료/스킵 사유 추적
+    (2026-08-29, 세트/지재권 오표기 방지를 위해 상세페이지 확인 없이는 처리하지 않는 원칙 적용)."""
+    STATUS_CHOICES = [('done', '완료'), ('skipped', '스킵')]
+    account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='name_opt_logs')
+    product = models.ForeignKey(SmartStoreProduct, on_delete=models.CASCADE, related_name='name_opt_logs')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES)
+    fields_updated = models.CharField(max_length=100, blank=True, default='', help_text='예: name,tags,notice')
+    reason = models.TextField(blank=True, default='', help_text='스킵 사유 또는 변경 요약')
+    old_name = models.CharField(max_length=500, blank=True, default='')
+    new_name = models.CharField(max_length=500, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'smartstore_name_opt_log'
+        indexes = [
+            models.Index(fields=['account', 'status']),
+            models.Index(fields=['product']),
+        ]
+
+    def __str__(self):
+        return f'[{self.account.display_name}] {self.product_id} {self.status}'

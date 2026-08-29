@@ -413,6 +413,9 @@ def run_saleperiod_fix(login_ids=None, limit=None, log_fn=None, scan_only=False,
         stop_display()
 
 
+_AUTO_PERIOD_ONLY_AFTER_FAILS = 10   # 누적 실패가 이 수치 넘으면 할인은 포기하고 판매기간만(2026-08-28 사용자 요청)
+
+
 def run_targeted_fix(targets, log_fn=None, only_period=False):
     """명시적으로 지정한 (login_id, product_no, goods_no) 목록만 처리(2026-08-28 사용자 요청 —
     할인율1%+판매기간90일이하 같은 조건으로 뽑은 특정 대상만 돌리고 싶을 때).
@@ -497,11 +500,41 @@ def run_targeted_fix(targets, log_fn=None, only_period=False):
                 idx += _LOCK_CYCLE
                 http_ok = []
                 for t in chunk:
-                    try:
-                        ok2 = _fix_one(driver, t['goods_no'], login_id, log_fn, only_period=only_period)
-                    except Exception as e:
-                        _log(log_fn, f'  ❌ {t["product_no"]} 처리 중 예외: {e}')
-                        ok2 = False
+                    if not only_period and summary['failed'] >= _AUTO_PERIOD_ONLY_AFTER_FAILS:
+                        # 누적 실패 10건 넘으면 할인은 포기하고 판매기간만(2026-08-28 사용자 요청) —
+                        # 할인 탭이 실패 원인일 가능성이 있어 부담을 줄여 나머지라도 확실히 처리.
+                        only_period = True
+                        _log(log_fn, f'  ⚠ 누적 실패 {summary["failed"]}건 — 이후 판매기간만 처리로 전환')
+                    # 2026-08-28 사용자 요청: 실패시 1회 재시도, 그래도(2회째) 실패면 다음으로.
+                    ok2 = False
+                    last_exc = ''
+                    for attempt in (1, 2):
+                        try:
+                            ok2 = _fix_one(driver, t['goods_no'], login_id, log_fn, only_period=only_period)
+                        except Exception as e:
+                            _log(log_fn, f'  ❌ {t["product_no"]} 처리 중 예외(시도 {attempt}/2): {e}')
+                            last_exc = str(e)
+                            ok2 = False
+                        if ok2:
+                            break
+                        if attempt == 1:
+                            _log(log_fn, f'  ↻ {t["product_no"]} 1차 실패 — 재시도')
+                            time.sleep(_PACE_SEC)
+                    if not ok2 and 'crash' in last_exc.lower():
+                        # (2026-08-29) 탭 크래시는 세션 자체가 죽은 것 — 남은 청크를 계속 실패
+                        # 소모하지 말고 즉시 드라이버 재시작(2026-08-29 tab crashed 전체다운 사고 방지).
+                        _log(log_fn, f'  ⚠ 탭 크래시 감지 — 드라이버 재시작')
+                        _log_failure(f'[{login_id}] 탭 크래시로 드라이버 재시작')
+                        try:
+                            driver.quit()
+                        except Exception:
+                            pass
+                        driver = create_driver(enable_perf_log=True)
+                        try:
+                            relog = _try_cookie_login(driver, acct) or _esm_login(driver, acct.login_id, acct.password_enc)
+                            _enter_goods_iframe(driver)
+                        except Exception:
+                            pass
                     if ok2:
                         summary['fixed'] += 1
                         http_ok.append(t)
@@ -509,28 +542,54 @@ def run_targeted_fix(targets, log_fn=None, only_period=False):
                     else:
                         summary['failed'] += 1
                         failed_targets.append(t)
-                        _log(log_fn, f'  ❌ {t["product_no"]}(goods_no={t["goods_no"]}) 실패 — 패스')
-                        _log_failure(f'[{login_id}] {t["product_no"]}(goods_no={t["goods_no"]}) 타겟실행 실패')
+                        _log(log_fn, f'  ❌ {t["product_no"]}(goods_no={t["goods_no"]}) 2회 실패 — 패스')
+                        _log_failure(f'[{login_id}] {t["product_no"]}(goods_no={t["goods_no"]}) 타겟실행 2회 실패')
                     time.sleep(_PACE_SEC)
 
-                if http_ok:
-                    driver.switch_to.default_content()
-                    driver.get('https://www.esmplus.com/Home/v2/goods-manage')
-                    time.sleep(1.5)
-                    _enter_goods_iframe(driver)
-                    pnos = [t['product_no'] for t in http_ok]
-                    recheck = _lookup_disp_end_dates(driver, pnos, log_fn)
-                    _save_status(acct, recheck, log_fn)
-                    for t in http_ok:
-                        rm = recheck.get(t['product_no'], {})
-                        ok_state = rm.get('dispEndDate', '').startswith(_UNLIMITED_YEAR) if only_period else \
-                            not _needs_fix({'dispEndDate': rm.get('dispEndDate', ''), 'discount_type': rm.get('discount_type')})
-                        if ok_state:
-                            summary['verified'] += 1
-                        else:
-                            summary['verify_mismatch'] += 1
+                driver_dead = False
+                try:
+                    if http_ok:
+                        driver.switch_to.default_content()
+                        driver.get('https://www.esmplus.com/Home/v2/goods-manage')
+                        time.sleep(1.5)
+                        _enter_goods_iframe(driver)
+                        pnos = [t['product_no'] for t in http_ok]
+                        recheck = _lookup_disp_end_dates(driver, pnos, log_fn)
+                        _save_status(acct, recheck, log_fn)
+                        for t in http_ok:
+                            rm = recheck.get(t['product_no'], {})
+                            ok_state = rm.get('dispEndDate', '').startswith(_UNLIMITED_YEAR) if only_period else \
+                                not _needs_fix({'dispEndDate': rm.get('dispEndDate', ''), 'discount_type': rm.get('discount_type')})
+                            if ok_state:
+                                summary['verified'] += 1
+                            else:
+                                summary['verify_mismatch'] += 1
+                                failed_targets.append(t)
+                                _log_failure(f'[{login_id}] {t["product_no"]} 재조회 불일치(타겟실행)')
+                except Exception as e:
+                    # (2026-08-29 실측) driver.switch_to.default_content()에서 'tab crashed'가 나서
+                    # 전체 프로세스가 죽던 사고 — 재조회 검증만 건너뛰고(성공건은 이미 저장은 됐으니
+                    # verified 집계만 안 될 뿐) 드라이버를 새로 띄워 계속 진행.
+                    _log(log_fn, f'  ⚠ 재조회 중 예외(드라이버 재시작): {e}')
+                    _log_failure(f'[{login_id}] 재조회 중 예외로 드라이버 재시작: {e}')
+                    driver_dead = True
+
+                if driver_dead:
+                    _release()
+                    time.sleep(2)
+                    if not _acquire():
+                        for t in items[idx:]:
                             failed_targets.append(t)
-                            _log_failure(f'[{login_id}] {t["product_no"]} 재조회 불일치(타겟실행)')
+                        break
+                    try:
+                        login_ok = _login(acct)
+                    except Exception:
+                        login_ok = False
+                    if not login_ok:
+                        for t in items[idx:]:
+                            failed_targets.append(t)
+                        break
+                    continue
 
                 more_left = idx < len(items)
                 if more_left:
