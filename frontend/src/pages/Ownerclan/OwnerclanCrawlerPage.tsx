@@ -214,13 +214,13 @@ export default function OwnerclanCrawlerPage() {
   const handleWeeklyDownload = async (filename: string) => {
     try {
       const res = await api.get('/ownerclan/weekly-popular/download/', {
-        params: { filename },
+        params: { filename, as: 'xlsx' },
         responseType: 'blob',
       });
       const url = URL.createObjectURL(res.data);
       const link = document.createElement('a');
       link.href = url;
-      link.download = filename;
+      link.download = filename.replace(/\.zip$/i, '.xlsx');
       link.click();
       URL.revokeObjectURL(url);
     } catch {

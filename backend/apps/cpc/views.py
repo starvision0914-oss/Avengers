@@ -1126,6 +1126,7 @@ class OverviewView(views.APIView):
         # ── 스마트스토어 집계 ── /smartstore 페이지와 동일한 DashboardView 재사용(SalesRecord 기준).
         # 예전엔 SmartStoreSales/SmartStoreAdCost를 따로 집계해 /smartstore 페이지(SalesRecord 기준)와
         # 매출이 어긋났음 — 지마켓/11번가처럼 같은 뷰를 재사용해 항상 일치하도록 수정.
+        from django.db.models import Sum as _Sum
         from apps.smartstore.models import SmartStoreAccount as SSAccount
         from apps.smartstore.views import DashboardView as SSDashboardView
         ss_accounts = SSAccount.objects.filter(is_active=True).count()
@@ -1137,11 +1138,13 @@ class OverviewView(views.APIView):
         ss_orders = ss.get('total_orders', 0) or 0
         ss_ad = ss.get('total_ad_cost', 0) or 0
         ss_net = ss_settlement - ss_ad
+        ss_bal = SSAccount.objects.filter(is_active=True).aggregate(
+            b=_Sum('bizmoney_balance'))['b'] or 0                          # 스마트스토어 비즈머니(비즈월렛) 잔액
 
         markets.append({
             'key': 'smartstore', 'label': '스마트스토어', 'color': '#03c75a',
             'ad_cost': ss_ad, 'cpc': ss_cpc, 'ai': ss_ai,
-            'balance': 0,
+            'balance': ss_bal,
             'accounts': ss_accounts, 'normal': ss_accounts, 'failed': 0,
             'sales': ss_settlement, 'profit': ss_settlement, 'net_after_ad': ss_net,
             'orders': ss_orders, 'last_collected': None,
@@ -1186,7 +1189,7 @@ class OverviewView(views.APIView):
             # 지마켓이 옥션과 분리되면서(2026-08-27) 그랜드토탈에 옥션분(a_*)을 빠뜨리면
             # '지마켓 단독'으로 줄어든 만큼 전체 합계가 실제보다 작게 나오는 버그가 생겨 여기 추가.
             'ad_cost': g_ad + a_ad + e_ad + ss_ad,
-            'balance': g_bal + a_bal + e_bal,
+            'balance': g_bal + a_bal + e_bal + ss_bal,
             'accounts': g_total + e_total + ss_accounts + cp_accounts + lt_accounts,
             'normal': g_normal + e_normal + ss_accounts + cp_accounts + lt_accounts,
             'failed': g_failed + e_failed,

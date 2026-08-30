@@ -12,6 +12,8 @@ export interface SmartStoreAccount {
   is_active: boolean;
   display_order: number;
   purchase_rate: number;
+  bizmoney_balance?: number | null;
+  bizmoney_synced_at?: string | null;
 }
 
 export interface DashboardSummary {
@@ -28,12 +30,14 @@ export interface DashboardSummary {
   total_clicks: number;
   total_conversion: number;
   roas: number | null;
+  total_bizmoney: number;
 }
 
 export interface AccountRow {
   account_id: number;
   account_name: string;
   naver_ad_account_id?: string | null;
+  bizmoney_balance?: number | null;
   sales: number;
   settlement: number;
   orders: number;

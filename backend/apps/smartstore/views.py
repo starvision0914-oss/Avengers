@@ -40,6 +40,8 @@ def _account_serial(a):
         'purchase_rate': a.purchase_rate,
         'is_active': a.is_active,
         'display_order': a.display_order,
+        'bizmoney_balance': a.bizmoney_balance,
+        'bizmoney_synced_at': a.bizmoney_synced_at.isoformat() if a.bizmoney_synced_at else None,
     }
 
 
@@ -213,6 +215,7 @@ class DashboardView(APIView):
                 by_account[acc.id] = {'sales': 0, 'settlement': 0, 'orders': 0, 'commission': 0, 'cogs': 0, 'ad_cost': 0, 'ad_cpc': 0, 'ad_ai': 0}
 
         acc_naver_ad = {a.id: a.naver_ad_account_id for a in accounts_qs}
+        acc_bizmoney = {a.id: a.bizmoney_balance for a in accounts_qs}
 
         account_list = []
         for aid, row in by_account.items():
@@ -223,6 +226,7 @@ class DashboardView(APIView):
                 'account_id': aid,
                 'account_name': name,
                 'naver_ad_account_id': acc_naver_ad.get(aid),
+                'bizmoney_balance': acc_bizmoney.get(aid),
                 **row,
                 'excel_revenue': sales,
                 'roas': round(sales / ad * 100, 1) if ad > 0 else None,
@@ -245,6 +249,7 @@ class DashboardView(APIView):
         total_clicks = sum(v.get('clicks') or 0 for v in ad_by_type.values())
         total_conversion = sum(v.get('conversion') or 0 for v in ad_by_type.values())
         roas = round(total_sales / total_ad * 100, 1) if total_ad > 0 else None
+        total_bizmoney = sum(v for v in acc_bizmoney.values() if v is not None)
 
         return Response({
             'period': {'start': str(start), 'end': str(end)},
@@ -262,6 +267,7 @@ class DashboardView(APIView):
                 'total_clicks': total_clicks,
                 'total_conversion': total_conversion,
                 'roas': roas,
+                'total_bizmoney': total_bizmoney,
             },
             'by_account': account_list,
             'daily': [],

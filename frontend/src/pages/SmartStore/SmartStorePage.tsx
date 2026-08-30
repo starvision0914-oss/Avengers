@@ -313,6 +313,15 @@ export default function SmartStorePage() {
               <span className="text-[#888] mr-1">취소:</span>
               <span className="font-bold text-[#dc2626]">{fmtW(s?.total_cancel || 0)}원</span>
             </span>
+            {(s?.total_bizmoney || 0) > 0 && (
+              <>
+                <Sep />
+                <span>
+                  <span className="text-[#888] mr-1">비즈머니 잔액:</span>
+                  <span className="font-bold text-[#7c3aed]">{fmtW(s?.total_bizmoney || 0)}원</span>
+                </span>
+              </>
+            )}
             {accounts.filter(a => !a.has_pw).length > 0 && (
               <>
                 <Sep />
@@ -431,9 +440,16 @@ export default function SmartStorePage() {
                         </td>
                         <td className="px-4 py-2.5 text-center">
                           {row.naver_ad_account_id ? (
-                            <span className="inline-flex items-center gap-1 text-[14px] text-[#16a34a] font-semibold">
-                              ✓ 광고연결
-                            </span>
+                            <div className="flex flex-col items-center">
+                              <span className="inline-flex items-center gap-1 text-[14px] text-[#16a34a] font-semibold">
+                                ✓ 광고연결
+                              </span>
+                              {row.bizmoney_balance != null && (
+                                <span className="text-[13px] text-[#7c3aed] font-medium mt-0.5">
+                                  비즈머니 {fmtW(row.bizmoney_balance)}원
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <a
                               href="http://192.168.45.100:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000"

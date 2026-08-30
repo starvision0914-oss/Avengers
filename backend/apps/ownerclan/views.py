@@ -17,6 +17,45 @@ class _WorkspaceMixin:
         super().initial(request, *args, **kwargs)
 
 
+def _zip_to_single_xlsx(zip_path, zip_filename):
+    """zip 안의 .xlsx 파일(들)을 꺼내 엑셀 1개로 합친다.
+    1개면 그대로, 2개 이상이면 시트를 나눠 하나의 워크북으로 병합.
+    반환: (BytesIO, 파일명) — 엑셀이 없으면 (None, None)."""
+    import re
+    import zipfile
+    import openpyxl
+
+    with zipfile.ZipFile(zip_path) as zf:
+        xlsx_members = [n for n in zf.namelist() if n.lower().endswith('.xlsx')]
+        if not xlsx_members:
+            return None, None
+        xlsx_members.sort(reverse=True)  # 최신연도(2026) 먼저
+
+        base_name = os.path.splitext(zip_filename)[0]  # best_prod_2026-08-30
+
+        if len(xlsx_members) == 1:
+            data = zf.read(xlsx_members[0])
+            return io.BytesIO(data), f'{base_name}.xlsx'
+
+        merged = openpyxl.Workbook()
+        merged.remove(merged.active)
+        for member in xlsx_members:
+            data = zf.read(member)
+            src = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+            m = re.search(r'\((\d{4})\)', member)
+            sheet_title = m.group(1) if m else os.path.splitext(os.path.basename(member))[0]
+            sheet_title = sheet_title[:31]  # 엑셀 시트명 31자 제한
+            for src_ws in src.worksheets:
+                dst_ws = merged.create_sheet(title=sheet_title if len(src.worksheets) == 1 else f'{sheet_title}_{src_ws.title}'[:31])
+                for row in src_ws.iter_rows(values_only=True):
+                    dst_ws.append(row)
+
+        buf = io.BytesIO()
+        merged.save(buf)
+        buf.seek(0)
+        return buf, f'{base_name}.xlsx'
+
+
 def _pid_alive(pid):
     """pid 생존 확인. 종료됐지만 부모(Django)가 wait()하지 않아 좀비(Z)로 남은 경우는
     os.kill(pid, 0)이 예외 없이 성공해버리므로 반드시 죽은 것으로 취급해야 함."""
@@ -457,6 +496,7 @@ class OwnerclanWeeklyPopularView(APIView):
 
 
 class OwnerclanWeeklyPopularDownloadView(APIView):
+    """날짜별 원본(.zip) 다운로드. ?as=xlsx 를 붙이면 zip 안의 엑셀만 꺼내서(2개면 시트 2장으로 합쳐서) 바로 내려줌."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -472,6 +512,13 @@ class OwnerclanWeeklyPopularDownloadView(APIView):
         path = os.path.join(storage_dir, filename)
         if not os.path.isfile(path):
             raise Http404()
+
+        if request.query_params.get('as') == 'xlsx' and filename.lower().endswith('.zip'):
+            xlsx_buf, xlsx_name = _zip_to_single_xlsx(path, filename)
+            if xlsx_buf is not None:
+                return FileResponse(xlsx_buf, as_attachment=True, filename=xlsx_name)
+            # zip 안에 엑셀이 없으면 원본 그대로 폴백
+
         return FileResponse(open(path, 'rb'), as_attachment=True, filename=filename)
 
 

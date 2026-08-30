@@ -259,6 +259,91 @@ def suspend_product_api(channel_product_no: str, token: str):
     return put_resp.json()
 
 
+def _apply_common_fixups(op):
+    """suspend_product_api/update_price_api와 동일한 PUT 400 방지 보정(seoInfo/unitCapacity/인증정보)."""
+    da = op.setdefault('detailAttribute', {})
+    da.pop('seoInfo', None)
+    unit_cap = da.get('unitCapacity')
+    if unit_cap is None:
+        da['unitCapacity'] = {'unitPriceYn': False}
+    elif 'unitPriceYn' not in unit_cap:
+        unit_cap['unitPriceYn'] = False
+    certs = da.get('productCertificationInfos')
+    if isinstance(certs, list):
+        da['productCertificationInfos'] = [c for c in certs if c.get('certificationKindType')]
+        if not da['productCertificationInfos']:
+            da.pop('productCertificationInfos', None)
+
+
+def sync_stock_from_ownerclan(channel_product_no: str, token: str, ownerclan_item: dict):
+    """오너클랜 실재고(옵션별 status/quantity)를 스마트스토어 옵션(sellerManagerCode로 매칭)에 반영.
+    반환: {'changed': bool, 'new_status': str, 'detail': [...]}"""
+    url = NAVER_CHANNEL_PRODUCT_URL.format(channel_product_no=channel_product_no)
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+    get_resp = requests.get(url, headers=headers, timeout=30)
+    get_resp.raise_for_status()
+    data = get_resp.json()
+    op = data.get('originProduct', {})
+    da = op.setdefault('detailAttribute', {})
+    old_status = op.get('statusType')
+
+    oc_options = {str(o['key']): o for o in (ownerclan_item.get('options') or [])}
+    detail = []
+    any_available = False
+
+    option_info = da.get('optionInfo') or {}
+    combos = option_info.get('optionCombinations') or []
+
+    if combos:
+        # 네이버 규칙: "옵션가 0원 + 사용가능"인 옵션이 최소 1개 있어야 PUT이 통과된다(기준옵션).
+        # 그 기준옵션을 재고이유로 꺼버리면 전체 PUT이 400 나므로, 0원 옵션은 품절이어도 끄지 않는다.
+        zero_price_codes = {str(c.get('sellerManagerCode') or '') for c in combos if not c.get('price')}
+
+        for c in combos:
+            code = str(c.get('sellerManagerCode') or '')
+            oc_opt = oc_options.get(code)
+            if oc_opt and oc_opt.get('status') == 'available' and (oc_opt.get('quantity') or 0) > 0:
+                new_qty = int(oc_opt['quantity'])
+                if c.get('stockQuantity') != new_qty or not c.get('usable'):
+                    detail.append(f'옵션{code}: {c.get("stockQuantity")}→{new_qty}, usable={c.get("usable")}→True')
+                c['stockQuantity'] = new_qty
+                c['usable'] = True
+                any_available = True
+            elif code in zero_price_codes:
+                # 기준옵션(0원)은 오너클랜에서 품절이어도 usable은 유지(네이버 필수조건), 재고만 0으로.
+                if c.get('stockQuantity') != 0:
+                    detail.append(f'옵션{code}(기준옵션): {c.get("stockQuantity")}→0, usable 유지')
+                c['stockQuantity'] = 0
+            else:
+                if c.get('usable') and (c.get('stockQuantity') or 0) != 0:
+                    detail.append(f'옵션{code}: {c.get("stockQuantity")}→0(오너클랜 품절/미매칭)')
+                c['stockQuantity'] = 0
+                c['usable'] = False
+    else:
+        # 옵션 없는 단일상품 — 상품 전체 재고로 판단
+        item_available = ownerclan_item.get('status') == 'available'
+        if item_available:
+            any_available = True
+            op['stockQuantity'] = max(op.get('stockQuantity') or 0, 1)
+
+    new_status = 'SALE' if any_available else 'OUTOFSTOCK'
+    changed = new_status != old_status or bool(detail)
+    op['statusType'] = new_status
+
+    if not changed:
+        return {'changed': False, 'new_status': old_status, 'detail': []}
+
+    _apply_common_fixups(op)
+    put_resp = requests.put(
+        url,
+        json={'originProduct': op, 'smartstoreChannelProduct': data.get('smartstoreChannelProduct', {})},
+        headers=headers, timeout=30,
+    )
+    put_resp.raise_for_status()
+    return {'changed': True, 'new_status': new_status, 'detail': detail}
+
+
 def update_price_api(channel_product_no: str, new_price: int, token: str):
     """상품 판매가(salePrice)를 변경. suspend_product_api와 동일 GET→보정→PUT 패턴 재사용."""
     url = NAVER_CHANNEL_PRODUCT_URL.format(channel_product_no=channel_product_no)

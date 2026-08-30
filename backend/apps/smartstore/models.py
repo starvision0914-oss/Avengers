@@ -22,6 +22,8 @@ class SmartStoreAccount(models.Model):
     naver_ad_ai_account_id = models.CharField(max_length=50, blank=True, default='', help_text='광고센터 AI ad-account ID (billing 스크랩용)')
     naver_ad_ai_login_id = models.CharField(max_length=100, blank=True, default='', help_text='광고센터 AI 로그인 Naver ID (naver_ads_cookies.json 키)')
     purchase_rate = models.IntegerField(default=0, help_text='구매가율(%) — 예: 70 입력 시 구매가=매출×70%')
+    bizmoney_balance = models.IntegerField(null=True, blank=True, help_text='비즈머니(비즈월렛) 총 잔액(원) — ads.naver.com billing/balance 스크랩')
+    bizmoney_synced_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     # 11번가/지마켓과 동일한 취지의 크롤 정합성 체크(2026-08-24) — 상품 API 응답의
     # totalElements(사전체크)와 실제 DB에 반영된 건수를 비교해 크롤 누락을 조기 발견.
@@ -229,7 +231,10 @@ class SmartStoreNameOptLog(models.Model):
     (2026-08-29, 세트/지재권 오표기 방지를 위해 상세페이지 확인 없이는 처리하지 않는 원칙 적용)."""
     STATUS_CHOICES = [('done', '완료'), ('skipped', '스킵')]
     account = models.ForeignKey(SmartStoreAccount, on_delete=models.CASCADE, related_name='name_opt_logs')
-    product = models.ForeignKey(SmartStoreProduct, on_delete=models.CASCADE, related_name='name_opt_logs')
+    # product는 매일 새벽 재동기화(전체삭제+재생성)로 PK가 바뀌므로 FK를 신원 판별에 쓰지 않는다.
+    # channel_product_no(네이버 고유 상품번호, 재동기화돼도 불변)를 기준 식별자로 사용.
+    channel_product_no = models.CharField(max_length=50, db_index=True)
+    product = models.ForeignKey(SmartStoreProduct, on_delete=models.SET_NULL, null=True, blank=True, related_name='name_opt_logs')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES)
     fields_updated = models.CharField(max_length=100, blank=True, default='', help_text='예: name,tags,notice')
     reason = models.TextField(blank=True, default='', help_text='스킵 사유 또는 변경 요약')
@@ -241,8 +246,8 @@ class SmartStoreNameOptLog(models.Model):
         db_table = 'smartstore_name_opt_log'
         indexes = [
             models.Index(fields=['account', 'status']),
-            models.Index(fields=['product']),
+            models.Index(fields=['channel_product_no']),
         ]
 
     def __str__(self):
-        return f'[{self.account.display_name}] {self.product_id} {self.status}'
+        return f'[{self.account.display_name}] {self.channel_product_no} {self.status}'

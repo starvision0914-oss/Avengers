@@ -30,6 +30,24 @@ class Command(BaseCommand):
         from apps.cpc.models import LCodeStatus
         from crawlers import domemart_crawler as dm
 
+        # (2026-08-30) 이번 실행에 쓰인 옵션을 남겨서, 죽었다 워치독이 재개시킬 때 같은 옵션으로
+        # 다시 뜨게 함 — 안 남기면 기본값으로 재개돼 --all-status --recheck-days 0 같은 특수 옵션이
+        # 사라지고 '재확인대상 0'으로 조용히 조기종료되던 사고가 있었음.
+        try:
+            cmd_args = []
+            if opts.get('limit'):
+                cmd_args += ['--limit', str(opts['limit'])]
+            if opts.get('recheck_days') != 14:
+                cmd_args += ['--recheck-days', str(opts['recheck_days'])]
+            if opts.get('only_status'):
+                cmd_args += ['--only-status', opts['only_status']]
+            if opts.get('all_status'):
+                cmd_args += ['--all-status']
+            with open('/tmp/check_domemart_lcodes.cmdline', 'w') as f:
+                f.write(' '.join(cmd_args))
+        except Exception:
+            pass
+
         # 락 획득 — 이미 실행 중이면 즉시 종료
         if os.path.exists(LOCKFILE):
             try:

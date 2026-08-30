@@ -661,6 +661,45 @@ def fetch_ad_cost(driver, account, start_date: date, end_date: date, log_fn=None
     return fetch_ad_cost_billing(driver, account, start_date, end_date, log_fn)
 
 
+def fetch_bizmoney_balance(driver, account, log_fn=None):
+    """ads.naver.com billing/balance 페이지의 '총 비즈머니 잔액'(비즈월렛) 스크랩.
+    naver_ad_account_id(CPC) 우선, 없으면 naver_ad_ai_account_id(AI) 사용.
+    Returns: int(원) 또는 None(계정정보 없음/스크랩 실패)."""
+    log = log_fn or logger.info
+
+    ad_account_id = account.naver_ad_account_id or account.naver_ad_ai_account_id
+    ad_login_id = account.naver_ad_login_id or account.naver_ad_ai_login_id
+    if not ad_account_id:
+        log(f'[비즈머니] {account.display_name}: 광고계정 ID 미설정 — 건너뜀')
+        return None
+
+    _inject_naver_ads_cookies(driver, log, login_id=ad_login_id)
+    url = SEARCHAD_BILLING_URL.format(ad_account_id=ad_account_id)
+
+    for attempt in range(1, 3):
+        driver.get(url)
+        time.sleep(4)
+        if 'nid.naver.com' in driver.current_url or 'accounts.naver.com' in driver.current_url:
+            log('[비즈머니] 쿠키 만료 — naver_ads_cookies.json 갱신 필요')
+            return None
+        try:
+            text = driver.execute_script(
+                "var el = document.querySelector('.BillingBalance_amount__9_2Qd');"
+                "return el ? el.textContent.trim() : null;"
+            )
+        except Exception:
+            text = None
+        if text:
+            try:
+                return int(text.replace(',', ''))
+            except ValueError:
+                pass
+        log(f'[비즈머니] {account.display_name} 잔액 파싱 실패, 재시도 ({attempt}/2)')
+        time.sleep(3)
+
+    return None
+
+
 # ──────────────────────────────────────────
 # 메인 크롤링 함수
 # ──────────────────────────────────────────

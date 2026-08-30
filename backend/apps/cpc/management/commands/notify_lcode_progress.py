@@ -74,8 +74,20 @@ class Command(BaseCommand):
         resumed = False
         if not running and not done:
             try:
+                # (2026-08-30) 재개시 옵션 없이 기본값(status_filter=True, recheck_days=14)으로
+                # 띄워서, --all-status --recheck-days 0 같은 특수 옵션으로 돌던 전체재조회가
+                # 죽었다 재개될 때 "할 일 없음"으로 조용히 끝나버리던 사고 재발방지 — check_domemart_lcodes가
+                # 시작할 때 자기 옵션을 남겨둔 마커 파일이 있으면 그대로 재사용해 재개한다.
+                cmd = ['python3', 'manage.py', 'check_domemart_lcodes']
+                try:
+                    with open('/tmp/check_domemart_lcodes.cmdline', encoding='utf-8') as f:
+                        saved_args = f.read().split()
+                    if saved_args:
+                        cmd = ['python3', 'manage.py', 'check_domemart_lcodes'] + saved_args
+                except FileNotFoundError:
+                    pass
                 subprocess.Popen(
-                    ['python3', 'manage.py', 'check_domemart_lcodes'],
+                    cmd,
                     stdout=open('/tmp/check_domemart_lcodes.log', 'a'),
                     stderr=subprocess.STDOUT, start_new_session=True)
                 resumed = True
