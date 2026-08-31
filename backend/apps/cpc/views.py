@@ -6722,7 +6722,7 @@ class GmarketRoasAccountsView(views.APIView):
     def get(self, request):
         from django.db.models import Sum, Count
         from django.core.cache import cache as _cache
-        from apps.cpc.models import GmarketProductAdCost, CrawlerAccount
+        from apps.cpc.models import GmarketProductAdCost, CrawlerAccount, GmarketMyProduct
         ck = _gmkt_cache_key('gmkt_roasacc', request)
         cached = _cache.get(ck)
         if cached is not None:
@@ -6731,6 +6731,19 @@ class GmarketRoasAccountsView(views.APIView):
         mq = _gmkt_month_q(months)
         name_map = {a.login_id: (a.seller_name or a.login_id)
                     for a in CrawlerAccount.objects.filter(platform='gmarket')}
+        # 등록상품수 = 실제 판매중인 전체 상품수(광고 유무 무관) — 광고상품수(cpc_products/ai_products,
+        # 광고비 데이터가 있는 상품 건수)와 혼동돼 "상품수가 실제와 다르다"는 문의가 있어 분리 추가
+        # (2026-08-31 사용자 요청).
+        gmkt_products_map = {
+            r['account__login_id']: r['c']
+            for r in GmarketMyProduct.objects.filter(status_type='판매중')
+                .exclude(product_no__startswith='F').values('account__login_id').annotate(c=Count('id'))
+        }
+        auction_products_map = {
+            r['account__login_id']: r['c']
+            for r in GmarketMyProduct.objects.filter(status_type='판매중', product_no__startswith='F')
+                .values('account__login_id').annotate(c=Count('id'))
+        }
         from apps.cpc.models import protected_login_ids
         test_ids = protected_login_ids('gmarket')
         # 계정 단위 = seller_id(실제 판매자ID) 기준. login_id(크롤 로그인 계정)로 묶으면 안 되는 이유:
@@ -6757,7 +6770,9 @@ class GmarketRoasAccountsView(views.APIView):
                 'login_id': sid, 'seller_name': name_map.get(sid, sid),
                 'is_test_account': sid in test_ids,
                 'cpc_cost': 0, 'ai_cost': 0, 'cpc_conv': 0, 'ai_conv': 0,
-                'cpc_products': 0, 'ai_products': 0})
+                'cpc_products': 0, 'ai_products': 0,
+                'gmkt_products': gmkt_products_map.get(sid, 0),
+                'auction_products': auction_products_map.get(sid, 0)})
             d[f"{r['ad_type']}_cost"] = r['cost'] or 0
             d[f"{r['ad_type']}_conv"] = r['conv'] or 0
             d[f"{r['ad_type']}_products"] = r['n'] or 0

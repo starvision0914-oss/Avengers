@@ -51,6 +51,9 @@ echo "$(date '+%F %T') 전계정 크롤 종료 알림" >> "$LOG"
 /usr/bin/python3 manage.py notify_crawl_done --platform gmarket --started "$START" >> "$LOG" 2>&1
 echo "$(date '+%F %T') 완료" >> "$LOG"
 
-if [ "$HOUR" -ge 16 ] && [ "$HOUR" -le 20 ]; then
+# (2026-08-31) 16~19시에 재개하면 바로 다음시각 강제선점에 또 죽어 매시간
+# "재개→즉시재종료"만 반복하며 adcost_month가 며칠째 사실상 수집을 못 했다(주말 데이터 누락 원인).
+# 우선순위 창(16~20시)이 완전히 끝나는 20시 회차 이후에만 1회 재개해 방해받지 않고 끝까지 돌게 한다.
+if [ "$HOUR" -eq 20 ]; then
     /usr/bin/python3 manage.py gmarket_resume_preempted >> "$LOG" 2>&1
 fi

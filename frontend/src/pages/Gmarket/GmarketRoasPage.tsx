@@ -6,7 +6,7 @@ import GmktKeywordDetailModal from '../../components/gmarket/GmktKeywordDetailMo
 interface AcctRow {
   login_id: string; seller_name: string; is_test_account?: boolean;
   cpc_cost: number; ai_cost: number; cpc_conv: number; ai_conv: number;
-  cpc_products: number; ai_products: number;
+  cpc_products: number; ai_products: number; gmkt_products: number; auction_products: number;
   cpc_roas: number; ai_roas: number;
   total_cost: number; total_conv: number; roas: number;
   real_sales: number; real_roas: number;
@@ -652,13 +652,14 @@ export default function GmarketRoasPage() {
               <th onClick={() => acctSortClick('roas')} className="px-2 py-2 text-right cursor-pointer hover:text-[#1d4ed8]">합계 ROAS{acctArrow('roas')}</th>
               <th onClick={() => acctSortClick('real_sales')} className="px-2 py-2 text-right cursor-pointer hover:text-[#1d4ed8]">실매출{acctArrow('real_sales')}</th>
               <th onClick={() => acctSortClick('real_roas')} className="px-2 py-2 text-right cursor-pointer hover:text-[#1d4ed8]">실 ROAS{acctArrow('real_roas')}</th>
-              <th onClick={() => acctSortClick('cpc_products')} className="px-2 py-2 text-right cursor-pointer hover:text-[#1d4ed8]">상품수(CPC/AI){acctArrow('cpc_products')}</th>
+              <th onClick={() => acctSortClick('gmkt_products')} className="px-2 py-2 text-right cursor-pointer hover:text-[#1d4ed8]">등록상품수(지마켓/옥션){acctArrow('gmkt_products')}</th>
+              <th onClick={() => acctSortClick('cpc_products')} className="px-2 py-2 text-right cursor-pointer hover:text-[#1d4ed8]">광고상품수(CPC/AI){acctArrow('cpc_products')}</th>
               <th className="px-2 py-2 text-center">상세</th>
             </tr>
           </thead>
           <tbody>
-            {loading && <tr><td colSpan={11} className="text-center py-6 text-[#888]">불러오는 중…</td></tr>}
-            {!loading && accts.length === 0 && <tr><td colSpan={11} className="text-center py-6 text-[#888]">데이터가 없습니다. (크롤 후 표시)</td></tr>}
+            {loading && <tr><td colSpan={12} className="text-center py-6 text-[#888]">불러오는 중…</td></tr>}
+            {!loading && accts.length === 0 && <tr><td colSpan={12} className="text-center py-6 text-[#888]">데이터가 없습니다. (크롤 후 표시)</td></tr>}
             {sortedAccts.map(a => (
               <tr key={a.login_id} onClick={() => openDetail(a.login_id, a.seller_name)}
                 className="border-t hover:bg-[#f0f7ff] cursor-pointer">
@@ -671,6 +672,7 @@ export default function GmarketRoasPage() {
                 <td className={`px-2 py-1.5 text-right ${roasColor(a.roas)}`}>{a.roas}%</td>
                 <td className="px-2 py-1.5 text-right text-[#1d7a46]">{formatKRW(a.real_sales)}</td>
                 <td className={`px-2 py-1.5 text-right ${roasColor(a.real_roas)}`}>{a.real_roas}%</td>
+                <td className="px-2 py-1.5 text-right font-semibold">{a.gmkt_products.toLocaleString()}/{a.auction_products.toLocaleString()}</td>
                 <td className="px-2 py-1.5 text-right text-[#666]">{a.cpc_products}/{a.ai_products}</td>
                 <td className="px-2 py-1.5 text-center">
                   <button onClick={e => { e.stopPropagation(); openDetail(a.login_id, a.seller_name); }}
