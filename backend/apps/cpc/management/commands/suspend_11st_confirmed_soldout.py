@@ -108,6 +108,17 @@ class Command(BaseCommand):
         result = suspend_only(to_suspend, mode='real', log_fn=lambda m: self.stdout.write(m))
         self.stdout.write(self.style.SUCCESS(f'=== 완료: {result} ==='))
 
-        # 실제 반영 성공분만 DB 상태도 판매중지로 동기화(다음날 크롤 전까지 대시보드 정합성 유지)
-        product_nos = [t['product_no'] for t in to_suspend]
-        ElevenMyProduct.objects.filter(product_no__in=product_nos, status_type='품절').update(status_type='판매중지')
+        # 실제로 100% 성공(applied==requested)한 "계정" 소속 상품만 DB도 판매중지로 동기화.
+        # suspend_only는 계정 단위 집계만 반환하고 상품별 성공여부는 모르므로, 부분성공/중단된
+        # 계정의 상품은 손대지 않고 다음 실행에서 그대로 재시도되게 남겨둔다(2026-09-01 버그 수정 —
+        # 이전엔 시작시점 전체 목표를 무조건 판매중지로 찍어, 실제 미처리 계정 상품까지 DB만
+        # 잘못 판매중지로 표시되는 사고가 있었음).
+        fully_done_accounts = {
+            r['eleven_id'] for r in result.get('results', [])
+            if r.get('applied', 0) == r.get('requested', 0) and r.get('failed_batches', 0) == 0
+        }
+        product_nos = [t['product_no'] for t in to_suspend if t['login_id'] in fully_done_accounts]
+        updated = ElevenMyProduct.objects.filter(
+            product_no__in=product_nos, status_type='품절'
+        ).update(status_type='판매중지') if product_nos else 0
+        self.stdout.write(f'DB 동기화: 완전성공계정 {len(fully_done_accounts)}개 / {updated}건 판매중지로 반영')
