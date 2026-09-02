@@ -3,6 +3,19 @@ import { PlayCircle } from 'lucide-react';
 import api from '../../api/client';
 import { formatKRW } from '../../utils/format';
 
+interface LossRow {
+  account_id: number;
+  id: number;
+  product_no: string;
+  channel_product_no: string;
+  seller_code: string;
+  name: string;
+  cost: number;
+  clicks: number;
+  sales: number;
+  roas: number;
+}
+
 interface Row {
   account_id: number;
   account_name: string;
@@ -91,6 +104,31 @@ export default function NaverRoasPage() {
   const [sortKey, setSortKey] = useState<SortKey>('cost');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [copied, setCopied] = useState(false);
+
+  // ── 실매출 기준 적자상품(판매중지) — 11번가/지마켓과 달리 광고센터 전환매출이 아니라
+  // 실제 정산매출로 판정(오탐 방지). 조건: ROAS≤100 · 광고비≥3000 · 클릭≥10 (이번달)
+  const [showLoss, setShowLoss] = useState(false);
+  const [lossRows, setLossRows] = useState<LossRow[]>([]);
+  const [lossLoading, setLossLoading] = useState(false);
+  const [lossMsg, setLossMsg] = useState('');
+  const lossParams = { roas_max: 100, cost_min: 3000, clicks_min: 10 };
+
+  const loadLoss = useCallback(() => {
+    setLossLoading(true);
+    api.get('/smartstore/loss-products/', { params: lossParams })
+      .then(r => setLossRows(r.data.items || []))
+      .finally(() => setLossLoading(false));
+  }, []);
+
+  const openLoss = () => { setShowLoss(true); setLossMsg(''); loadLoss(); };
+
+  const suspendLoss = () => {
+    if (!lossRows.length) { alert('대상 적자상품이 없습니다.'); return; }
+    if (!confirm(`실매출 ROAS≤100% · 광고비≥3,000원 상품 ${lossRows.length}개를 판매중지할까요?`)) return;
+    api.post('/smartstore/loss-products/suspend/', lossParams)
+      .then(r => setLossMsg(r.data.message || '판매중지 시작됨'))
+      .catch(e => setLossMsg(e?.response?.data?.message || '판매중지 요청 실패'));
+  };
 
   useEffect(() => {
     api.get('/smartstore/accounts/').then(r =>
@@ -225,6 +263,10 @@ export default function NaverRoasPage() {
 
         {/* 복사 / 엑셀 */}
         <div className="flex gap-1.5 ml-auto">
+          <button onClick={openLoss} title="실매출 기준(광고센터 전환매출 아님) — ROAS≤100 · 광고비≥3,000 · 클릭≥10 (이번달)"
+            className="px-3 py-1.5 text-[14px] font-bold text-white rounded bg-[#c2410c] hover:bg-[#9a3412]">
+            🛑 적자상품 판매중지
+          </button>
           <button onClick={doCopy}
             className="px-3 py-1.5 text-[14px] rounded border border-[#ddd] text-[#555] hover:text-[#222]">
             {copied ? '✓ 복사됨' : '복사'}
@@ -303,6 +345,48 @@ export default function NaverRoasPage() {
         </div>
       </div>
       </>}
+
+      {/* ── 적자상품(실매출기준) 판매중지 모달 ── */}
+      {showLoss && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowLoss(false)}>
+          <div className="bg-white rounded-lg shadow-xl w-[900px] max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 px-5 py-3 border-b border-[#eee]">
+              <h3 className="text-[15px] font-bold text-[#222]">적자상품 (실매출 기준) — ROAS≤100% · 광고비≥3,000원 · 클릭≥10</h3>
+              <button onClick={suspendLoss} disabled={lossLoading || !lossRows.length}
+                className="ml-auto px-3 py-1.5 text-[13px] font-bold text-white rounded bg-[#c2410c] hover:bg-[#9a3412] disabled:opacity-40">
+                🛑 전체 판매중지
+              </button>
+              <button onClick={() => setShowLoss(false)} className="px-2 py-1 text-[#999] hover:text-[#333]">✕</button>
+            </div>
+            {lossMsg && <div className="px-5 py-2 text-[13px] text-[#c2410c] bg-[#fff7ed] border-b border-[#fed7aa]">{lossMsg}</div>}
+            <div className="overflow-auto flex-1">
+              <table className="w-full border-collapse">
+                <thead className="sticky top-0 bg-[#f5f6f8]">
+                  <tr>
+                    {['상품번호', '상품명', '광고비', '실매출', 'ROAS', '클릭'].map((h, i) => (
+                      <th key={h} className={`px-3 py-2 text-[12px] font-semibold text-[#555] border-b ${i >= 2 ? 'text-right' : 'text-left'}`}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#f3f4f6]">
+                  {lossLoading && <tr><td colSpan={6} className="text-center py-10 text-[#bbb]">조회 중...</td></tr>}
+                  {!lossLoading && lossRows.length === 0 && <tr><td colSpan={6} className="text-center py-10 text-[#bbb]">대상 적자상품이 없습니다.</td></tr>}
+                  {lossRows.map(r => (
+                    <tr key={`${r.account_id}-${r.id}`}>
+                      <td className="px-3 py-2 text-[13px]">{r.product_no}</td>
+                      <td className="px-3 py-2 text-[13px] max-w-[260px] truncate" title={r.name}>{r.name}</td>
+                      <td className="px-3 py-2 text-[13px] text-right text-[#f97316] font-semibold">{formatKRW(r.cost)}</td>
+                      <td className="px-3 py-2 text-[13px] text-right">{formatKRW(r.sales)}</td>
+                      <td className="px-3 py-2 text-[13px] text-right text-[#dc2626] font-semibold">{r.roas}%</td>
+                      <td className="px-3 py-2 text-[13px] text-right">{r.clicks.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

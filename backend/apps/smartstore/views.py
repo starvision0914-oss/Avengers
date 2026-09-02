@@ -724,6 +724,78 @@ class PriceCapApplyView(APIView):
         return Response({'status': 'started', 'message': msg, 'accounts': len(store_groups), 'total': len(targets)})
 
 
+def _smartstore_product_ad_rows(account_id=None, cost_min=0, clicks_min=0):
+    """스마트스토어 상품별 광고비+실매출 ROAS — 필터 없이 전체 반환(11번가 _eleven_product_rows와
+    동일 개념의 범용 버전). _smartstore_loss_rows는 이 함수에 적자필터를 더한 하위호환 래퍼.
+    반환: [{account_id, id, product_no, channel_product_no, seller_code, name,
+            cost, clicks, sales, roas, net_profit}...]"""
+    from apps.cpc.views import _bare_seller_code
+
+    today = date.today()
+    since = today.replace(day=1)
+
+    base_qs = NaverAdProductReport.objects.filter(since_date=since)
+    if account_id:
+        base_qs = base_qs.filter(account_id=account_id)
+    latest_until = base_qs.aggregate(Max('until_date'))['until_date__max']
+    ad_qs = base_qs.filter(until_date=latest_until) if latest_until else base_qs.none()
+    agg = {}
+    for r in ad_qs.values('account_id', 'product_no').annotate(
+        cost=Sum('cost'), clicks=Sum('click'), conv_amount=Sum('conversion_amount'),
+    ):
+        key = (r['account_id'], r['product_no'])
+        a = agg.setdefault(key, {'cost': 0, 'clicks': 0})
+        a['cost'] += r['cost'] or 0
+        a['clicks'] += r['clicks'] or 0
+
+    prod_qs = SmartStoreProduct.objects.filter(
+        channel_product_no__in={k[1] for k in agg}, status_type='SALE',
+    ).select_related('account')
+    if account_id:
+        prod_qs = prod_qs.filter(account_id=account_id)
+    prod_by_key = {(p.account_id, p.channel_product_no): p for p in prod_qs}
+
+    codes = set()
+    for p in prod_by_key.values():
+        if p.seller_management_code:
+            codes.add(p.seller_management_code)
+            codes.add(_bare_seller_code(p.seller_management_code))
+    sales_by_code = {}
+    cost_by_code = {}
+    if codes:
+        d_from = since - datetime.timedelta(days=45)
+        sr_qs = SalesRecord.objects.filter(platform='smartstore', product_code__in=list(codes),
+                                            order_date__gte=d_from, order_date__lte=today)
+        for s in sr_qs.values('product_code').annotate(s=Sum('total_price'), c=Sum('cost')):
+            sales_by_code[s['product_code']] = s['s'] or 0
+            cost_by_code[s['product_code']] = s['c'] or 0
+
+    rows = []
+    for (aid, pno), a in agg.items():
+        p = prod_by_key.get((aid, pno))
+        if not p:
+            continue
+        cost = a['cost']; clicks = a['clicks']
+        sc = p.seller_management_code or ''
+        mapped = bool(sc)
+        if not mapped:
+            continue
+        keys = {sc, _bare_seller_code(sc)}
+        sales = sum(sales_by_code.get(x, 0) for x in keys)
+        purchase_cost = sum(cost_by_code.get(x, 0) for x in keys)
+        roas = round(sales / cost * 100, 2) if cost else 0
+        net_profit = sales - purchase_cost - cost
+        if cost < cost_min or clicks < clicks_min:
+            continue
+        rows.append({
+            'account_id': aid, 'id': p.id, 'product_no': p.product_no,
+            'channel_product_no': pno, 'seller_code': sc,
+            'name': p.name, 'cost': cost, 'clicks': clicks, 'sales': sales,
+            'roas': roas, 'net_profit': net_profit,
+        })
+    return rows
+
+
 def _smartstore_loss_rows(account_id=None, roas_max=100, cost_min=2000, clicks_min=10):
     """스마트스토어 상품별 적자 판정 — 11번가(_eleven_product_rows)와 동일 원칙: 광고센터
     전환매출이 아니라 **실매출(SalesRecord, 정산 기준)** 로 ROAS를 계산해 오탐(광고센터엔 안
@@ -803,6 +875,42 @@ def _smartstore_loss_rows(account_id=None, roas_max=100, cost_min=2000, clicks_m
             'name': p.name, 'cost': cost, 'clicks': clicks, 'sales': sales, 'roas': roas,
         })
     return rows
+
+
+class ProductAdCostView(APIView):
+    """스마트스토어 상품별 광고비 — 적자/흑자/전체 3분류(11번가 상품별광고비 화면과 동일 개념).
+    ?account_id=&mode=all|loss|high&export=1(CSV)."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import csv
+        from django.http import HttpResponse
+
+        account_id = request.query_params.get('account_id')
+        mode = request.query_params.get('mode') or 'all'
+        rows = _smartstore_product_ad_rows(account_id=int(account_id) if account_id else None)
+
+        if mode == 'loss':
+            rows = [r for r in rows if r['net_profit'] < 0]
+            rows.sort(key=lambda r: r['net_profit'])
+        elif mode == 'high':
+            rows = [r for r in rows if r['net_profit'] > 0]
+            rows.sort(key=lambda r: -r['net_profit'])
+        else:
+            rows.sort(key=lambda r: -r['cost'])
+
+        if request.query_params.get('export'):
+            resp = HttpResponse(content_type='text/csv; charset=utf-8')
+            resp['Content-Disposition'] = f'attachment; filename="smartstore_상품별광고비_{mode}_{date.today()}.csv"'
+            resp.write('﻿')
+            w = csv.writer(resp)
+            w.writerow(['계정ID', '상품번호', '판매자코드', '상품명', '광고비', '클릭수', '실매출', 'ROAS(%)', '순익'])
+            for r in rows:
+                w.writerow([r['account_id'], r['product_no'], r['seller_code'], r['name'],
+                            r['cost'], r['clicks'], r['sales'], r['roas'], r['net_profit']])
+            return resp
+
+        return Response({'total': len(rows), 'mode': mode, 'items': rows})
 
 
 class LossProductsView(APIView):

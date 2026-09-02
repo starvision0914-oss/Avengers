@@ -32,12 +32,21 @@ def classify_11st_description(desc):
     # '서버이용료 결제' 등 다른 수수료 항목과 헷갈리지 않게 정확한 문자열로만 매칭.
     if '수수료결제' in desc:
         return 'CPC'
+    # 서버이용료 — 지마켓 '서버비용'과 동일 성격의 광고비. 2026-09-02까지 OTHERS로 새어
+    # 광고비 집계에서 누락되던 것 발견·수정(15건, -1,155,000원).
+    if '서버이용료' in desc:
+        return 'CPC'
     if '프로모션' in desc or '보상' in desc:
         return 'REWARD'
     if '충전' in desc:
         return 'CHARGE'
     if '미수금상환' in desc or '정산' in desc or '입금' in desc:
         return 'SETTLE'
+    # 안전망: 위 규칙에 못 걸려도 '광고'라는 글자가 있으면 광고비로 집계.
+    # 11번가가 광고상품명을 바꿔도(지마켓 AI매출업→AI Product AD 사례처럼) 개별 규칙
+    # 추가가 늦어 그 사이 누락되는 걸 방지.
+    if '광고' in desc:
+        return 'CPC'
     return 'OTHERS'
 
 def wait_for_download(directory, timeout=60, ext='.xls'):

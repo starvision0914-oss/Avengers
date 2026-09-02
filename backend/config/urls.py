@@ -43,6 +43,7 @@ urlpatterns = [
     path('api/tistory/', include('apps.tistory_blog.urls')),
     path('api/coupang/', include('apps.coupang.urls')),
     path('api/lotteon/', include('apps.lotteon.urls')),
+    path('api/toss/', include('apps.toss.urls')),
     # smsApp 호환 (root /api/settings/)
     path('api/settings/', SmsSettingsListView.as_view()),
     # 야구단 매니저 게임 (독립 앱, 어벤저스 API/데이터와 분리)

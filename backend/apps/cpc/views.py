@@ -5956,6 +5956,81 @@ class ElevenAuthStatusView(views.APIView):
         return Response({'accounts': result, 'running': running, 'running_ids': running_ids})
 
 
+def _fifo_remaining_by_row_id(seller_id, cost_type):
+    """(seller_id, cost_type) 전체 거래를 시각순으로 훑어 선입선출로 시뮬레이션.
+    양수(+) 거래마다 새 '버킷'을 열고, 음수(-) 거래는 가장 오래된 버킷부터 순서대로 깎는다.
+    반환: {그 양수 거래의 row.id: 지금 시점 그 버킷에 남은 금액}.
+
+    실측(2026-09-02, tmxk24)에서 누적잔액이 중간에 마이너스(-5,318,600원)까지 내려갔던 계정 발견
+    — 버킷이 없을 때도 차감(마이너스 사용/외상)이 계속 일어나고 나중에 '셀러미수금상환' 등으로
+    메꿔지는 패턴. 이걸 못 잡으면 예전 버킷들이 실제로는 이미 다 썼는데도 '안 썼다'고 잘못 남음
+    → deficit(외상금액) 이월: 버킷이 부족한 채로 차감되면 deficit에 쌓아두고, 다음 입금이
+    들어올 때 그 deficit부터 먼저 메꾼 뒤 남는 부분만 새 버킷으로 잡는다.
+
+    가정: 11번가가 실제로 이 순서(오래된 것부터)로 소진시킨다는 보장은 없음 — 업체 내부
+    소진순서를 알 수 없어 가장 통상적인 방식(선입선출)으로 근사한 값."""
+    rows = list(ElevenCostHistory.objects.filter(seller_id=seller_id, cost_type=cost_type)
+                .order_by('transaction_datetime', 'seq'))
+    buckets = []  # [row_id, remaining] — transaction_datetime 순서 유지
+    remaining_by_id = {}
+    deficit = 0
+    for r in rows:
+        if r.amount > 0:
+            amt = r.amount
+            if deficit > 0:
+                pay = min(deficit, amt)
+                deficit -= pay
+                amt -= pay
+            b = [r.id, amt]
+            buckets.append(b)
+            remaining_by_id[r.id] = b
+        elif r.amount < 0:
+            need = -r.amount
+            for b in buckets:
+                if need <= 0:
+                    break
+                if b[1] <= 0:
+                    continue
+                take = min(b[1], need)
+                b[1] -= take
+                need -= take
+            if need > 0:
+                deficit += need
+    return {rid: b[1] for rid, b in remaining_by_id.items()}
+
+
+class ElevenPointExpiringView(views.APIView):
+    """유효기간이 걸린 셀러포인트/캐시(광고포인트 등) 중 아직 안 지난 것 — 대시보드 상단 요약용.
+    남은금액은 계정 전체잔액이 아니라 그 건(포인트 지급)만 선입선출로 추적한 값(_fifo_remaining_by_row_id).
+    만료임박순(가까운 날짜부터) 정렬."""
+    def get(self, request):
+        from apps.cpc.models import CrawlerAccount
+        from django.utils import timezone
+        today = timezone.localdate()
+        qs = list(ElevenCostHistory.objects
+                  .filter(valid_until__isnull=False, valid_until__gte=today)
+                  .order_by('valid_until'))
+        names = {a.login_id: (a.seller_name or a.login_id)
+                 for a in CrawlerAccount.objects.filter(platform='11st')}
+
+        remaining_map = {}   # (seller_id, cost_type) -> {row_id: remaining}
+        for r in qs:
+            key = (r.seller_id, r.cost_type)
+            if key not in remaining_map:
+                remaining_map[key] = _fifo_remaining_by_row_id(r.seller_id, r.cost_type)
+
+        result = [{
+            'seller_id': r.seller_id,
+            'seller_name': names.get(r.seller_id, r.seller_id),
+            'amount': r.amount,
+            'remaining': remaining_map[(r.seller_id, r.cost_type)].get(r.id, 0),
+            'valid_until': r.valid_until.isoformat(),
+            'days_left': (r.valid_until - today).days,
+            'description': r.raw_description,
+        } for r in qs]
+        return Response({'items': result})
+
+
 class ElevenVerifyOtpView(views.APIView):
     """특정 계정 또는 만료계정 전체 OTP 인증 트리거 (백그라운드)."""
     def post(self, request):

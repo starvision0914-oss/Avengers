@@ -195,19 +195,29 @@ def _esm_login(driver, eid, pw):
 
 def _classify(comment):
     """차감내역 분류 — 광고비 3종(CPC/AI매출업/서버비용) + 비광고.
-    지마켓 SdCodeNm은 소문자('cpc광고구매')라 대소문자 무시 비교."""
+    지마켓 SdCodeNm은 소문자('cpc광고구매')라 대소문자 무시 비교.
+    2026-08-24부터 'AI매출업'이 'AI Product AD 광고구매'로 명칭 변경(계정별 순차 전환,
+    2026-08-28 이후 rejoice911 등에서 AI매출업 완전 소멸·AI Product AD로 대체 실측) —
+    안 잡으면 광고비 집계에서 통째로 누락(기타 처리)됨. AI매출업과 동일 예산이므로 같은 분류로 합산."""
     c = comment or ''
     cl = c.lower().replace(' ', '')
-    if 'ai매출업' in cl:
+    if 'ai매출업' in cl or 'aiproductad' in cl:
         return 'AI매출업'
     if '서버' in c:               # 서버비용/서버이용료
         return '서버비용'
     if 'cpc' in cl:
         return 'CPC'
+    if '전시권' in c or '노출보장형' in c or '키워드플러스' in c:  # 키워드/노출 유상상품 — CPC류로 합산
+        return 'CPC'
     if '전환' in c:
         return '예치금전환'
     if '정산' in c or '입금' in c or '적립' in c:
         return '정산'
+    # 안전망: 위 규칙에 못 걸려도 '광고'/영문 단어 'AD'가 있으면 광고비로 집계.
+    # 지마켓이 광고상품명을 바꿀 때마다(AI매출업→AI Product AD 사례) 개별 규칙 추가가 늦어
+    # 그 사이 누락되는 걸 방지 — 이름이 또 바뀌어도 '광고'/'AD' 문구만 있으면 잡힘.
+    if '광고' in c or 'AD' in c.upper().split():
+        return 'CPC'
     return '기타'
 
 

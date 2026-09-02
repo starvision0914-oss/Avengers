@@ -45,7 +45,7 @@ from .views import (
     GmarketLossProductsView, GmarketLossMarkDeletedView, GmarketLossDeleteView,
     GmarketKeywordCrawlView, GmarketKeywordUploadView, GmarketKeywordStatusView,
     GmarketKeywordCumulativeView, GmarketFocusTargetsView,
-    ElevenAuthStatusView, ElevenVerifyOtpView,
+    ElevenAuthStatusView, ElevenVerifyOtpView, ElevenPointExpiringView,
 )
 
 router = DefaultRouter()
@@ -178,5 +178,6 @@ urlpatterns = [
     path('eleven-grades-latest/', ElevenGradeLatestView.as_view()),
     path('eleven/auth-status/', ElevenAuthStatusView.as_view()),
     path('eleven/verify-otp/', ElevenVerifyOtpView.as_view()),
+    path('eleven/point-expiring/', ElevenPointExpiringView.as_view()),
     path('seller-login/<str:seller_id>/', SellerAutoLoginView.as_view()),
 ]

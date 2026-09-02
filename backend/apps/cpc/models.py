@@ -169,6 +169,9 @@ class ElevenCostHistory(models.Model):
     raw_description = models.CharField(max_length=255, blank=True)
     amount = models.IntegerField(default=0)
     balance = models.IntegerField(default=0)
+    valid_until = models.DateField(null=True, blank=True, help_text='포인트/캐시 유효기간(사용기한) — 원본 엑셀 "유효기간" 컬럼, 없으면 null')
+    cost_type = models.CharField(max_length=20, default='sellerpoint', choices=[('sellerpoint', '셀러포인트'), ('sellercash', '셀러캐시')],
+                                  help_text='포인트/캐시는 별도 잔액 풀 — 만료건 선입선출 잔액계산 시 풀 섞임 방지용')
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'eleven_sellerpoint_history'

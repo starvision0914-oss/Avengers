@@ -547,6 +547,50 @@ class SalesSummaryView(views.APIView):
         return out
 
 
+class SalesDeleteRangeView(views.APIView):
+    """대시보드 기간삭제. confirm 없이 호출하면 대상 건수/금액만 미리보기(삭제 안 함).
+    confirm=true일 때만 실제 삭제 — 삭제 전 CSV로 백업(media/sales_backups/)."""
+
+    def post(self, request):
+        date_from = request.data.get('from')
+        date_to = request.data.get('to')
+        platform = request.data.get('platform') or None
+        confirm = bool(request.data.get('confirm'))
+        if not date_from or not date_to:
+            return Response({'error': '기간을 선택하세요.'}, status=400)
+
+        qs = SalesRecord.objects.filter(order_date__gte=date_from, order_date__lte=date_to)
+        if platform:
+            qs = qs.filter(platform=platform)
+
+        count = qs.count()
+        total_price = qs.aggregate(s=Sum('total_price'))['s'] or 0
+
+        if not confirm:
+            return Response({'preview': True, 'count': count, 'total_price': total_price})
+
+        if count == 0:
+            return Response({'deleted': 0, 'total_price': 0})
+
+        import os
+        from django.conf import settings
+        from django.utils import timezone
+
+        backup_dir = os.path.join(settings.MEDIA_ROOT, 'sales_backups')
+        os.makedirs(backup_dir, exist_ok=True)
+        fname = f'sales_delete_{date_from}_{date_to}_{timezone.now().strftime("%Y%m%d%H%M%S")}.csv'
+        with open(os.path.join(backup_dir, fname), 'w', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            w.writerow(['id', 'platform', 'seller_id', 'product_code', 'order_date',
+                        'order_datetime', 'total_price', 'quantity', 'net_profit'])
+            for r in qs.order_by('id'):
+                w.writerow([r.id, r.platform, r.seller_id, r.product_code, r.order_date,
+                            r.order_datetime, r.total_price, r.quantity, r.net_profit])
+
+        deleted, _ = qs.delete()
+        return Response({'deleted': deleted, 'total_price': total_price, 'backup_file': fname})
+
+
 class SalesUploadLogViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SalesUploadLog.objects.all().order_by('-uploaded_at')
     serializer_class = SalesUploadLogSerializer

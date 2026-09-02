@@ -23,6 +23,7 @@ import type { PeriodMode, PeriodPreset } from '../../utils/periodRange';
 import { resolveRange, yesterdayStr } from '../../utils/periodRange';
 import CoupangDashboard from '../Coupang/CoupangDashboard';
 import LotteonDashboard from '../Lotteon/LotteonDashboard';
+import TossDashboard from '../Toss/TossDashboard';
 
 const SS = '#03C75A';
 const fmt = (n: number) => (n || 0).toLocaleString();
@@ -44,6 +45,7 @@ const PLATFORM_TABS = [
   { key: 'smartstore', label: '스마트스토어' },
   { key: 'coupang', label: '쿠팡' },
   { key: 'lotteon', label: '롯데ON' },
+  { key: 'toss', label: '토스' },
 ] as const;
 type PlatformTab = (typeof PLATFORM_TABS)[number]['key'];
 
@@ -191,7 +193,7 @@ export default function SmartStorePage() {
             <span className="text-[12px] text-[#999]">매출·계정 규모가 작아 스마트스토어 메뉴 안으로 통합됐습니다</span>
           </div>
         </div>
-        {platformTab === 'coupang' ? <CoupangDashboard /> : <LotteonDashboard />}
+        {platformTab === 'coupang' ? <CoupangDashboard /> : platformTab === 'toss' ? <TossDashboard /> : <LotteonDashboard />}
       </div>
     );
   }

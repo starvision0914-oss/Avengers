@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'apps.coupang',
     'apps.lotteon',
     'apps.club',
+    'apps.toss',
 ]
 
 MIDDLEWARE = [

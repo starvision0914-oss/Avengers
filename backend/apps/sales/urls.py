@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (SalesRecordViewSet, SalesUploadView, SalesSummaryView, SalesUploadLogViewSet,
-                    SalesUnmatchedView, SalesMatchView)
+                    SalesUnmatchedView, SalesMatchView, SalesDeleteRangeView)
 
 router = DefaultRouter()
 router.register(r'records', SalesRecordViewSet)
@@ -13,4 +13,5 @@ urlpatterns = [
     path('summary/', SalesSummaryView.as_view()),
     path('unmatched/', SalesUnmatchedView.as_view()),
     path('match/', SalesMatchView.as_view()),
+    path('delete-range/', SalesDeleteRangeView.as_view()),
 ]

@@ -46,6 +46,7 @@ _REACH_URL = {
     'lotteon': 'https://store.lotteon.com/',
     'lotteon': 'https://store.lotteon.com/',
     'tistory': 'https://www.tistory.com/',
+    'toss': 'https://shopping-seller.toss.im/',
 }
 
 # 영구정지 계정 — AD OFFICE 접속 불가(광고비/ROAS 확인 안 됨). 정지 해제될 때까지

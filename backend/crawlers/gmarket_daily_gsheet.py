@@ -206,6 +206,41 @@ def _merge_auction(data, login_id, ad_type, year, month):
     return added
 
 
+def _merge_ai_product_ad_gap(data, login_id, year, month):
+    """2026-08-24부터 지마켓이 'AI매출업'을 'AI Product AD 광고구매'로 개명한 뒤,
+    지마켓 자체 AI 리포트 화면(일자별·상품별 전부)이 이 신규명칭분을 아예 집계 안 해주는
+    것을 실측 확인(2026-09-02, rejoice911 등 — 거래원장상 75,460원인데 리포트엔 0원).
+    상품별로는 지마켓이 데이터 자체를 안 주므로 배분 불가 — 계정 합계에만 보정.
+    반환: 추가된 금액(0이면 해당 없음)."""
+    from datetime import date
+    import calendar
+    from django.db.models import Sum
+    from apps.cpc.models import GmarketCostHistory
+    me = calendar.monthrange(year, month)[1]
+    gap = abs(GmarketCostHistory.objects.filter(
+        seller_id=login_id, comment__icontains='AI Product AD',
+        use_date__gte=date(year, month, 1), use_date__lte=date(year, month, me)
+    ).aggregate(s=Sum('amount'))['s'] or 0)
+    if not gap:
+        return 0
+    hdr = data[0]
+    if '총비용' not in hdr:
+        return 0
+    ci = hdr.index('총비용')
+    note_row = [''] * len(hdr)
+    note_row[0] = 'AI Product AD(미배분)'
+    note_row[ci] = str(gap)
+    # 합계행 바로 앞에 보정행 삽입 + 합계행 총비용에 반영
+    for i, row in enumerate(data):
+        if row and str(row[0]).strip() == '합계':
+            data.insert(i, note_row)
+            if ci < len(row):
+                cur = int(str(row[ci]).replace(',', '') or 0) if row[ci] else 0
+                row[ci] = str(cur + gap)
+            break
+    return gap
+
+
 def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                     driver=None, ss_cpc=None, ss_ai=None):
     """한 계정의 CPC+AI 일자별 다운로드 → 시트 업로드. driver/ss가 주어지면 재사용(세션 통합)."""
@@ -251,6 +286,14 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                         _log(log_fn, f'  [{login_id}/{ad_type}] 옥션 +{_add:,}원 합산')
                 except Exception as _e:
                     _log(log_fn, f'  [{login_id}/{ad_type}] 옥션합산 오류 {str(_e)[:80]}')
+                # AI매출업→AI Product AD 개명 이후 지마켓 리포트 자체가 안 주는 분 — 합계에 보정
+                if ad_type == 'ai':
+                    try:
+                        _gap = _merge_ai_product_ad_gap(data, login_id, year, month)
+                        if _gap:
+                            _log(log_fn, f'  [{login_id}/{ad_type}] AI Product AD 미배분 +{_gap:,}원 보정')
+                    except Exception as _e:
+                        _log(log_fn, f'  [{login_id}/{ad_type}] AI Product AD 보정 오류 {str(_e)[:80]}')
                 if gsheet:
                     ok = gsheet_upload.upload_rows(data, login_id, ss, log=lambda m: _log(log_fn, m))
                     res[ad_type] = {'ok': ok, 'rows': len(data) - 2}

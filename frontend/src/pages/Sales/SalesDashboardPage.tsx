@@ -31,6 +31,35 @@ export default function SalesDashboardPage() {
   }, [from, to]);
   useEffect(() => { load(); }, [load]);
 
+  // 기간삭제(위험구역)
+  const [delFrom, setDelFrom] = useState(from);
+  const [delTo, setDelTo] = useState(to);
+  const [delPlatform, setDelPlatform] = useState('');
+  const [delPreview, setDelPreview] = useState<{ count: number; total_price: number } | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
+
+  const previewDelete = () => {
+    setDelPreview(null);
+    api.post('/sales/delete-range/', { from: delFrom, to: delTo, platform: delPlatform || undefined })
+      .then(r => setDelPreview(r.data));
+  };
+
+  const confirmDelete = () => {
+    if (!delPreview || delPreview.count === 0) return;
+    const platLabel = delPlatform ? (data?.by_platform.find(p => p.platform === delPlatform)?.label || delPlatform) : '전체';
+    if (!window.confirm(
+      `${delFrom} ~ ${delTo} · ${platLabel}\n매출 ${fmt(delPreview.count)}건 (${won(delPreview.total_price)}) 을 삭제합니다.\n삭제 전 서버에 CSV로 백업됩니다. 계속할까요?`
+    )) return;
+    setDelBusy(true);
+    api.post('/sales/delete-range/', { from: delFrom, to: delTo, platform: delPlatform || undefined, confirm: true })
+      .then(r => {
+        alert(`삭제 완료: ${fmt(r.data.deleted)}건`);
+        setDelPreview(null);
+        load();
+      })
+      .finally(() => setDelBusy(false));
+  };
+
   const setMonth = (m: number) => {
     const y = new Date().getFullYear();
     setFrom(ymd(y, m, 1)); setTo(ymd(y, m, new Date(y, m, 0).getDate()));
@@ -145,6 +174,35 @@ export default function SalesDashboardPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* 위험구역: 기간삭제 */}
+          <div className="bg-white rounded-xl shadow-sm mt-4 border border-red-200">
+            <div className="px-4 py-3 font-bold border-b text-red-600">⚠ 매출 기간삭제</div>
+            <div className="p-4 flex items-center gap-2 flex-wrap text-[12px]">
+              <input type="date" value={delFrom} onChange={e => { setDelFrom(e.target.value); setDelPreview(null); }} className="px-2 py-1 border rounded" />
+              <span>~</span>
+              <input type="date" value={delTo} onChange={e => { setDelTo(e.target.value); setDelPreview(null); }} className="px-2 py-1 border rounded" />
+              <select value={delPlatform} onChange={e => { setDelPlatform(e.target.value); setDelPreview(null); }} className="px-2 py-1 border rounded">
+                <option value="">전체 쇼핑몰</option>
+                {data.by_platform.map(p => (
+                  <option key={p.platform} value={p.platform}>{p.label}</option>
+                ))}
+              </select>
+              <button onClick={previewDelete} className="px-3 py-1 bg-gray-100 border rounded hover:bg-gray-200">대상 확인</button>
+              {delPreview && (
+                <span className="text-gray-600">
+                  대상 <b>{fmt(delPreview.count)}건</b> ({won(delPreview.total_price)})
+                </span>
+              )}
+              <button
+                onClick={confirmDelete}
+                disabled={!delPreview || delPreview.count === 0 || delBusy}
+                className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {delBusy ? '삭제 중…' : '삭제'}
+              </button>
+            </div>
           </div>
         </>
       )}

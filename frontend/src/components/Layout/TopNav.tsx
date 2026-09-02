@@ -4,7 +4,7 @@ import {
   Users, ShoppingCart, CheckSquare,
   MessageCircle, Mail, Settings, LogOut, Bot, MessageSquare,
   Sliders, Smartphone, Leaf, UserCog, Store, Package, MoreHorizontal,
-  BadgeCheck, Dices, Map, Receipt, Newspaper, BookOpen,
+  BadgeCheck, Dices, Map, Receipt, Newspaper, BookOpen, Coins,
 } from 'lucide-react';
 import { logout } from '../../api/auth';
 
@@ -24,6 +24,7 @@ const primary = [
 ];
 
 const more = [
+  { to: '/toss', icon: Coins, label: '토스' },
   { to: '/roadmap', icon: Map, label: '개발로드맵' },
   { to: '/accounts', icon: Users, label: '판매자 계정' },
   { to: '/crawler-accounts', icon: UserCog, label: 'ID 관리' },

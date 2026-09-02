@@ -619,8 +619,15 @@ def _do_login(driver, login_id, password):
             logger.warning(f'[11st:{login_id}] OTP 후 예상 페이지 아님: {driver.current_url}')
             return False
 
-        # 로그인 성공 확인
+        # 로그인 성공 확인 (OTP 없이 바로 통과한 경우 — 세션/기기 인식으로 스킵된 케이스도
+        # 실제로는 유효한 인증이므로 last_otp_at을 갱신해야 한다. 안 하면 "만료계정" 판정이
+        # 매번 같은 계정들을 다시 잡아 무한 반복되는 버그가 있었음, 2026-09-02 발견.)
         if _is_soffice_url(driver.current_url):
+            try:
+                from apps.cpc.models import CrawlerAccount
+                CrawlerAccount.objects.filter(login_id=login_id, platform='11st').update(last_otp_at=timezone.now())
+            except Exception:
+                pass
             return True
 
         return False
@@ -763,6 +770,8 @@ def _parse_cost_rows(filepath, cost_type='sellerpoint'):
             col_map['amount'] = i
         elif '잔여금액' in h or '잔액' in h:
             col_map['balance'] = i
+        elif '유효기간' in h:
+            col_map['valid_until'] = i
 
     items = []
     for row in rows[header_idx + 1:]:
@@ -787,11 +796,27 @@ def _parse_cost_rows(filepath, cost_type='sellerpoint'):
             amount = parse_int(row[col_map.get('amount', 2)])
             balance = parse_int(row[col_map.get('balance', 3)])
             dt_aware = timezone.make_aware(dt) if timezone.is_naive(dt) else dt
-            items.append((dt_aware, classify_11st_description(desc), desc[:255], amount, balance))
+            valid_until = None
+            if 'valid_until' in col_map:
+                valid_until = _parse_valid_until(row[col_map['valid_until']])
+            items.append((dt_aware, classify_11st_description(desc), desc[:255], amount, balance, valid_until, cost_type))
         except Exception as e:
             logger.warning(f'행 파싱 오류: {e}')
             continue
     return items
+
+
+def _parse_valid_until(raw):
+    """유효기간 컬럼값('2026/09/05' 또는 '-'/빈값) → date 또는 None."""
+    s = str(raw or '').strip()
+    if not s or s == '-':
+        return None
+    for fmt in ['%Y/%m/%d', '%Y-%m-%d', '%Y.%m.%d']:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _save_cost_rows(seller_id, items):
@@ -803,12 +828,13 @@ def _save_cost_rows(seller_id, items):
         return 0
     seq_by_dt = {}
     instances = []
-    for dt_aware, ttype, desc, amount, balance in items:
+    for dt_aware, ttype, desc, amount, balance, valid_until, cost_type in items:
         seq = seq_by_dt.get(dt_aware, 0)
         seq_by_dt[dt_aware] = seq + 1
         instances.append(ElevenCostHistory(
             seller_id=seller_id, transaction_datetime=dt_aware, seq=seq,
-            transaction_type=ttype, raw_description=desc, amount=amount, balance=balance))
+            transaction_type=ttype, raw_description=desc, amount=amount, balance=balance,
+            valid_until=valid_until, cost_type=cost_type))
     dts = [i.transaction_datetime for i in instances]
     lo, hi = min(dts), max(dts)
     with _txn.atomic():
