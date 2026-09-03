@@ -23,6 +23,8 @@ urlpatterns = [
     path('precheck-diff/', views.PrecheckDiffView.as_view()),
     path('crawl-status/', views.CrawlStatusView.as_view()),
     path('naver-product-roas/', views.NaverProductRoasView.as_view()),
+    path('naver-product-roas/suspend/', views.NaverRoasBulkSuspendView.as_view()),
+    path('naver-product-roas/ad-off/', views.NaverRoasBulkAdOffView.as_view()),
     path('naver-search-terms/', views.NaverSearchTermView.as_view()),
     path('naver-search-terms/crawl/', views.NaverSearchTermCrawlView.as_view()),
     path('clean-violations/', views.CleanViolationListView.as_view()),

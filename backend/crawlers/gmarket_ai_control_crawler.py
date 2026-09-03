@@ -14,6 +14,7 @@ logger = logging.getLogger('crawler')
 AI_MGMT_URL = 'https://ad.esmplus.com/Remarketing/Management'
 SET_ONOFF_API = '/Remarketing/Management/SetCpcRemarketingGroupOnOffAsync'
 SET_EXPOSURE_API = '/Remarketing/Management/SetCpcRemarketingGroupExposureAsync'
+SET_BUDGET_API = '/Remarketing/Management/SetCpcRemarketingGroupBudgetAsync'
 
 
 def _dismiss_alert(driver):
@@ -108,6 +109,10 @@ def _get_group_info(driver):
                 'group_name': group_name,
                 'button_status': 'ON' if onoff == '1' else 'OFF',
                 'start_date': start_date,
+                'site_id': row.get_attribute('data-siteid') or '',
+                'ab_extra_budget_config_seq': row.get_attribute('data-abextrabudgetconfigseq') or '0',
+                'daily_budget': row.get_attribute('data-dailybudget') or '0',
+                'budget_limit_yn': row.get_attribute('data-budgetlimityn') or 'N',
             })
     return groups
 
@@ -134,6 +139,68 @@ def set_ai_onoff(driver, group_no, action, start_date='', end_date=''):
     }
     result = _call_esm_api(driver, SET_ONOFF_API, payload)
     return result
+
+
+def set_ai_budget(driver, group, amount):
+    """AI 광고 1일 허용예산 정액 설정(자동예산 미사용).
+    group: _get_group_info()가 반환하는 dict(group_no/site_id/seller_id/ab_extra_budget_config_seq 포함) 필요.
+    ad.esmplus.com PartialAdverStatus.js BudgetModify.Save() 페이로드 그대로 재현."""
+    payload = {
+        'groupSetList': [{
+            'RemarketingGroupNo': int(group['group_no']),
+            'abSiteId': group.get('site_id', ''),
+            'abSellerId': group.get('seller_id', ''),
+            'AbExtraBudgetConfigSeq': group.get('ab_extra_budget_config_seq', '0'),
+            'BudgetLimitYn': 'N',
+            'DailyBudget': str(int(amount)),
+            'abChkAutoBudget': 'N',
+        }]
+    }
+    return _call_esm_api(driver, SET_BUDGET_API, payload)
+
+
+def control_account_budget(driver, login_id, amount, source='manual', log_fn=None):
+    """한 계정의 모든 AI 그룹 1일 예산을 amount로 설정."""
+    from apps.cpc import eleven_block_guard as guard
+    def log(m):
+        logger.info(f'[AI예산:{login_id}] {m}')
+        if log_fn:
+            log_fn(f'[AI예산:{login_id}] {m}')
+
+    if guard.is_control_stop('gmarket'):
+        log('강제중지 — 스킵')
+        return []
+
+    groups = _get_group_info(driver)
+    if not groups:
+        log('AI 그룹 없음')
+        return []
+
+    results = []
+    for g in groups:
+        if guard.is_control_stop('gmarket'):
+            log('강제중지 — 그룹 처리 중단')
+            break
+        before = int(float(g.get('daily_budget') or 0))
+        if g.get('budget_limit_yn') == 'N' and before == amount:
+            log(f'{g["seller_id"]} ({g["group_name"]}): 이미 {amount:,}원')
+            continue
+
+        api_result = set_ai_budget(driver, g, amount)
+        success = api_result and api_result.get('ResultCode') == 0 if api_result else False
+        after = amount if success else before
+
+        log(f'{g["seller_id"]} ({g["group_name"]}): {before:,}원→{after:,}원 {"성공" if success else "실패"}'
+            + ('' if success else f' ({(api_result or {}).get("Message", "")})'))
+        results.append({
+            'seller_id': g['seller_id'],
+            'group_name': g['group_name'],
+            'before': before,
+            'after': after,
+            'success': success,
+        })
+
+    return results
 
 
 def control_account(driver, login_id, action, source='manual', log_fn=None):
@@ -286,4 +353,124 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
 
     if log_fn:
         log_fn(f'AI {action} 완료: {len(all_results)}건')
+    return {'results': all_results, 'count': len(all_results)}
+
+
+def run_budget_and_on(amount, source='manual', log_fn=None, account_filter=None):
+    """전체(또는 지정) 계정 AI 1일예산을 amount로 설정한 뒤 이어서 ON.
+    account_filter 없으면 AiSchedule(platform='gmarket').selected_accounts 사용."""
+    from apps.cpc.models import CrawlerAccount, GmarketAiAdHistory, CrawlerLog, protected_login_ids, AiSchedule
+
+    from apps.cpc import eleven_block_guard as guard
+
+    if not account_filter:
+        sched = AiSchedule.objects.filter(platform='gmarket').first()
+        account_filter = list(sched.selected_accounts or []) if sched else []
+    if not account_filter:
+        if log_fn:
+            log_fn('대상 계정이 없습니다(AiSchedule 미설정)')
+        return {'results': [], 'count': 0}
+
+    qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True, login_id__in=account_filter).exclude(crawling_status='차단됨')
+    protected = protected_login_ids('gmarket')
+    if protected:
+        qs = qs.exclude(login_id__in=protected)
+
+    if not guard.try_acquire_adcontrol('지마켓AI예산설정', platform='gmarket'):
+        if log_fn:
+            log_fn('⏭️ 이미 광고제어 실행 중 — 중복 방지로 스킵')
+        return {'results': [], 'count': 0, 'skipped': '이미 실행 중'}
+
+    ok, reason = guard.preflight('지마켓AI예산설정', platform='gmarket', wait=True, wait_timeout=10800)
+    if not ok:
+        guard.clear_adcontrol_busy('gmarket')
+        if log_fn:
+            log_fn(f'⏭️ 건너뜀 — {reason}')
+        return {'results': [], 'count': 0}
+
+    guard.clear_control_stop('gmarket')
+    all_results, driver = [], None
+    try:
+        driver = create_driver()
+        try:
+            driver.set_page_load_timeout(40); driver.implicitly_wait(3)
+        except Exception:
+            pass
+        for acct in qs:
+            if guard.is_control_stop('gmarket'):
+                if log_fn: log_fn('🛑 강제중지 요청 — 중단')
+                break
+            try:
+                logged = False
+                for _try in range(2):
+                    if guard.is_control_stop('gmarket'):
+                        break
+                    try:
+                        driver.delete_all_cookies()
+                        if _login(driver, acct.login_id, acct.password_enc):
+                            logged = True; break
+                    except Exception:
+                        pass
+                    try: driver.switch_to.alert.accept()
+                    except Exception: pass
+                    time.sleep(2)
+                if not logged:
+                    if guard.is_control_stop('gmarket'):
+                        if log_fn: log_fn('🛑 강제중지 — 로그인 중 중단')
+                        break
+                    if log_fn:
+                        log_fn(f'[AI예산:{acct.login_id}] 로그인 실패(2회)')
+                    continue
+
+                budget_results = control_account_budget(driver, acct.login_id, amount, source, log_fn)
+                for r in budget_results:
+                    GmarketAiAdHistory.objects.create(
+                        gmarket_id=acct.login_id,
+                        seller_id=r['seller_id'],
+                        group_name=r['group_name'],
+                        event_time=timezone.now(),
+                        history_type='AI 예산설정',
+                        detail=f'{r["before"]:,}원→{r["after"]:,}원 ({"성공" if r["success"] else "실패"})',
+                    )
+                all_results.extend(budget_results)
+
+                on_results = control_account(driver, acct.login_id, 'on', source, log_fn)
+                for r in on_results:
+                    GmarketAiAdHistory.objects.create(
+                        gmarket_id=acct.login_id,
+                        seller_id=r['seller_id'],
+                        group_name=r['group_name'],
+                        event_time=timezone.now(),
+                        history_type='AI ON',
+                        detail=f'{r["before"]}→{r["after"]} ({"성공" if r["success"] else "실패"})',
+                    )
+                all_results.extend(on_results)
+
+                CrawlerLog.objects.create(
+                    platform='gmarket', level='success',
+                    message=f'AI 예산설정+ON: 예산 {len(budget_results)}건 / ON {len(on_results)}건',
+                    account_id=acct.login_id
+                )
+            except Exception as e:
+                if log_fn:
+                    log_fn(f'[AI예산:{acct.login_id}] 오류: {e}')
+                try: driver.switch_to.alert.accept()
+                except Exception: pass
+                CrawlerLog.objects.create(
+                    platform='gmarket', level='error',
+                    message=str(e), account_id=acct.login_id
+                )
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+        stop_display()
+        guard.release_global_lock(platform='gmarket')
+        guard.clear_control_stop('gmarket')
+        guard.clear_adcontrol_busy('gmarket')
+
+    if log_fn:
+        log_fn(f'AI 예산설정+ON 완료: {len(all_results)}건')
     return {'results': all_results, 'count': len(all_results)}

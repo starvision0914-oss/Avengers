@@ -121,7 +121,7 @@ def _download_daily(driver, login_id, ad_type, year, month, log_fn):
     from selenium.webdriver.common.by import By
     if re.search(r'총\s*0\s*건', driver.find_element(By.TAG_NAME, 'body').text):
         _log(log_fn, f'  [{login_id}/{ad_type}] 일자별 광고 집행 0건(정상)')
-        return None
+        return 'ZERO'
     f = _do_download(driver, cfg)
     if not f or os.path.getsize(f) < 100:
         _log(log_fn, f'  [{login_id}/{ad_type}] ❌ 일자별 다운로드 실패')
@@ -164,6 +164,30 @@ def _build_daily_matrix(path, year, month):
         data.append(row)
     totals = ['합계'] + [str(int(sums[c])) if float(sums[c]).is_integer() else str(sums[c]) for c in numcols]
     data.append(totals)
+    return data
+
+
+_DEFAULT_HEADER = ['날짜', '노출수', '클릭수', '광고비', '전환수', '전환금액']
+
+
+def _build_zero_matrix(ss, login_id, year, month):
+    """광고 집행 0건(정상)인 달 — 예전엔 업로드 자체를 건너뛰어 시트가 지난 값에서 멈춰
+    보였음(2026-09-03 사용자 지적). 기존 워크시트 헤더(계정마다 컬럼 구성이 다름)를 그대로
+    재사용해 전 날짜를 0으로 채워 올린다 — 시트가 없으면 기본 6컬럼 헤더로 새로 만듦."""
+    header = None
+    if ss is not None:
+        try:
+            header = ss.worksheet(login_id).row_values(1)
+        except Exception:
+            header = None
+    if not header or len(header) < 2:
+        header = _DEFAULT_HEADER
+    numcols = header[1:]
+    last_day = calendar.monthrange(year, month)[1]
+    data = [header]
+    for d in range(1, last_day + 1):
+        data.append([date(year, month, d).strftime('%Y-%m-%d')] + ['0'] * len(numcols))
+    data.append(['합계'] + ['0'] * len(numcols))
     return data
 
 
@@ -275,10 +299,13 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                 if not f:
                     res[ad_type] = {'ok': False}
                     continue
-                data = _build_daily_matrix(f, year, month)
-                if not data:
-                    res[ad_type] = {'ok': False, 'error': '빈데이터'}
-                    continue
+                if f == 'ZERO':
+                    data = _build_zero_matrix(ss, login_id, year, month)
+                else:
+                    data = _build_daily_matrix(f, year, month)
+                    if not data:
+                        res[ad_type] = {'ok': False, 'error': '빈데이터'}
+                        continue
                 # dailyReport는 지마켓만 → 거래원장 옥션을 총비용에 합산(지마켓+옥션)
                 try:
                     _add = _merge_auction(data, login_id, ad_type, year, month)

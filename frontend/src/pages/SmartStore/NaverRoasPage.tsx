@@ -105,6 +105,43 @@ export default function NaverRoasPage() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [copied, setCopied] = useState(false);
 
+  // ── 적자상품 모드(기간 자유 선택, 예: 1년) — 화면에 뜬 행을 골라 판매중지/광고OFF.
+  // NaverProductRoasView의 product_no는 mallProductId(channel_product_no)라 별도 매칭 불필요.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const rowKey = (r: Row) => `${r.account_id}-${r.product_no}`;
+  const toggleSelect = (r: Row) => setSelected(prev => {
+    const next = new Set(prev);
+    const k = rowKey(r);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    return next;
+  });
+  const [actionMsg, setActionMsg] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
+
+  const selectedItems = () => rows.filter(r => selected.has(rowKey(r)))
+    .map(r => ({ account_id: r.account_id, product_no: r.product_no }));
+
+  const bulkSuspend = () => {
+    const items = selectedItems();
+    if (!items.length) { alert('선택된 상품이 없습니다.'); return; }
+    if (!confirm(`선택한 ${items.length}개 상품을 판매중지할까요?`)) return;
+    setActionBusy(true); setActionMsg('');
+    api.post('/smartstore/naver-product-roas/suspend/', { items })
+      .then(r => setActionMsg(r.data.message))
+      .catch(e => setActionMsg(e?.response?.data?.message || '판매중지 요청 실패'))
+      .finally(() => setActionBusy(false));
+  };
+  const bulkAdOff = () => {
+    const items = selectedItems();
+    if (!items.length) { alert('선택된 상품이 없습니다.'); return; }
+    if (!confirm(`선택한 ${items.length}개 상품의 광고를 OFF할까요?`)) return;
+    setActionBusy(true); setActionMsg('');
+    api.post('/smartstore/naver-product-roas/ad-off/', { items })
+      .then(r => setActionMsg(r.data.message))
+      .catch(e => setActionMsg(e?.response?.data?.message || '광고 OFF 요청 실패'))
+      .finally(() => setActionBusy(false));
+  };
+
   // ── 실매출 기준 적자상품(판매중지) — 11번가/지마켓과 달리 광고센터 전환매출이 아니라
   // 실제 정산매출로 판정(오탐 방지). 조건: ROAS≤100 · 광고비≥3000 · 클릭≥10 (이번달)
   const [showLoss, setShowLoss] = useState(false);
@@ -292,12 +329,29 @@ export default function NaverRoasPage() {
         </div>
       )}
 
+      {/* ── 적자상품 모드: 선택 판매중지/광고OFF (기간 제약 없음, 화면에 뜬 행 대상) ── */}
+      {mode === 'loss' && (
+        <div className="bg-white border border-[#e0e0e0] rounded-lg px-5 py-2.5 flex items-center gap-3 text-[13px]">
+          <span className="text-[#555]">선택 <b className="text-[#222]">{selected.size}</b>개</span>
+          <button onClick={() => setSelected(new Set(sorted.map(rowKey)))}
+            className="px-2.5 py-1 rounded border border-[#ddd] text-[#555] hover:border-[#2563eb] hover:text-[#2563eb]">전체선택</button>
+          <button onClick={() => setSelected(new Set())}
+            className="px-2.5 py-1 rounded border border-[#ddd] text-[#555] hover:border-[#2563eb] hover:text-[#2563eb]">선택해제</button>
+          <button onClick={bulkSuspend} disabled={actionBusy || selected.size === 0}
+            className="px-3 py-1.5 font-bold text-white rounded bg-[#c2410c] hover:bg-[#9a3412] disabled:opacity-40">🛑 선택 판매중지</button>
+          <button onClick={bulkAdOff} disabled={actionBusy || selected.size === 0}
+            className="px-3 py-1.5 font-bold text-white rounded bg-[#7c3aed] hover:bg-[#6d28d9] disabled:opacity-40">📴 선택 광고 OFF</button>
+          {actionMsg && <span className="text-[#16a34a] font-semibold">{actionMsg}</span>}
+        </div>
+      )}
+
       {/* ── 테이블 ── */}
       <div className="bg-white border border-[#e0e0e0] rounded-lg overflow-hidden">
         <div className="overflow-auto" style={{ maxHeight: 'calc(100vh - 270px)' }}>
           <table className="w-full border-collapse" style={{ minWidth: 1000 }}>
             <thead className="sticky top-0 z-10 bg-[#f5f6f8]">
               <tr>
+                {mode === 'loss' && <th className="px-3 py-2.5 border-b border-[#e5e7eb] w-8"></th>}
                 {COLS.map(c => (
                   <th key={c.key}
                     onClick={() => sortBy(c.key)}
@@ -310,7 +364,7 @@ export default function NaverRoasPage() {
             <tbody className="divide-y divide-[#f3f4f6]">
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={COLS.length} className="text-center py-16 text-[#bbb] text-[15px]">
+                  <td colSpan={COLS.length + (mode === 'loss' ? 1 : 0)} className="text-center py-16 text-[#bbb] text-[15px]">
                     {loading ? '조회 중...' : '조회 결과가 없습니다'}
                   </td>
                 </tr>
@@ -318,6 +372,11 @@ export default function NaverRoasPage() {
               {sorted.map((r, i) => (
                 <tr key={`${r.account_id}-${r.product_no}-${i}`}
                   className="hover:bg-[#f8fafc] transition-colors">
+                  {mode === 'loss' && (
+                    <td className="px-3 py-2">
+                      <input type="checkbox" checked={selected.has(rowKey(r))} onChange={() => toggleSelect(r)} />
+                    </td>
+                  )}
                   <td className="px-3 py-2 text-[14px] text-[#333] font-medium whitespace-nowrap">{r.account_name}</td>
                   <td className="px-3 py-2 text-[14px] whitespace-nowrap">
                     <a href={`https://smartstore.naver.com/main/products/${r.product_no}`}

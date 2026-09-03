@@ -243,29 +243,11 @@ def _internal_stats_post(sess, xsrf: str, customer_id: str, ids: str,
     return result
 
 
-def fetch_product_stats(customer_id: str, access_license: str, secret_key: str,
-                        since: str, until: str, login_id: str = '') -> list:
-    """
-    상품별 광고비 합산 (광고센터 내부 API 사용, 쿠키 세션 필요)
-    - 소재 목록: 공개 NCC API (api.naver.com/ncc/ads)
-    - 통계: 내부 API (ads.naver.com/apis/sa/api/stats POST + X-AD-customer-id)
-    Returns: [{"product_no": ..., "product_name": ..., "cost": ..., ...}, ...]
-    """
-    if not login_id:
-        return []
-
-    sess, xsrf = _internal_stats_session(login_id)
-    if not sess:
-        logger.warning('fetch_product_stats: 쿠키 없음 login_id=%s', login_id)
-        return []
-
-    campaigns = fetch_campaigns(customer_id, access_license, secret_key)
-    if not campaigns:
-        return []
-
-    # 전체 소재 수집 (ad_id → product_no/name 매핑)
+def build_ad_product_map(customer_id: str, access_license: str, secret_key: str) -> dict:
+    """전체 소재 수집 (ad_id → product_no/name 매핑). 공개 NCC API만 사용(쿠키 불필요) —
+    fetch_product_stats(통계용)와 set_ad_lock(개별 상품광고 OFF, 2026-08-28 검증완료)가 공유."""
     ad_to_product = {}  # nccAdId -> {product_no, product_name}
-
+    campaigns = fetch_campaigns(customer_id, access_license, secret_key)
     for camp in campaigns:
         camp_id = camp.get("nccCampaignId")
         if not camp_id:
@@ -287,7 +269,39 @@ def fetch_product_stats(customer_id: str, access_license: str, secret_key: str,
                         "product_no": str(mall_pid),
                         "product_name": rd.get("productTitle", ""),
                     }
+    return ad_to_product
 
+
+def lock_ads_for_products(customer_id: str, access_license: str, secret_key: str,
+                           product_nos: set, lock: bool = True) -> list:
+    """product_nos(mallProductId 집합)에 해당하는 모든 소재를 찾아 userLock 토글.
+    Returns: [{"ad_id":..., "product_no":..., "ok": bool}, ...]"""
+    ad_map = build_ad_product_map(customer_id, access_license, secret_key)
+    results = []
+    for ncc_ad_id, pinfo in ad_map.items():
+        if pinfo["product_no"] in product_nos:
+            ok = set_ad_lock(customer_id, access_license, secret_key, ncc_ad_id, lock)
+            results.append({"ad_id": ncc_ad_id, "product_no": pinfo["product_no"], "ok": ok})
+    return results
+
+
+def fetch_product_stats(customer_id: str, access_license: str, secret_key: str,
+                        since: str, until: str, login_id: str = '') -> list:
+    """
+    상품별 광고비 합산 (광고센터 내부 API 사용, 쿠키 세션 필요)
+    - 소재 목록: 공개 NCC API (api.naver.com/ncc/ads)
+    - 통계: 내부 API (ads.naver.com/apis/sa/api/stats POST + X-AD-customer-id)
+    Returns: [{"product_no": ..., "product_name": ..., "cost": ..., ...}, ...]
+    """
+    if not login_id:
+        return []
+
+    sess, xsrf = _internal_stats_session(login_id)
+    if not sess:
+        logger.warning('fetch_product_stats: 쿠키 없음 login_id=%s', login_id)
+        return []
+
+    ad_to_product = build_ad_product_map(customer_id, access_license, secret_key)
     if not ad_to_product:
         return []
 

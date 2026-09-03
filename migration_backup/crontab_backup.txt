@@ -1,0 +1,61 @@
+# Avengers 자동 수집 스케줄 (UI에서 관리)
+0 11,15 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_11st_cost.sh  # 11번가 광고비(주간 2회, 저녁은 시간별)
+#45 18 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_ai_off.sh  # AI 광고 OFF
+#45 8 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_ai_on.sh  # AI 광고 ON
+#45 16 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_cpc2_off.sh  # 간편광고 OFF
+#45 8 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_cpc2_on.sh  # 간편광고 ON
+0 9,12,18 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_gmarket_ai.sh  # 지마켓 AI
+0 0 2,3 * * /home/rejoice888/Avengers/backend/scripts/cron_grade.sh  # 등급 수집 (11번가+지마켓)
+*/5 * * * * /home/rejoice888/Avengers/backend/scripts/adb_watchdog.sh  # 폰(adb) 연결 자동감시 — OTP 수신 보장
+20 7 * * * /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS+구글시트(07:20, 2026-08-25부터 변경)
+0 9 * * * /home/rejoice888/Avengers/backend/scripts/cron_ownerclan_weekly_popular.sh  # 오너클랜 주간인기상품 다운로드(09:00, db저장창고)
+0 20 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_adcost_17check.sh  # 지마켓 광고비 마감체크(20시)
+0 */3 * * * /home/rejoice888/Avengers/backend/scripts/cron_tmp_cleanup.sh  # 임시파일/고아 자동정리(3시간마다)
+20 7 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_ad_report_kw.sh  # 지마켓 상품별광고비+키워드+구글시트(07:20, 2026-08-25부터 변경)
+15 9 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_loss_ad_off.sh  # 지마켓 적자광고 OFF대상 탐지+알림(매일 09:15)
+5 11,15,17,18,20,22 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_11st_cost_hourly.sh  # 11번가 시간별 광고비+CPC증가분 텔레그램(대시보드 수집시간과 동일: 11,15,17,18,20,22시)
+30 9 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_ad_diagnose.sh  # 지마켓 광고효율 진단+텔레그램(매일 09:30)
+30 5 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_mark_unavailable.sh  # 지마켓 판매불가 상태 DB반영(매일 05:30, 크롤후)
+0 23 * * * /home/rejoice888/Avengers/scripts/backup_all.sh  # 전체 백업(DB+메모리+git) 매일 23:00
+40 7 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_cost_hourly.sh  # 지마켓 시간별 광고비 07:40 추가(08시 통합크롤 전 스냅샷)
+0 1 * * * /home/rejoice888/Avengers/backend/scripts/cron_smartstore.sh  # 스마트스토어 상품+판매통계+광고비(01:00)
+# 네이버 블로그 키워드 수집 (매일 07:00)
+0 7 * * * cd /home/rejoice888/Avengers/backend && python3 manage.py collect_naver_keywords >> /tmp/cron_naver_keyword.log 2>&1
+20 22 11 * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_vat.sh  # 지마켓 부가세 연간 누적 수집(매달 11일 22:20, 그 외엔 수동 지시시에만)
+0 9,11,15,17,18,19,20,22 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_adcost_month.sh  # 지마켓 거래내역 수집(09/11/15/17-20/22시)
+30 */3 * * * /home/rejoice888/Avengers/backend/scripts/cron_naver_cookie_refresh.sh  # 네이버 광고 쿠키 갱신(3시간마다, NAVER_ADS_AVAILABLE_USER 만료 방지)
+30 8 * * * /home/rejoice888/Avengers/backend/scripts/cron_naver_product_adcost.sh  # 네이버 상품별 광고비(매일 08:30)
+20 4 * * 1 /home/rejoice888/Avengers/backend/scripts/cron_11st_otp_check.sh  # 11번가 OTP/쿠키 일일점검(05:00, 데이타임 크롤 전 미리 갱신) (월요일 04:20)
+30 4 * * 2 /home/rejoice888/Avengers/backend/scripts/cron_11st_otp_check.sh  # 11번가 OTP/쿠키 일일점검(05:00, 데이타임 크롤 전 미리 갱신) (화요일 04:30)
+40 4 * * 3 /home/rejoice888/Avengers/backend/scripts/cron_11st_otp_check.sh  # 11번가 OTP/쿠키 일일점검(05:00, 데이타임 크롤 전 미리 갱신) (수요일 04:40)
+50 4 * * 4 /home/rejoice888/Avengers/backend/scripts/cron_11st_otp_check.sh  # 11번가 OTP/쿠키 일일점검(05:00, 데이타임 크롤 전 미리 갱신) (목요일 04:50)
+0 5 * * 5 /home/rejoice888/Avengers/backend/scripts/cron_11st_otp_check.sh  # 11번가 OTP/쿠키 일일점검(05:00, 데이타임 크롤 전 미리 갱신) (금요일 05:00)
+10 5 * * 6 /home/rejoice888/Avengers/backend/scripts/cron_11st_otp_check.sh  # 11번가 OTP/쿠키 일일점검(05:00, 데이타임 크롤 전 미리 갱신) (토요일 05:10)
+20 5 * * 0 /home/rejoice888/Avengers/backend/scripts/cron_11st_otp_check.sh  # 11번가 OTP/쿠키 일일점검(05:00, 데이타임 크롤 전 미리 갱신) (일요일 05:20)
+10 11,15,17,22 * * * /home/rejoice888/Avengers/backend/scripts/cron_smartstore_adcost_hourly.sh  # 스마트스토어 시간별 광고비(11:10/15:10/17:10/22:10, 11번가·지마켓 정각크론과 10분 오프셋)
+*/10 * * * * /home/rejoice888/Avengers/backend/scripts/cron_game_match.sh  # 야구단 매니저 자동경기(쿨다운 종료시 자동 진행, 10분마다 체크)
+30 19 * * 1 /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS 안전망 재실행(09시 크론 누락 대비, 24h10m 롤링) (월요일 19:30)
+40 19 * * 2 /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS 안전망 재실행(09시 크론 누락 대비, 24h10m 롤링) (화요일 19:40)
+50 19 * * 3 /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS 안전망 재실행(09시 크론 누락 대비, 24h10m 롤링) (수요일 19:50)
+0 20 * * 4 /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS 안전망 재실행(09시 크론 누락 대비, 24h10m 롤링) (목요일 20:00)
+10 20 * * 5 /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS 안전망 재실행(09시 크론 누락 대비, 24h10m 롤링) (금요일 20:10)
+20 20 * * 6 /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS 안전망 재실행(09시 크론 누락 대비, 24h10m 롤링) (토요일 20:20)
+30 20 * * 0 /home/rejoice888/Avengers/backend/scripts/cron_11st_product_daily.sh  # 11번가 상품ROAS 안전망 재실행(09시 크론 누락 대비, 24h10m 롤링) (일요일 20:30)
+35 20 * * 0,1,2,3 /home/rejoice888/Avengers/backend/scripts/cron_ai_on_retry.sh  # AI광고 ON 재시도(19:33 실행이 광고비크론과 겹쳐 락대기초과로 스킵될 때 안전망, 이미 성공시 즉시 스킵)
+30 5 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_ownerclan_status.sh  # 오너클랜 W코드 상태 순환점검(주5일, 05:30)
+0 * * * * /home/rejoice888/Avengers/backend/scripts/cron_lcode_progress.sh  # L코드 도매마트 조회 진행상황 텔레그램(1시간마다, 사용자요청 2026-08-21)
+*/10 * * * * /home/rejoice888/Avengers/backend/scripts/cron_lcode_watchdog.sh  # L코드 도매마트 조회 워치독(10분마다, 멈추면 자동재개·9시간방치 재발방지 2026-08-22)
+0 1 * * * /home/rejoice888/Avengers/backend/scripts/cron_lotteon_products.sh  # 롯데온 나의상품 수집(매일 01:00, cron 신규등록 2026-08-23)
+35 22 11 * * /home/rejoice888/Avengers/backend/scripts/cron_11st_vat.sh  # 11번가 부가세 연간 누적 수집(매달 11일 22:35, 그 외엔 수동 지시시에만)
+20 8 24 8 * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_ad_report_kw.sh  # [오늘만] 원래시각 08:20 1회 실행
+0 9-21 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_cost_hourly.sh  # 지마켓 시간별 광고비+CPC/AI증가분 텔레그램(09-21)
+0 2 * * * /home/rejoice888/Avengers/backend/scripts/cron_gmarket_products.sh  # 지마켓/옥션 상품수집(야간 02:00, 상품수·판매상태 갱신)
+0 2 * * * /home/rejoice888/Avengers/backend/scripts/cron_11st_night.sh  # 11번가 야간통합(02:00, 판매상태 전계정+쿠키워밍 → 완료후 상품코드보존 체이닝)
+10 17 * * 1,2,3,4,5 /home/rejoice888/Avengers/backend/scripts/cron_cpc2_off_retry.sh  # 간편광고 OFF 재시도(16:22 실행이 다른 광고제어와 겹쳐 스킵될 때 안전망, 이미 성공시 계정별로 알아서 스킵)
+15 17-21 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_gmarket_hourly_ad_guard.sh  # 지마켓 시간별 광고비 가드(직전시간대비 증가시 해당계정 광고OFF, 2026-08-27 사용자요청)
+30 21 * * 1-5 /home/rejoice888/Avengers/backend/scripts/cron_gmarket_cpc2_full_sweep.sh  # 지마켓 간편+일반광고 전체계정 ON점검(17시 이후 전용, 2026-08-27 사용자요청)
+10 8 * * 1,2,3,4,5 /home/rejoice888/Avengers/backend/scripts/cron_cpc2_on.sh # AD_SCHEDULE
+33 20 * * 0,2,3,4,5 /home/rejoice888/Avengers/backend/scripts/cron_ai_on.sh # AD_SCHEDULE
+22 16 * * 0,1,2,3,4 /home/rejoice888/Avengers/backend/scripts/cron_cpc2_off.sh # AD_SCHEDULE
+20 16 * * 1,2,3,4 /home/rejoice888/Avengers/backend/scripts/cron_ai_off.sh # AD_SCHEDULE
+0 8 * * * /home/rejoice888/Avengers/backend/scripts/cron_toss_adcost.sh  # 토스쇼핑 파트너스 광고비(전일 확정치, 08:00)

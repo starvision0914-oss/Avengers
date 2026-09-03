@@ -959,6 +959,81 @@ class LossProductsSuspendView(APIView):
         return Response({'status': 'started', 'message': msg, 'accounts': len(by_store), 'total': len(rows)})
 
 
+class NaverRoasBulkSuspendView(APIView):
+    """네이버 상품별 ROAS 화면(임의 기간, 예: 1년)에서 고른 상품 판매중지.
+    items=[{account_id, product_no(=mallProductId/channel_product_no)}] — 기간 제약 없이
+    화면에 떠 있는 아무 행이나 대상으로 삼을 수 있게 explicit item list를 받는다."""
+    LOG_FILE = '/tmp/suspend_smartstore_naverroas.log'
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        items = request.data.get('items') or []
+        if not items:
+            return Response({'status': 'blocked', 'message': '대상이 없습니다.'}, status=400)
+
+        by_account = {}
+        for it in items:
+            by_account.setdefault(it['account_id'], set()).add(str(it['product_no']))
+
+        pks = []
+        for account_id, pnos in by_account.items():
+            pks += list(SmartStoreProduct.objects.filter(
+                account_id=account_id, channel_product_no__in=pnos,
+            ).values_list('id', flat=True))
+
+        if not pks:
+            return Response({'status': 'blocked', 'message': '판매중인(SmartStoreProduct 매칭) 대상이 없습니다.'}, status=400)
+
+        _launch_smartstore_action('suspend', pks, self.LOG_FILE)
+        return Response({'status': 'started', 'message': f'판매중지 시작 — {len(pks)}건. 진행상황은 {self.LOG_FILE} 확인.', 'total': len(pks)})
+
+
+class NaverRoasBulkAdOffView(APIView):
+    """네이버 상품별 ROAS 화면에서 고른 상품의 개별 광고 OFF — 검색광고 공식 API(userLock).
+    items=[{account_id, product_no(=mallProductId)}]. CPC/AI 두 광고계정 모두 확인."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from apps.smartstore.services.naver_search_ad import lock_ads_for_products
+
+        items = request.data.get('items') or []
+        if not items:
+            return Response({'status': 'blocked', 'message': '대상이 없습니다.'}, status=400)
+
+        by_account = {}
+        for it in items:
+            by_account.setdefault(it['account_id'], set()).add(str(it['product_no']))
+
+        off_count, fail_count, no_ad_account = 0, 0, []
+        for account_id, pnos in by_account.items():
+            account = SmartStoreAccount.objects.filter(id=account_id).first()
+            if not account:
+                continue
+            cred_sets = [
+                (account.naver_ad_customer_id, account.naver_ad_access_license, account.naver_ad_secret_key),
+                (account.naver_ad_ai_customer_id, account.naver_ad_ai_access_license, account.naver_ad_ai_secret_key),
+            ]
+            had_creds = False
+            for cust, lic, sec in cred_sets:
+                if not (cust and lic and sec):
+                    continue
+                had_creds = True
+                for r in lock_ads_for_products(cust, lic, sec, pnos, lock=True):
+                    if r['ok']:
+                        off_count += 1
+                    else:
+                        fail_count += 1
+            if not had_creds:
+                no_ad_account.append(account.display_name or account.store_name)
+
+        msg = f'광고 OFF 완료 — {off_count}개 소재 OFF'
+        if fail_count:
+            msg += f', {fail_count}개 실패'
+        if no_ad_account:
+            msg += f' (광고 API 미설정 계정 제외: {", ".join(no_ad_account)})'
+        return Response({'status': 'done', 'off_count': off_count, 'fail_count': fail_count, 'message': msg})
+
+
 class SuspendProductsView(APIView):
     """미매칭(W코드+오너클랜품절) 대상 판매중지 — 좁은 의미(자동 대상 산정), _get_suspend_targets 사용."""
     LOG_FILE = '/tmp/suspend_smartstore_products.log'
