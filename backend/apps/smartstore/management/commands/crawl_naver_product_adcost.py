@@ -19,15 +19,19 @@ logger = logging.getLogger('crawler')
 
 
 def _upsert_product_stats(account, since_date, until_date, ad_type, rows):
+    """since_date(월 시작)만 유니크 키로 쓴다 — until_date는 '오늘'이라 매일 달라지므로
+    유니크 키에 넣으면 하루치 누적 스냅샷이 매일 새 행으로 계속 쌓여 SUM() 집계가
+    실제보다 수십 배 부풀려지는 버그가 있었다(2026-09-04 발견, 광고센터ROAS 수만% 오탐 원인).
+    since_date 기준 월 단위로 항상 같은 행을 덮어써서 최신 누적치 하나만 유지한다."""
     upserted = 0
     for item in rows:
         NaverAdProductReport.objects.update_or_create(
             account=account,
             since_date=since_date,
-            until_date=until_date,
             ad_type=ad_type,
             product_no=item['product_no'],
             defaults={
+                'until_date': until_date,
                 'product_name': item.get('product_name', ''),
                 'cost': item.get('cost', 0),
                 'click': item.get('click', 0),

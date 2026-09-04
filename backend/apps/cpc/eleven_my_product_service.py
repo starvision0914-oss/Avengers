@@ -467,11 +467,24 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
     nm_key = f"emp_nomatch:{account_id}:{status}:{search}:{int(bool(focused_only))}"
     no_match_total = cache.get(nm_key)
     if no_match_total is None:
-        no_match_total = (
+        no_match_qs = (
             qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
               .exclude(seller_product_code__regex=r'[가-힣]')
-        ).count()
+        )
+        no_match_total = no_match_qs.count()
         cache.set(nm_key, no_match_total, 120)
+    # 배지 표시용 고유 코드 수(2026-09-04) — 같은 W코드를 여러 계정이 각자 등록해 팔면 위 no_match_total은
+    # 계정별 리스팅 수만큼 중복 집계된다. "판매중지 대상 개수"(no_match_total, 리스팅 단위=정확)와
+    # "실제로 예비상품에 채워야 할 코드 종류"(no_match_unique_total, 코드 단위=중복없음)를 분리해 제공.
+    nmu_key = f"emp_nomatch_unique:{account_id}:{status}:{search}:{int(bool(focused_only))}"
+    no_match_unique_total = cache.get(nmu_key)
+    if no_match_unique_total is None:
+        no_match_unique_total = (
+            qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
+              .exclude(seller_product_code__regex=r'[가-힣]')
+              .values('seller_product_code').distinct().count()
+        )
+        cache.set(nmu_key, no_match_unique_total, 120)
     # 고단가 = W코드 전용(사용자 확정: "고단가는 w코드만이야 ... l코드의 단가는 절대 건드리지 않는다" —
     # 2026-08-27). 판매가 60만원 이상 이거나, 예비상품 마켓가보다 50%+ 비쌈 — 단가오류/미갱신 확인 신호.
     # (2026-08-21 재정의 — 절대금액 기준 추가: 미매칭이라 마켓가를 모르는 고가 상품도 이 필터로 걸리게 함)
@@ -490,6 +503,12 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
             qs.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
               .exclude(seller_product_code__regex=r'[가-힣]')
         )
+        # 화면 목록도 코드 기준 중복 제거(2026-09-04 사용자 지시) — 같은 W코드를 여러 계정이 각자
+        # 등록해 팔면 미매칭 목록에 같은 코드가 계정 수만큼 중복으로 보였다. 코드당 대표 1행(최소 id)만
+        # 남긴다. MySQL은 DISTINCT ON을 지원 안 해 GROUP BY(Min id) 서브쿼리로 대체.
+        from django.db.models import Min
+        rep_ids = list(qs.values('seller_product_code').annotate(rep_id=Min('id')).values_list('rep_id', flat=True))
+        qs = ElevenMyProduct.objects.select_related('account').filter(id__in=rep_ids)
     elif high_margin:
         qs = qs.filter(high_margin_cond)
 
@@ -525,7 +544,7 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
     elif needs_check:
         total = needs_total
     elif no_match:
-        total = no_match_total
+        total = no_match_unique_total
     elif high_margin:
         total = high_margin_total
     else:
@@ -545,6 +564,7 @@ def get_my_products(account_id=None, page=1, per_page=50, status=None, search=No
         'total': total,
         'needs_check_total': needs_total,   # 확인필요(역마진) 건수 — 필터 on/off 무관 항상 제공
         'no_match_total': no_match_total,
+        'no_match_unique_total': no_match_unique_total,   # 배지 표시용(중복코드 제거)
         'high_margin_total': high_margin_total,
         'page': page,
         'per_page': per_page,

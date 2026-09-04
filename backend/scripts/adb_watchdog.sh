@@ -1,15 +1,20 @@
 #!/bin/bash
 # adb(폰) 연결 감시 — 죽어있으면 자동 복구해서 OTP SMS 수신이 끊기지 않게 한다.
-# cron 5분마다 실행. 폰이 USB로 꽂혀만 있으면 연결을 자동 회복한다.
+# cron 5분마다 실행. USB와 와이파이(무선 adb) 둘 다 대응(2026-09-04, 와이파이 전환 후 추가).
 LOG=/tmp/adb_watchdog.log
+LAST_IP_FILE=/tmp/adb_last_wifi_ip
 export ANDROID_SERIAL=""
 
 dev=$(adb devices 2>/dev/null | grep -wE 'device' | grep -v 'List')
 if [ -n "$dev" ]; then
-    # 연결 정상 — reverse 터널만 보장
+    # 연결 정상 — reverse 터널 보장 + 와이파이 IP:port면 재연결용으로 기억해둠
     if ! adb reverse --list 2>/dev/null | grep -q 'tcp:8010'; then
         adb reverse tcp:8010 tcp:8010 >/dev/null 2>&1
         echo "$(date '+%F %T') reverse 재설정" >> $LOG
+    fi
+    wifi_ip=$(echo "$dev" | grep -oE '^[0-9]{1,3}(\.[0-9]{1,3}){3}:[0-9]+')
+    if [ -n "$wifi_ip" ]; then
+        echo "$wifi_ip" > "$LAST_IP_FILE"
     fi
     exit 0
 fi
@@ -20,13 +25,20 @@ adb kill-server >/dev/null 2>&1
 sleep 1
 adb start-server >/dev/null 2>&1
 sleep 2
+# USB는 start-server만으로 재검출되지만, 와이파이(무선) adb는 명시적 connect가 필요함 —
+# 마지막으로 살아있던 IP:port로 재연결 시도(USB만 쓰는 환경이면 파일이 없어 이 단계는 조용히 스킵).
+if [ -f "$LAST_IP_FILE" ]; then
+    last_ip=$(cat "$LAST_IP_FILE")
+    adb connect "$last_ip" >/dev/null 2>&1
+    sleep 1
+fi
 dev=$(adb devices 2>/dev/null | grep -wE 'device' | grep -v 'List')
 if [ -n "$dev" ]; then
     adb reverse tcp:8010 tcp:8010 >/dev/null 2>&1
     pm2 restart avengers-sms-poller >/dev/null 2>&1
     echo "$(date '+%F %T') 복구 성공 ($dev) + sms-poller 재시작" >> $LOG
 else
-    echo "$(date '+%F %T') 복구 실패 — 폰 USB 물리 연결 확인 필요!" >> $LOG
+    echo "$(date '+%F %T') 복구 실패 — 폰 USB 연결 또는 와이파이(같은 네트워크) 상태 확인 필요!" >> $LOG
     cd /home/rejoice888/Avengers/backend
     # smsApp 하트비트가 신선하면(앱이 네트워크로 서버와 통신 중) 문자·알림(OTP 포함)은 앱 경로로
     # 정상 수신되므로 adb가 죽어도 긴급경보는 무의미 → 경보 억제(로그만). 5분마다 도배 방지.

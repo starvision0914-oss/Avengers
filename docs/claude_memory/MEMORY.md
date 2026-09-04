@@ -132,3 +132,6 @@
 - [11번가 나의상품 그리드 실시간검증법](project_11st_jqxgrid_realtime_verify.md) — jqxGrid getrows 직접조회
 - [11번가 판매중지 배치 혼합거부](project_11st_jinag7460_suspend_reject.md) — 섞이면 전체거부, 순수재구성
 - [L코드 진행률 100% 오표시 버그](project_lcode_progress_pct_bug.md) — 구조적 오류로 완료오인, 로그파싱 수정
+- [도매매코드 명칭](reference_domeggook_code_format.md) — 스마트스토어 순수숫자7자리 판매자코드
+- [스마트스토어 W코드 정규식 누락](project_smartstore_wcode_regex_gap.md) — 비16진수 W코드 42건 누락
+- [11번가 판매중지 처리지연](project_11st_suspend_processing_delay.md) — 성공해도 반영까지 몇시간 지연

@@ -1213,6 +1213,78 @@ class OverviewView(views.APIView):
         })
 
 
+class OverviewExpenseView(views.APIView):
+    """통합현황 공통 고정비 수기입력 — 날짜+항목명+금액 자유 입력(여러 건 가능).
+    GET=목록 조회(?date_from&date_to=기간 우선, 없으면 ?ym=YYYY-MM), POST=항목 추가, PUT=항목 수정(?id=), DELETE=항목 삭제(?id=)."""
+    def _parse(self, data):
+        from datetime import datetime
+        date_str = str(data.get('date') or '').strip()
+        try:
+            d = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return None, None, None, '날짜 형식이 올바르지 않습니다(YYYY-MM-DD)'
+        label = str(data.get('label') or '').strip()[:100]
+        if not label:
+            return None, None, None, '항목명을 입력하세요'
+        try:
+            amount = int(data.get('amount') or 0)
+        except (TypeError, ValueError):
+            return None, None, None, '금액은 숫자만 입력하세요'
+        return d, label, amount, None
+
+    def get(self, request):
+        from django.utils import timezone as tz
+        from .models import OverviewExpenseItem
+        date_from = request.query_params.get('date_from')
+        date_to = request.query_params.get('date_to')
+        resp = {}
+        if date_from and date_to:
+            qs = OverviewExpenseItem.objects.filter(date__gte=date_from, date__lte=date_to)
+            resp['date_from'], resp['date_to'] = date_from, date_to
+        else:
+            ym = request.query_params.get('ym') or tz.localdate().strftime('%Y-%m')
+            y, m = (int(x) for x in ym.split('-'))
+            qs = OverviewExpenseItem.objects.filter(date__year=y, date__month=m)
+            resp['ym'] = ym
+        items = list(qs.order_by('date', 'id').values('id', 'date', 'label', 'amount'))
+        for it in items:
+            it['date'] = it['date'].isoformat()
+        resp['items'] = items
+        resp['total'] = sum(i['amount'] for i in items)
+        return Response(resp)
+
+    def post(self, request):
+        from .models import OverviewExpenseItem
+        d, label, amount, err = self._parse(request.data)
+        if err:
+            return Response({'error': err}, status=400)
+        item = OverviewExpenseItem.objects.create(date=d, label=label, amount=amount)
+        return Response({'id': item.id, 'date': item.date.isoformat(), 'label': label, 'amount': amount})
+
+    def put(self, request):
+        from .models import OverviewExpenseItem
+        item_id = request.query_params.get('id')
+        if not item_id:
+            return Response({'error': 'id 필요'}, status=400)
+        item = OverviewExpenseItem.objects.filter(id=item_id).first()
+        if not item:
+            return Response({'error': '항목을 찾을 수 없습니다'}, status=404)
+        d, label, amount, err = self._parse(request.data)
+        if err:
+            return Response({'error': err}, status=400)
+        item.date, item.label, item.amount = d, label, amount
+        item.save(update_fields=['date', 'label', 'amount'])
+        return Response({'id': item.id, 'date': item.date.isoformat(), 'label': label, 'amount': amount})
+
+    def delete(self, request):
+        from .models import OverviewExpenseItem
+        item_id = request.query_params.get('id')
+        if not item_id:
+            return Response({'error': 'id 필요'}, status=400)
+        OverviewExpenseItem.objects.filter(id=item_id).delete()
+        return Response({'status': 'ok'})
+
+
 class AdDetailView(views.APIView):
     """광고비 상세 내역 - CPC/AI 클릭 시 모달용"""
     def get(self, request):
@@ -1299,8 +1371,8 @@ class AdDetailView(views.APIView):
 from .models import GmarketAiAdSummary, GmarketAiAdHistory, St11AdofficeCampaign
 from .serializers import GmarketAiSummarySerializer, GmarketAiHistorySerializer, St11CampaignSerializer
 
-from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup
-from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer
+from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup, NewAdCenterHistory
+from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer, NewAdCenterHistorySerializer
 
 class CpcAdStatusViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketCpcAdStatus.objects.all()
@@ -1392,6 +1464,10 @@ class Cpc2ScheduleViewSet(viewsets.ModelViewSet):
 class Cpc2HistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Cpc2History.objects.all()[:100]
     serializer_class = Cpc2HistorySerializer
+
+class NewAdCenterHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = NewAdCenterHistory.objects.all()[:100]
+    serializer_class = NewAdCenterHistorySerializer
 
 class AiScheduleViewSet(viewsets.ModelViewSet):
     queryset = AiSchedule.objects.all()
@@ -1528,6 +1604,26 @@ class Cpc2ControlView(views.APIView):
             run_control(action, source, account_filter=accounts, include_cpc1=include_cpc1)
         th.Thread(target=run, daemon=True).start()
         return Response({'status': 'started', 'action': action, 'include_cpc1': include_cpc1})
+
+class NewAdCenterControlView(views.APIView):
+    """지마켓 신규 광고센터(adcenter.esmplus.com) 캠페인 일괄 ON/OFF."""
+    def post(self, request):
+        import threading as th
+        from apps.cpc import eleven_block_guard as guard
+        busy = guard.adcontrol_busy_info('gmarket')
+        if busy:
+            return Response({'status': 'busy',
+                             'message': f'이미 광고제어 실행 중({busy["name"]}) — 끝난 뒤 다시 시도하세요.'},
+                            status=409)
+        action = request.data.get('action', 'on')
+        accounts = request.data.get('accounts')
+        source = request.data.get('source', 'manual')
+        def run():
+            from crawlers.gmarket_new_adcenter_control import run_control
+            run_control(action, source, account_filter=accounts)
+        th.Thread(target=run, daemon=True).start()
+        return Response({'status': 'started', 'action': action})
+
 
 class AiControlView(views.APIView):
     def post(self, request):
@@ -3732,7 +3828,15 @@ class ElevenMyProductListView(views.APIView):
             def _rows():
                 w = _csv.writer(_Echo())
                 yield '﻿' + w.writerow(header)
+                # 미매칭(no_match) 다운로드는 코드 기준 중복 제거(2026-09-04 사용자 지시) — 같은 W코드를
+                # 여러 계정이 각자 등록해 파는 경우가 많아(예: 8륜 장바구니카트를 5개 계정이 판매) 코드만
+                # 필요한 대량조회 용도로는 계정별 리스팅이 아니라 코드당 1행이면 충분함.
+                seen = set() if no_match else None
                 for p in qs.iterator(chunk_size=2000):
+                    if seen is not None:
+                        if p.seller_product_code in seen:
+                            continue
+                        seen.add(p.seller_product_code)
                     pct = round(p.sale_price / p.purchase_cost * 100, 1) if p.purchase_cost else ''
                     yield w.writerow([
                         p.account.seller_name, p.account.login_id, p.product_no,
@@ -4901,6 +5005,37 @@ class MyProductsAllView(views.APIView):
             )
             _nm_cache.set(nm_key, no_match_total, 180)
 
+        # 배지 표시용 고유 코드 수(2026-09-04) — 같은 W코드를 여러 계정/플랫폼이 각자 등록해 팔면
+        # no_match_total은 리스팅 수만큼 중복 집계된다. 실제로 예비상품에 채워야 할 "코드 종류"는
+        # 플랫폼을 넘나들어도 같은 코드면 한 번만 세야 하므로 전체 소스를 합쳐 set으로 중복 제거한다.
+        import re as _re_nm
+        _w_re_nm = _re_nm.compile(r'^(?:WDM_|AUTO_)?(W[0-9A-Za-z]{6})$', _re_nm.IGNORECASE)
+
+        def _nm_codes(model, code_field, status_field, status_val):
+            qs = (model.objects
+                  .filter(**{f'{code_field}__iregex': r'^(WDM_|AUTO_)?W', 'purchase_cost__isnull': True, status_field: status_val})
+                  .exclude(**{f'{code_field}__regex': r'[가-힣]'})
+                  .values_list(code_field, flat=True).distinct())
+            out = set()
+            for c in qs.iterator():
+                m = _w_re_nm.match((c or '').strip())
+                if m:
+                    out.add(m.group(1).upper())
+            return out
+
+        nmu_key = "all_nomatch_unique_total_v2"
+        no_match_unique_total = _nm_cache.get(nmu_key)
+        if no_match_unique_total is None:
+            from apps.smartstore.models import SmartStoreProduct as _SSP3
+            from apps.lotteon.models import LotteonMyProduct as _LMP3
+            all_codes = set()
+            all_codes |= _nm_codes(ElevenMyProduct, 'seller_product_code', 'status_type', '판매중')
+            all_codes |= _nm_codes(GmarketMyProduct, 'seller_product_code', 'status_type', '판매중')
+            all_codes |= _nm_codes(_SSP3, 'seller_management_code', 'status_type', 'SALE')
+            all_codes |= _nm_codes(_LMP3, 'seller_product_code', 'status_code', 'SALE')
+            no_match_unique_total = len(all_codes)
+            _nm_cache.set(nmu_key, no_match_unique_total, 180)
+
         # 확인필요(역마진) 총건수(배지표시용) — 마켓가 대비 needs_check_pct%+ 저가, 판매중만. 필터 on/off 무관 항상 계산.
         def _needs_count(model, status_field, status_val):
             return model.objects.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult,
@@ -4932,8 +5067,11 @@ class MyProductsAllView(views.APIView):
         if needs_check:
             eq = eq.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
         elif no_match:
+            from django.db.models import Min as _Min
             eq = (eq.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
                     .exclude(seller_product_code__regex=r'[가-힣]'))
+            eq = ElevenMyProduct.objects.select_related('account').filter(
+                id__in=list(eq.values('seller_product_code').annotate(rep_id=_Min('id')).values_list('rep_id', flat=True)))
         _E_SORT = {'product_name': 'product_name', 'sale_price': 'sale_price', 'stock_quantity': 'stock_quantity',
                    'status_type': 'status_type', 'seller_product_code': 'seller_product_code',
                    'login_id': 'account__login_id', 'seller_name': 'account__seller_name', 'synced_at': 'synced_at',
@@ -4975,8 +5113,11 @@ class MyProductsAllView(views.APIView):
         if needs_check:
             gq = gq.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult)
         elif no_match:
+            from django.db.models import Min as _Min
             gq = (gq.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='판매중')
                     .exclude(seller_product_code__regex=r'[가-힣]'))
+            gq = GmarketMyProduct.objects.select_related('account').filter(
+                id__in=list(gq.values('seller_product_code').annotate(rep_id=_Min('id')).values_list('rep_id', flat=True)))
         if dedup_on:
             from django.db.models import Min
             from django.core.cache import cache as _cache
@@ -5069,8 +5210,11 @@ class MyProductsAllView(views.APIView):
         if needs_check or dedup_on:
             ss_allowed = False   # 확인필요/중복제외는 11번가·지마켓 전용 개념
         elif no_match:
+            from django.db.models import Min as _Min
             sq = (sq.filter(seller_management_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_type='SALE')
                     .exclude(seller_management_code__regex=r'[가-힣]'))
+            sq = SmartStoreProduct.objects.select_related('account').filter(
+                id__in=list(sq.values('seller_management_code').annotate(rep_id=_Min('id')).values_list('rep_id', flat=True)))
         _SS_SORT = {'product_name': 'name', 'sale_price': 'sale_price', 'stock_quantity': 'stock_quantity',
                     'status_type': 'status_type', 'seller_product_code': 'seller_management_code',
                     'login_id': 'account__login_id', 'seller_name': 'account__display_name', 'synced_at': 'synced_at'}
@@ -5122,8 +5266,11 @@ class MyProductsAllView(views.APIView):
             lq = lq.filter(purchase_cost__gt=0, sale_price__lte=F('purchase_cost') * needs_check_mult, status_code='SALE')
         elif no_match:
             # (2026-08-26) 롯데온도 2026-08-23부터 purchase_cost 매칭 인프라가 있음 — 다른 플랫폼과 동일 기준 적용.
+            from django.db.models import Min as _Min
             lq = (lq.filter(seller_product_code__iregex=r'^(WDM_|AUTO_)?W', purchase_cost__isnull=True, status_code='SALE')
                     .exclude(seller_product_code__regex=r'[가-힣]'))
+            lq = LotteonMyProduct.objects.select_related('account').filter(
+                id__in=list(lq.values('seller_product_code').annotate(rep_id=_Min('id')).values_list('rep_id', flat=True)))
         _LOTTEON_SORT = {'product_name': 'product_name', 'sale_price': 'sale_price',
                          'status_type': 'status_code', 'seller_product_code': 'seller_product_code',
                          'login_id': 'account__login_id', 'seller_name': 'account__store_name', 'synced_at': 'synced_at'}
@@ -5223,6 +5370,7 @@ class MyProductsAllView(views.APIView):
             'total_pages': math.ceil(total / per_page) if per_page else 1,
             'needs_check_total': needs_check_total,
             'no_match_total': no_match_total,
+            'no_match_unique_total': no_match_unique_total,
         })
 
 
@@ -6907,6 +7055,7 @@ def _gmkt_product_rows(request):
     _rmin = request.query_params.get('roas_min')
     roas_max = float(_rmax) if _rmax not in (None, '') else None
     roas_min = float(_rmin) if _rmin not in (None, '') else None
+    status_filter = request.query_params.get('status') or ''   # 지정 시 이 상태(예: '판매중')만 표시
     CAP = 5000
 
     base = GmarketProductAdCost.objects.filter(mq)
@@ -6997,6 +7146,8 @@ def _gmkt_product_rows(request):
         a = attr.get(pno, {})
         lid = a.get('login_id', '')
         st = '삭제완료' if (lid, pno) in deleted else _gmkt_status_label(status_by_pno.get(pno), pno in status_by_pno)
+        if status_filter and st != status_filter:
+            continue
         _sy = synced_by_pno.get(pno)
         # '판매중'인데 상태수집이 STALE_DAYS+ 지난 경우만 확인필요(중지/품절/삭제는 이미 확정상태라 제외)
         _stale = bool(st == '판매중' and _sy and (_now - _sy).days >= STALE_DAYS)

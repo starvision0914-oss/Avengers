@@ -128,15 +128,20 @@ export default function GmarketRoasPage() {
   const [lossEid, setLossEid] = useState('');          // 현재 적자/ROAS 모달이 보고있는 계정(자동갱신용)
   const [kwYears, setKwYears] = useState<number[] | null>(null);  // 연도-버킷 모드(2025/2026/전체)
   const [lossAd, setLossAd] = useState<'' | 'cpc' | 'ai'>('');    // 광고유형 필터: ''=전체(CPC+AI 합산) / cpc / ai
-  const fetchLoss = (mode: LMode, eid = '', ymF = ymFrom, ymT = ymTo, ad: '' | 'cpc' | 'ai' = lossAd) => {
+  // 상태 필터: 판매중/판매중지·품절/삭제/삭제완료/전체(빈값) — 적자상품(loss) 모드는 기본 '판매중'만.
+  const STATUS_OPTIONS = ['판매중', '판매중지', '품절', '삭제', '삭제완료'];
+  const [lossStatus, setLossStatus] = useState<string>('판매중');
+  const fetchLoss = (mode: LMode, eid = '', ymF = ymFrom, ymT = ymTo, ad: '' | 'cpc' | 'ai' = lossAd, status = lossStatus) => {
     setLossEid(eid);
     setLossLoading(true); setLossData(null); setLossSel(new Set());
     // 키워드 모드는 CPC 전용(고정), 그 외 모드만 토글(ad)로 CPC/AI/전체 분리
     const adParam = (mode !== 'keyword' && ad) ? { ad_type: ad } : {};
-    api.get('/cpc/gmarket/loss-products/', { params: { ym_from: ymF, ym_to: ymT, eid, ...LMODES[mode].params, ...adParam } })
+    const statusParam = status ? { status } : {};
+    api.get('/cpc/gmarket/loss-products/', { params: { ym_from: ymF, ym_to: ymT, eid, ...LMODES[mode].params, ...adParam, ...statusParam } })
       .then(r => setLossData(r.data)).catch(() => setLossData(null)).finally(() => setLossLoading(false));
   };
   const setLossAdAnd = (ad: '' | 'cpc' | 'ai') => { setLossAd(ad); fetchLoss(lossMode, lossEid, ymFrom, ymTo, ad); };
+  const setLossStatusAnd = (status: string) => { setLossStatus(status); fetchLoss(lossMode, lossEid, ymFrom, ymTo, lossAd, status); };
   const openLoss = (mode: LMode) => { setKwYears(null); setLossMode(mode); setLossOpen(true); fetchLoss(mode, ''); };
   // 연도별 키워드 대상: 기간을 해당 연도로 맞추고 키워드모달 오픈 + 수집대상 연도 기록
   const openKwYear = (years: number[]) => {
@@ -798,6 +803,12 @@ export default function GmarketRoasPage() {
                   ))}
                 </span>
               )}
+              <select value={lossStatus} onChange={e => setLossStatusAnd(e.target.value)}
+                title="판매상태 필터 — 지정한 상태만 조회(비고 기준 최신 스냅샷)"
+                className="text-[11px] border border-[#d0d0d0] rounded px-1.5 py-0.5 text-[#555]">
+                <option value="">전체 상태</option>
+                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}만</option>)}
+              </select>
               {lossData && <span className="text-[12px] text-[#c2410c] font-semibold">{lossData.count.toLocaleString()}개{lossData.capped ? '+' : ''}</span>}
               {lossData && <span className="text-[11px] text-[#999]">{lossData.ym_from}~{lossData.ym_to}</span>}
               {lossSel.size > 0 && <span className="text-[11px] text-[#1e6fd9] font-semibold">선택 {lossSel.size}</span>}

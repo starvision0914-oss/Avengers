@@ -42,6 +42,11 @@ def classify_11st_description(desc):
         return 'CHARGE'
     if '미수금상환' in desc or '정산' in desc or '입금' in desc:
         return 'SETTLE'
+    # '셀러 광고포인트 지급' 등 — "광고"라는 글자 때문에 안전망 규칙에 걸려 CPC(광고비)로
+    # 잘못 집계되던 것 발견·수정(2026-09-04). 실제 지출이 아니라 11번가가 주는 포인트
+    # 지급(+)이라 CHARGE(충전/정산)로 분류.
+    if '포인트' in desc and '지급' in desc:
+        return 'CHARGE'
     # 안전망: 위 규칙에 못 걸려도 '광고'라는 글자가 있으면 광고비로 집계.
     # 11번가가 광고상품명을 바꿔도(지마켓 AI매출업→AI Product AD 사례처럼) 개별 규칙
     # 추가가 늦어 그 사이 누락되는 걸 방지.

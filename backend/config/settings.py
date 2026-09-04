@@ -6,6 +6,17 @@ from datetime import timedelta
 import pymysql
 pymysql.install_as_MySQLdb()
 
+# 이 서버는 IPv6 경로가 없는데, 텔레그램 등 일부 외부 API 호출(urllib)이 DNS에서 IPv6 주소를
+# 받으면 그쪽으로 시도하다 "Network is unreachable"로 실패함(2026-09-04 실측 — 텔레그램 봇
+# 루프오류 반복, _send_telegram_alert도 동일 경로라 중요 알림이 조용히 유실됐을 수 있음).
+# getaddrinfo를 IPv4만 반환하도록 프로세스 전역에서 패치 — manage.py로 실행되는 모든 커맨드
+# (크론 포함)에 공통 적용됨.
+import socket as _socket
+_orig_getaddrinfo = _socket.getaddrinfo
+def _ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
+_socket.getaddrinfo = _ipv4_only_getaddrinfo
+
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent.parent / '.env')
 

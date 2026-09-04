@@ -55,6 +55,49 @@ export async function getOverview(params?: OverviewParams): Promise<OverviewResp
   return data;
 }
 
+export interface OverviewExpenseItem {
+  id: number;
+  date: string;
+  label: string;
+  amount: number;
+}
+export interface OverviewExpenseList {
+  ym?: string;
+  date_from?: string;
+  date_to?: string;
+  items: OverviewExpenseItem[];
+  total: number;
+}
+export interface OverviewExpenseInput {
+  date: string;
+  label: string;
+  amount: number;
+}
+export interface OverviewExpenseParams {
+  date_from?: string;
+  date_to?: string;
+  ym?: string;
+}
+
+export async function getOverviewExpense(params?: OverviewExpenseParams): Promise<OverviewExpenseList> {
+  const { data } = await api.get('/cpc/overview/expense/', { params: params || {} });
+  return data;
+}
+
+export async function addOverviewExpense(body: OverviewExpenseInput): Promise<OverviewExpenseItem> {
+  const { data } = await api.post('/cpc/overview/expense/', body);
+  return data;
+}
+
+export async function updateOverviewExpense(id: number, body: OverviewExpenseInput): Promise<OverviewExpenseItem> {
+  const { data } = await api.put('/cpc/overview/expense/', body, { params: { id } });
+  return data;
+}
+
+export async function deleteOverviewExpense(id: number): Promise<void> {
+  await api.delete('/cpc/overview/expense/', { params: { id } });
+}
+
 export interface MallProfitRow {
   platform: string;
   label: string;

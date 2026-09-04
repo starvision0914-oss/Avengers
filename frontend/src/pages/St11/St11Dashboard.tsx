@@ -195,13 +195,13 @@ export default function St11Dashboard() {
 
   return (
     <div className="min-h-screen bg-[#f5f5f5]">
-      {/* 만료임박 광고포인트 요약 (대시보드 맨 위) — 이미 소진한 건은 표시 안 함 */}
-      {expiringPoints.filter(p => p.remaining !== 0).length > 0 && (
+      {/* 만료임박 광고포인트 요약 (대시보드 맨 위) — 이미 소진한 건은 표시 안 함, 10일 이하만 노출 */}
+      {expiringPoints.filter(p => p.remaining !== 0 && p.days_left <= 10).length > 0 && (
         <div className="bg-[#fffbeb] border-b border-[#fde68a] px-4 md:px-6 py-2">
           <div className="max-w-[1800px] mx-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]">
             <span className="font-bold text-[#b45309]">⏰ 유효기간 있는 포인트</span>
-            {expiringPoints.filter(p => p.remaining !== 0).map((p, i) => (
-              <span key={i} className={p.days_left <= 5 ? 'text-[#b91c1c] font-extrabold' : 'text-[#666]'}>
+            {expiringPoints.filter(p => p.remaining !== 0 && p.days_left <= 10).map((p, i) => (
+              <span key={i} className={p.days_left <= 7 ? 'text-[#b91c1c] font-extrabold' : 'text-[#666]'}>
                 {p.seller_name}({p.seller_id}) · {p.valid_until}까지({p.days_left}일 남음) · 지급 {formatKRW(p.amount)}
                 {p.remaining != null ? ` · 남은잔액 ${formatKRW(p.remaining)}` : ''}
               </span>

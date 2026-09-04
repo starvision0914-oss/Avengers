@@ -453,6 +453,20 @@ class Cpc2History(models.Model):
     event_time = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'gmarket_cpc2_history'
+
+
+class NewAdCenterHistory(models.Model):
+    """지마켓 신규 광고센터(adcenter.esmplus.com, 2026-09-04 오픈) 캠페인 ON/OFF 이력.
+    간편광고(ad.esmplus.com)와는 완전히 별도 로그인/캠페인 체계라 이력도 분리 저장."""
+    gmarket_id = models.CharField(max_length=50)
+    action = models.CharField(max_length=5)
+    campaign_before = models.IntegerField(default=0)   # 제어 전 ON 캠페인 수
+    campaign_after = models.IntegerField(default=0)    # 제어 후 ON 캠페인 수
+    source = models.CharField(max_length=20, default='manual')
+    event_time = models.DateTimeField(auto_now_add=True)
+    class Meta:
+        db_table = 'gmarket_new_adcenter_history'
+        ordering = ['-event_time']
         ordering = ['-event_time']
 
 class CppSchedule(models.Model):
@@ -657,6 +671,24 @@ class GmarketCostHistory(models.Model):
             models.Index(fields=['transaction_type']),
             models.Index(fields=['market', 'use_date']),
         ]
+
+
+class OverviewExpenseItem(models.Model):
+    """통합현황(Overview) 공통 고정비 수기입력 — 날짜+항목명+금액 자유 입력(인건비/임대료 등
+    원하는 이름으로 여러 개 추가 가능). 특정 쇼핑몰과 무관한 회사 전체 비용이라
+    계정 단위인 GmarketManualCost와 별도."""
+    date = models.DateField(db_index=True)                # 지출일
+    label = models.CharField(max_length=100)              # 항목명(예: 직원 인건비, 사무실 임대료)
+    amount = models.IntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'overview_expense_item'
+        ordering = ['-date', '-id']
+        indexes = [models.Index(fields=['date'])]
+
+    def __str__(self):
+        return f'{self.date} {self.label} {self.amount:,}원'
 
 
 class GmarketManualCost(models.Model):

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { PlayCircle } from 'lucide-react';
 import api from '../../api/client';
 import { formatKRW } from '../../utils/format';
@@ -27,11 +27,14 @@ interface Row {
   conv_cnt: number;
   conv_amt: number;
   roas: number;
+  real_sales: number;
+  real_roas: number;
   status: string;
 }
 interface Totals {
   cost: number; click: number; impression: number;
   conv_cnt: number; conv_amt: number; roas: number; products: number;
+  real_sales: number; real_roas: number;
 }
 interface SearchTermRow {
   account_id: number;
@@ -85,7 +88,9 @@ const COLS: { key: SortKey; label: string; align: 'left' | 'right' }[] = [
   { key: 'cost',         label: '광고비',   align: 'right' },
   { key: 'conv_cnt',     label: '구매수',   align: 'right' },
   { key: 'conv_amt',     label: '구매금액', align: 'right' },
-  { key: 'roas',         label: 'ROAS',    align: 'right' },
+  { key: 'roas',         label: 'ROAS(광고센터)', align: 'right' },
+  { key: 'real_sales',   label: '실매출(정산)', align: 'right' },
+  { key: 'real_roas',    label: 'ROAS(실매출)', align: 'right' },
   { key: 'status',       label: '상품상태', align: 'left'  },
 ];
 
@@ -103,6 +108,8 @@ export default function NaverRoasPage() {
   const [accounts, setAccounts] = useState<{ id: number; name: string }[]>([]);
   const [sortKey, setSortKey] = useState<SortKey>('cost');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [statusFilter, setStatusFilter] = useState('');
+  const loadTicket = useRef(0);
   const [copied, setCopied] = useState(false);
 
   // ── 적자상품 모드(기간 자유 선택, 예: 1년) — 화면에 뜬 행을 골라 판매중지/광고OFF.
@@ -132,9 +139,16 @@ export default function NaverRoasPage() {
       .finally(() => setActionBusy(false));
   };
   const bulkAdOff = () => {
-    const items = selectedItems();
-    if (!items.length) { alert('선택된 상품이 없습니다.'); return; }
-    if (!confirm(`선택한 ${items.length}개 상품의 광고를 OFF할까요?`)) return;
+    // 사용자 지시(2026-09-04): 판매중지/품절 상품은 광고 꺼봐야 의미 없으니, 선택 중
+    // 판매중(SALE) 상품만 실제 광고 OFF 대상으로 삼는다(나머지는 조용히 제외).
+    const saleRows = rows.filter(r => selected.has(rowKey(r)) && r.status === '판매중');
+    const skipped = selected.size - saleRows.length;
+    if (!saleRows.length) { alert('선택한 상품 중 판매중 상태가 없습니다. (광고 OFF는 판매중 상품에만 적용됩니다)'); return; }
+    const items = saleRows.map(r => ({ account_id: r.account_id, product_no: r.product_no }));
+    const msg = skipped > 0
+      ? `선택한 ${selected.size}개 중 판매중 ${items.length}개만 광고 OFF합니다(판매중 아닌 ${skipped}개 제외). 진행할까요?`
+      : `선택한 ${items.length}개 상품의 광고를 OFF할까요?`;
+    if (!confirm(msg)) return;
     setActionBusy(true); setActionMsg('');
     api.post('/smartstore/naver-product-roas/ad-off/', { items })
       .then(r => setActionMsg(r.data.message))
@@ -175,14 +189,21 @@ export default function NaverRoasPage() {
 
   const load = useCallback((modeArg?: Mode, ymF = ymFrom, ymT = ymTo, aid = accountId, at = adType) => {
     const m = modeArg ?? mode;
+    const ticket = ++loadTicket.current;
     setMode(m);
     setLoading(true);
+    // 조회 중엔 이전(다른 기간/모드) 데이터를 화면에 남겨두지 않는다 — 남겨두면 사용자가
+    // 그 사이에 체크박스를 눌러도 응답 도착 후 목록이 바뀌면서 선택이 통째로 사라져
+    // "선택 광고 OFF"를 눌러도 아무 반응이 없는 것처럼 보이는 버그가 있었음(2026-09-04).
+    setRows([]);
+    setSelected(new Set());
     api.get('/smartstore/naver-product-roas/', {
       params: { ym_from: ymF, ym_to: ymT, account_id: aid, ad_type: at, ...MODES[m].params },
     }).then(r => {
+      if (ticket !== loadTicket.current) return; // 더 최신 요청이 이미 나감 — 이 응답은 버림
       setRows(r.data.rows || []);
       setTotals(r.data.totals);
-    }).finally(() => setLoading(false));
+    }).finally(() => { if (ticket === loadTicket.current) setLoading(false); });
   }, [ymFrom, ymTo, accountId, adType, mode]);
 
   useEffect(() => { load(); }, []); // eslint-disable-line
@@ -193,20 +214,27 @@ export default function NaverRoasPage() {
   };
   const arr = (k: SortKey) => sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ' ↕';
 
-  const sorted = [...rows].sort((a, b) => {
-    const sgn = sortDir === 'asc' ? 1 : -1;
-    if (sortKey === 'status')
-      return sgn * ((STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
-    if (TEXT_KEYS.has(sortKey))
-      return sgn * String(a[sortKey]).localeCompare(String(b[sortKey]));
-    return sgn * ((Number(a[sortKey]) || 0) - (Number(b[sortKey]) || 0));
-  });
+  const sorted = [...rows]
+    .filter(r => !statusFilter || r.status === statusFilter)
+    .sort((a, b) => {
+      // 적자상품 모드에서는 정렬 기준과 무관하게 판매중 상품을 항상 먼저 보여준다(2026-09-04 지시).
+      if (mode === 'loss' && sortKey !== 'status') {
+        const so = (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9);
+        if (so !== 0) return so;
+      }
+      const sgn = sortDir === 'asc' ? 1 : -1;
+      if (sortKey === 'status')
+        return sgn * ((STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9));
+      if (TEXT_KEYS.has(sortKey))
+        return sgn * String(a[sortKey]).localeCompare(String(b[sortKey]));
+      return sgn * ((Number(a[sortKey]) || 0) - (Number(b[sortKey]) || 0));
+    });
 
   const doExport = () => {
     const header = COLS.map(c => c.label).join(',');
     const lines = [header, ...sorted.map(r =>
       [r.account_name, r.product_no, r.product_name, r.impression, r.click,
-       r.cost, r.conv_cnt, r.conv_amt, r.roas, r.status]
+       r.cost, r.conv_cnt, r.conv_amt, r.roas, r.real_sales, r.real_roas, r.status]
         .map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')
     )];
     const csv = '﻿' + lines.join('\n');
@@ -223,7 +251,7 @@ export default function NaverRoasPage() {
     const header = COLS.map(c => c.label).join('\t');
     const lines = [header, ...sorted.map(r =>
       [r.account_name, r.product_no, r.product_name, r.impression, r.click,
-       r.cost, r.conv_cnt, r.conv_amt, r.roas, r.status].join('\t')
+       r.cost, r.conv_cnt, r.conv_amt, r.roas, r.real_sales, r.real_roas, r.status].join('\t')
     )];
     navigator.clipboard.writeText(lines.join('\n')).then(() => {
       setCopied(true); setTimeout(() => setCopied(false), 1500);
@@ -322,7 +350,9 @@ export default function NaverRoasPage() {
           <span className="text-[#555]">광고비 <b className="text-[#f97316] text-[16px]">{formatKRW(totals.cost)}</b></span>
           <span className="text-[#555]">클릭 <b className="text-[#222] text-[16px]">{totals.click.toLocaleString()}</b></span>
           <span className="text-[#555]">구매금액 <b className="text-[#2563eb] text-[16px]">{formatKRW(totals.conv_amt)}</b></span>
-          <span className="text-[#555]">ROAS <b className={`text-[16px] ${roasColor(totals.roas)}`}>{totals.roas}%</b></span>
+          <span className="text-[#555]">ROAS(광고센터) <b className={`text-[16px] ${roasColor(totals.roas)}`}>{totals.roas}%</b></span>
+          <span className="text-[#555]">실매출 <b className="text-[#16a34a] text-[16px]">{formatKRW(totals.real_sales)}</b></span>
+          <span className="text-[#555]">ROAS(실매출) <b className={`text-[16px] ${roasColor(totals.real_roas)}`}>{totals.real_roas}%</b></span>
           {mode !== 'all' && (
             <span className="text-[13px] text-[#999] ml-auto">기준: {MODES[mode].crit}</span>
           )}
@@ -333,10 +363,19 @@ export default function NaverRoasPage() {
       {mode === 'loss' && (
         <div className="bg-white border border-[#e0e0e0] rounded-lg px-5 py-2.5 flex items-center gap-3 text-[13px]">
           <span className="text-[#555]">선택 <b className="text-[#222]">{selected.size}</b>개</span>
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
+            title="상품상태로 목록 필터링 (기본은 판매중이 항상 맨 위)"
+            className="px-2 py-1 rounded border border-[#ddd] text-[#555] bg-white">
+            <option value="">상태: 전체</option>
+            {Object.keys(STATUS_ORDER).map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
           <button onClick={() => setSelected(new Set(sorted.map(rowKey)))}
             className="px-2.5 py-1 rounded border border-[#ddd] text-[#555] hover:border-[#2563eb] hover:text-[#2563eb]">전체선택</button>
           <button onClick={() => setSelected(new Set())}
             className="px-2.5 py-1 rounded border border-[#ddd] text-[#555] hover:border-[#2563eb] hover:text-[#2563eb]">선택해제</button>
+          <button onClick={() => setSelected(new Set(sorted.filter(r => r.real_roas <= 100).map(rowKey)))}
+            title="실매출 기준 ROAS가 100% 이하인(정산 매출로도 적자인) 상품만 선택"
+            className="px-2.5 py-1 rounded border border-[#dc2626] text-[#dc2626] hover:bg-[#fef2f2]">실매출 100%이하 선택</button>
           <button onClick={bulkSuspend} disabled={actionBusy || selected.size === 0}
             className="px-3 py-1.5 font-bold text-white rounded bg-[#c2410c] hover:bg-[#9a3412] disabled:opacity-40">🛑 선택 판매중지</button>
           <button onClick={bulkAdOff} disabled={actionBusy || selected.size === 0}
@@ -393,6 +432,10 @@ export default function NaverRoasPage() {
                   <td className="px-3 py-2 text-[14px] text-right font-semibold text-[#2563eb]">{r.conv_amt.toLocaleString()}</td>
                   <td className="px-3 py-2 text-[14px] text-right">
                     <span className={roasColor(r.roas)}>{r.roas.toLocaleString()}%</span>
+                  </td>
+                  <td className="px-3 py-2 text-[14px] text-right font-semibold text-[#16a34a]">{r.real_sales.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-[14px] text-right">
+                    <span className={roasColor(r.real_roas)}>{r.real_roas.toLocaleString()}%</span>
                   </td>
                   <td className="px-3 py-2 text-[14px] whitespace-nowrap">
                     <span className={statusColor(r.status)}>{r.status}</span>

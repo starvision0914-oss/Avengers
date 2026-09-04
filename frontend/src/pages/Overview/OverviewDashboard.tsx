@@ -3,7 +3,8 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
   getOverview, getMallProfit, getMallProfitProducts,
-  type OverviewResponse, type MallProfitResponse, type OverviewParams, type MallProductRow,
+  getOverviewExpense, addOverviewExpense, updateOverviewExpense, deleteOverviewExpense,
+  type OverviewResponse, type MallProfitResponse, type OverviewParams, type MallProductRow, type OverviewExpenseItem,
 } from '../../api/overview';
 import { formatKRW } from '../../utils/format';
 import DashboardPage from '../Dashboard/DashboardPage';
@@ -101,6 +102,20 @@ export default function OverviewDashboard() {
   const [modalMall, setModalMall] = useState<{ platform: string; label: string } | null>(null);
   const [showDetail, setShowDetail] = useState(false);
 
+  // 공통 고정비 수기입력 — 인건비/임대료 두 카테고리 고정, 카드 클릭 시 날짜+금액 내역 목록에서 추가/수정/삭제.
+  // 선택된 기간(오늘/어제/당월/한달/1년/기간별)에 맞춰 조회 — 쇼핑몰별 손익과 동일한 date_from~date_to 사용.
+  const [expenseItems, setExpenseItems] = useState<OverviewExpenseItem[]>([]);
+  const [expenseModalCat, setExpenseModalCat] = useState<string | null>(null);
+  const loadExpenses = useCallback(() => {
+    const { date_from, date_to } = periodToMallProfitParam(period, cFrom, cTo);
+    getOverviewExpense({ date_from, date_to }).then(r => setExpenseItems(r.items)).catch(() => {});
+  }, [period, cFrom, cTo]);
+  useEffect(() => { loadExpenses(); }, [loadExpenses]);
+  const EXPENSE_CATEGORIES = [
+    { key: '인건비', emoji: '🧑‍💼', color: '#4f46e5', grad: 'linear-gradient(135deg,#818cf8,#4f46e5)' },
+    { key: '임대료', emoji: '🏢', color: '#0891b2', grad: 'linear-gradient(135deg,#67e8f9,#0891b2)' },
+  ];
+
   const ovParams = useMemo<OverviewParams>(
     () => periodToOverviewParam(period, cFrom, cTo),
     [period, cFrom, cTo]
@@ -137,7 +152,19 @@ export default function OverviewDashboard() {
     () => (profit?.rows || []).filter(r => r.revenue > 0 || r.ad_cost > 0).sort((a, b) => b.revenue - a.revenue),
     [profit]
   );
-  const maxNet = useMemo(() => Math.max(1, ...profitRows.map(r => Math.abs(r.net_profit))), [profitRows]);
+  const expenseTotal = useMemo(() => expenseItems.reduce((s, it) => s + it.amount, 0), [expenseItems]);
+  const expenseByCat = useMemo(() => {
+    const m: Record<string, number> = {};
+    for (const c of EXPENSE_CATEGORIES) m[c.key] = 0;
+    for (const it of expenseItems) { if (m[it.label] != null) m[it.label] += it.amount; }
+    return m;
+  }, [expenseItems]);
+  const netAfterExpense = (pt?.net_profit ?? 0) - expenseTotal;
+  const netMarginAfterExpense = pt?.revenue ? Math.round((netAfterExpense * 1000) / pt.revenue) / 10 : 0;
+  const maxNet = useMemo(
+    () => Math.max(1, ...profitRows.map(r => Math.abs(r.net_profit)), ...Object.values(expenseByCat)),
+    [profitRows, expenseByCat]
+  );
 
   const winColor = (n: number) => (n >= 0 ? '#16a34a' : '#dc2626');
   const pLabel = data ? periodLabel(period, data.date_from, data.date_to) : '';
@@ -192,11 +219,11 @@ export default function OverviewDashboard() {
 
       {err && <div style={{ color: '#dc2626', padding: 12, background: '#fef2f2', borderRadius: 12, marginBottom: 16, border: '1px solid #fecaca' }}>{err}</div>}
 
-      {/* ===== 종합 순수익 히어로 ===== */}
+      {/* ===== 종합 순수익 히어로 (공통 고정비 마이너스 반영) ===== */}
       {pt && (
         <div style={{
           ...CARD, padding: '20px 24px', marginBottom: 16, color: '#fff', border: 'none',
-          background: pt.net_profit >= 0
+          background: netAfterExpense >= 0
             ? 'linear-gradient(120deg,#0ea5e9 0%,#22c55e 100%)'
             : 'linear-gradient(120deg,#f97316 0%,#ef4444 100%)',
           boxShadow: '0 10px 30px rgba(2,132,199,.18)',
@@ -204,13 +231,21 @@ export default function OverviewDashboard() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 14, fontWeight: 700, opacity: .92 }}>종합 순수익 — {pLabel}</span>
             <span style={{ marginLeft: 'auto', fontSize: 13, fontWeight: 800, padding: '5px 14px', borderRadius: 999, background: 'rgba(255,255,255,.22)' }}>
-              {pt.net_profit >= 0 ? '🟢 흑자' : '🔴 적자'}
+              {netAfterExpense >= 0 ? '🟢 흑자' : '🔴 적자'}
             </span>
           </div>
           <div style={{ fontSize: 40, fontWeight: 900, marginTop: 6, letterSpacing: -1 }}>
-            {pt.net_profit >= 0 ? '+' : ''}{formatKRW(pt.net_profit)}<span style={{ fontSize: 22, fontWeight: 700 }}> 원</span>
-            <span style={{ fontSize: 16, fontWeight: 700, marginLeft: 10, opacity: .9 }}>순수익률 {pt.net_margin}%</span>
+            {netAfterExpense >= 0 ? '+' : ''}{formatKRW(netAfterExpense)}<span style={{ fontSize: 22, fontWeight: 700 }}> 원</span>
+            <span style={{ fontSize: 16, fontWeight: 700, marginLeft: 10, opacity: .9 }}>순수익률 {netMarginAfterExpense}%</span>
           </div>
+          {expenseTotal > 0 && (
+            <div style={{ fontSize: 12.5, marginTop: 6, opacity: .85 }}>
+              (매장 순수익 {formatKRW(pt.net_profit)}원
+              {EXPENSE_CATEGORIES.filter(c => expenseByCat[c.key] > 0)
+                .map(c => ` − ${c.key} ${formatKRW(expenseByCat[c.key])}원`).join('')}
+              )
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 28, marginTop: 14, flexWrap: 'wrap', fontSize: 13.5 }}>
             <HeroStat label="매출" value={`${formatKRW(pt.revenue)}원`} />
             <HeroStat label="매출이익" value={`${formatKRW(pt.gross_profit)}원`} />
@@ -220,10 +255,14 @@ export default function OverviewDashboard() {
         </div>
       )}
 
-      {/* ===== 쇼핑몰별 손익 카드 ===== */}
+      {/* ===== 쇼핑몰별 손익 카드 (+ 공통 고정비 항목도 같은 그리드에 포함) ===== */}
       {pt && (
         <>
-          <div style={{ fontSize: 16, fontWeight: 800, margin: '4px 2px 12px' }}>💰 쇼핑몰별 손익</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 2px 12px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 16, fontWeight: 800 }}>💰 쇼핑몰별 손익</span>
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>🧾 공통 고정비 {periodLabel(period, profitParams.date_from, profitParams.date_to)} (클릭하면 내역 추가/수정)</span>
+          </div>
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(238px, 1fr))', gap: 14, marginBottom: 26 }}>
             {profitRows.map(r => {
               const win = r.net_profit >= 0;
@@ -255,6 +294,34 @@ export default function OverviewDashboard() {
                       <Row k="매출이익" v={`${formatKRW(r.gross_profit)}원`} vColor="#0891b2" />
                       <Row k="광고비" v={r.has_ad_data ? `${formatKRW(r.ad_cost)}원${r.revenue > 0 ? ` · ${r.ad_ratio}%` : ''}` : '—'} vColor="#d97706" />
                       <Row k="주문" v={`${formatKRW(r.orders)}건`} vColor="#94a3b8" />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            {EXPENSE_CATEGORIES.map(cat => {
+              const amount = expenseByCat[cat.key] || 0;
+              const barW = Math.round(amount / maxNet * 100);
+              return (
+                <div key={cat.key} className="ovh-card"
+                  onClick={() => setExpenseModalCat(cat.key)}
+                  style={{ ...CARD, overflow: 'hidden', cursor: 'pointer' }}
+                  title="클릭하면 내역을 보고 추가/수정/삭제할 수 있습니다">
+                  <div style={{ height: 6, background: cat.grad }} />
+                  <div style={{ padding: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                      <span style={{ fontSize: 15.5, fontWeight: 800, color: '#111' }}>{cat.emoji} {cat.key}</span>
+                      <span style={{ fontSize: 11.5, fontWeight: 800, padding: '3px 9px', borderRadius: 999, color: '#fff', background: cat.color }}>
+                        고정비
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 25, fontWeight: 900, color: cat.color, letterSpacing: -0.5 }}>
+                      +{formatKRW(amount)}<span style={{ fontSize: 14, fontWeight: 700 }}> 원</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: '#9ca3af', marginBottom: 10 }}>{periodLabel(period, profitParams.date_from, profitParams.date_to)} 합계 · 수기입력</div>
+                    <div style={{ height: 6, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
+                      <div style={{ width: `${barW}%`, height: '100%', background: cat.color }} />
                     </div>
                   </div>
                 </div>
@@ -367,6 +434,115 @@ export default function OverviewDashboard() {
           onClose={() => setModalMall(null)}
         />
       )}
+
+      {expenseModalCat && (
+        <ExpenseCategoryModal
+          category={expenseModalCat}
+          color={EXPENSE_CATEGORIES.find(c => c.key === expenseModalCat)?.color || '#4f46e5'}
+          items={expenseItems.filter(it => it.label === expenseModalCat)}
+          onClose={() => setExpenseModalCat(null)}
+          onChanged={loadExpenses}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── 공통 고정비 카드 클릭 → 카테고리별 내역 모달 (날짜+금액 추가/수정/삭제) ──
+function ExpenseCategoryModal({ category, color, items, onClose, onChanged }:
+  { category: string; color: string; items: OverviewExpenseItem[]; onClose: () => void; onChanged: () => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [date, setDate] = useState(todayKST());
+  const [amount, setAmount] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const openAdd = () => { setEditingId(null); setDate(todayKST()); setAmount(''); setShowForm(true); };
+  const openEdit = (it: OverviewExpenseItem) => { setEditingId(it.id); setDate(it.date); setAmount(String(it.amount)); setShowForm(true); };
+  const cancelForm = () => { setShowForm(false); setEditingId(null); };
+
+  const submit = () => {
+    if (!date) { alert('날짜를 선택하세요'); return; }
+    const body = { date, label: category, amount: parseInt(amount, 10) || 0 };
+    setSaving(true);
+    const req = editingId ? updateOverviewExpense(editingId, body) : addOverviewExpense(body);
+    req.then(() => { cancelForm(); onChanged(); })
+      .catch((err: any) => alert(`${editingId ? '수정' : '추가'} 실패: ${err?.response?.data?.error || err?.message || '알 수 없는 오류'}`))
+      .finally(() => setSaving(false));
+  };
+
+  const remove = (id: number) => {
+    if (!window.confirm('이 항목을 삭제할까요?')) return;
+    deleteOverviewExpense(id).then(onChanged)
+      .catch((err: any) => alert(`삭제 실패: ${err?.response?.data?.error || err?.message || '알 수 없는 오류'}`));
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const total = items.reduce((s, it) => s + it.amount, 0);
+
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: '#fff', borderRadius: 16, width: '100%', maxWidth: 520, maxHeight: '85vh',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden', boxShadow: '0 20px 60px rgba(0,0,0,.3)',
+      }}>
+        <div style={{ padding: '16px 20px', borderBottom: '1px solid #eef0f3', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 17, fontWeight: 800 }}>{category} 내역</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color }}>합계 +{formatKRW(total)}원</span>
+          <button onClick={openAdd}
+            style={{ marginLeft: 'auto', padding: '5px 14px', border: 'none', borderRadius: 999, background: color, color: '#fff', fontSize: 12.5, fontWeight: 700, cursor: 'pointer' }}>
+            + 항목 추가
+          </button>
+          <button onClick={onClose}
+            style={{ width: 28, height: 28, borderRadius: 8, border: 'none', background: '#f3f4f6', cursor: 'pointer', fontSize: 15, color: '#6b7280' }}>
+            ✕
+          </button>
+        </div>
+        <div style={{ padding: 16, overflowY: 'auto' }}>
+          {showForm && (
+            <div style={{ background: '#f8f9fb', border: '1px solid #eef0f3', borderRadius: 10, padding: 12, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)}
+                style={{ padding: '7px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+              <input type="number" value={amount} onChange={e => setAmount(e.target.value)}
+                placeholder="금액" style={{ flex: '1 1 100px', padding: '7px 10px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, textAlign: 'right' }} />
+              <button onClick={submit} disabled={saving}
+                style={{ padding: '7px 16px', border: 'none', borderRadius: 8, background: color, color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                {saving ? '저장 중…' : editingId ? '수정' : '추가'}
+              </button>
+              <button onClick={cancelForm}
+                style={{ padding: '7px 12px', border: '1px solid #d1d5db', borderRadius: 8, background: '#fff', color: '#6b7280', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                취소
+              </button>
+            </div>
+          )}
+          {items.length === 0 ? (
+            <div style={{ fontSize: 12.5, color: '#9ca3af', padding: '4px 2px' }}>등록된 항목이 없습니다 — "+ 항목 추가"로 입력하세요.</div>
+          ) : (
+            items.map(it => (
+              <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 4px', borderTop: '1px solid #f1f5f9' }}>
+                <span style={{ fontSize: 12, color: '#9ca3af', width: 86, flexShrink: 0 }}>{it.date}</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color, flex: 1 }}>+{formatKRW(it.amount)}원</span>
+                <button onClick={() => openEdit(it)} title="수정"
+                  style={{ width: 26, height: 26, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff', color: '#6b7280', fontSize: 12, cursor: 'pointer' }}>
+                  ✏️
+                </button>
+                <button onClick={() => remove(it.id)} title="삭제"
+                  style={{ width: 26, height: 26, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff', color: '#dc2626', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>
+                  ×
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }

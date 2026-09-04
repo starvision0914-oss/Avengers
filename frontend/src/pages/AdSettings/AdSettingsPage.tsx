@@ -4,7 +4,8 @@ import {
   getAiSchedule, updateAiSchedule, createAiSchedule,
   controlCpc2, getCpc2History, getGmarketMyAccounts, controlAi, getAiHistory, stopGmarketControl, getGmarketControlStatus,
   getSt11StrategyAccounts, getSt11StrategyCampaigns, fetchSt11StrategyCampaigns, controlSt11Strategy, stopSt11Strategy, getSt11StrategyLogs, getSt11StrategyRuns,
-  getSt11StrategySchedule, saveSt11StrategySchedule
+  getSt11StrategySchedule, saveSt11StrategySchedule,
+  getNewAdCenterHistory, controlNewAdCenter
 } from '../../api/crawler';
 import { Save, Play, Clock, Zap, Target, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -12,7 +13,11 @@ import toast from 'react-hot-toast';
 const WEEKDAYS = [{ v: 1, n: '월' }, { v: 2, n: '화' }, { v: 3, n: '수' }, { v: 4, n: '목' }, { v: 5, n: '금' }, { v: 6, n: '토' }, { v: 7, n: '일' }];
 
 export default function AdSettingsPage() {
-  const [tab, setTab] = useState('cpc2');
+  const [tab, setTab] = useState('newadcenter');
+  // ── 지마켓 신규 광고센터(adcenter.esmplus.com, 2026-09-04 오픈) 캠페인 ON/OFF ──
+  const [newAdAccounts, setNewAdAccounts] = useState<string[]>([]);
+  const [newAdRunning, setNewAdRunning] = useState(false);
+  const [newAdHistory, setNewAdHistory] = useState<any[]>([]);
   const [cpc2Sched, setCpc2Sched] = useState<any>(null);
   const [aiScheds, setAiScheds] = useState<any[]>([]);
   const [cpc2History, setCpc2History] = useState<any[]>([]);
@@ -57,6 +62,7 @@ export default function AdSettingsPage() {
       if (gm) { setAiForm({ on_time: gm.on_time || '20:00', off_time: gm.off_time || '16:00', weekdays: gm.weekdays?.length ? gm.weekdays : [7, 1, 2, 3, 4], off_weekdays: gm.off_weekdays?.length ? gm.off_weekdays : [1, 2, 3, 4, 5] }); setAiAccounts(gm.selected_accounts || []); }
     });
     getCpc2History().then(d => setCpc2History(Array.isArray(d) ? d : d.results || []));
+    getNewAdCenterHistory().then(d => setNewAdHistory(Array.isArray(d) ? d : d.results || [])).catch(() => {});
     getAiHistory().then(d => setAiHistory(Array.isArray(d) ? d : d.results || [])).catch(() => {});
     getGmarketMyAccounts().then(d => setGmAccounts(d.accounts || [])).catch(() => {});
     getSt11StrategyAccounts().then(d => setElOrdered(d.accounts || [])).catch(() => {});
@@ -99,6 +105,35 @@ export default function AdSettingsPage() {
     }, 4000);
     return () => clearInterval(t);
   }, [tab]);
+
+  // 신규 광고센터 탭 보는 동안 진행사항 실시간 폴링
+  useEffect(() => {
+    if (tab !== 'newadcenter') return;
+    const t = setInterval(() => {
+      getNewAdCenterHistory().then(d => setNewAdHistory(Array.isArray(d) ? d : d.results || [])).catch(() => {});
+    }, 4000);
+    return () => clearInterval(t);
+  }, [tab]);
+
+  const toggleNewAdAccount = (id: string) =>
+    setNewAdAccounts(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+
+  const handleNewAdControl = async (action: string) => {
+    const accts = newAdAccounts.length ? newAdAccounts : undefined;
+    const label = accts ? `선택 ${accts.length}개 계정` : '전체 계정';
+    if (!confirm(`신규 광고센터 캠페인 ${action.toUpperCase()}\n대상: ${label}\n진행할까요?`)) return;
+    await controlNewAdCenter({ action, accounts: accts, source: 'manual' });
+    toast.success(`신규 광고센터 ${action.toUpperCase()} 실행 시작 (${label})`);
+    setNewAdRunning(true);
+    let n = 0;
+    const timer = setInterval(async () => {
+      try {
+        const d = await getNewAdCenterHistory();
+        setNewAdHistory(Array.isArray(d) ? d : d.results || []);
+      } catch { /* ignore */ }
+      if (++n >= 36) { clearInterval(timer); setNewAdRunning(false); }   // 최대 3분 폴링
+    }, 5000);
+  };
 
   const saveCpc2 = async () => {
     if (!cpc2Accounts.length && !confirm('계정이 선택되지 않았습니다.\n계정을 선택해야 예약(크론)이 등록됩니다.\n그래도 저장할까요?')) return;
@@ -154,7 +189,7 @@ export default function AdSettingsPage() {
     if (!confirm('실행 중인 지마켓 광고제어를 강제 중지할까요?\n(현재 계정 처리 후 멈춥니다 — 최대 40초)')) return;
     await stopGmarketControl();
     toast('🛑 강제중지 요청 — 곧 멈춥니다', { icon: '🛑' });
-    setCpc2Running(false); setAiRunning(false);
+    setCpc2Running(false); setAiRunning(false); setNewAdRunning(false);
   };
 
   const handleAiControl = async (action: string) => {
@@ -309,6 +344,7 @@ export default function AdSettingsPage() {
       <div className="bg-white rounded-lg shadow">
         <div className="border-b flex">
           {[
+            { key: 'newadcenter', label: '지마켓 신규광고센터' },
             { key: 'cpc2', label: '간편광고 제어' },
             { key: 'ai', label: 'AI 광고 제어' },
             { key: 'st11strategy', label: '11번가 전략설정' },
@@ -322,6 +358,81 @@ export default function AdSettingsPage() {
         </div>
 
         <div className="p-5">
+          {tab === 'newadcenter' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="font-semibold mb-1 flex items-center gap-2"><Zap size={16} /> 지마켓 신규 광고센터 캠페인 ON/OFF</h3>
+                <p className="text-sm text-gray-500">
+                  2026-09-04 신규 오픈된 <b>adcenter.esmplus.com</b> 광고센터(기존 간편광고/AI 광고센터와는 완전히 별도)의
+                  전체 캠페인을 계정 단위로 일괄 ON/OFF합니다.
+                </p>
+              </div>
+
+              {/* 계정 선택 */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-semibold text-sm">계정 선택 ({newAdAccounts.length}/{gmAccounts.length}) <span className="text-xs text-gray-400 font-normal">— 미선택=전체</span></h3>
+                  <button onClick={() => setNewAdAccounts(newAdAccounts.length === gmAccounts.length ? [] : gmAccounts.map((a: any) => a.login_id))}
+                    className="text-xs text-blue-600">{newAdAccounts.length === gmAccounts.length ? '전체해제' : '전체선택'}</button>
+                </div>
+                <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto border rounded p-2">
+                  {gmAccounts.map((a: any) => {
+                    const sel = newAdAccounts.includes(a.login_id);
+                    return (
+                      <button key={a.login_id} onClick={() => toggleNewAdAccount(a.login_id)}
+                        className={`px-2 py-1 rounded text-xs border ${sel ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-600 border-gray-200'}`}>
+                        {a.login_id}{a.seller_name ? ` (${a.seller_name})` : ''}
+                      </button>
+                    );
+                  })}
+                  {gmAccounts.length === 0 && <span className="text-xs text-gray-400 px-1">계정 로딩 중…</span>}
+                </div>
+              </div>
+
+              {/* 수동 제어 */}
+              <div>
+                <h3 className="font-semibold mb-3">수동 제어 <span className="text-xs text-gray-400 font-normal">— {newAdAccounts.length ? `선택 ${newAdAccounts.length}개` : '전체'} 계정 대상, 계정당 전체 캠페인 일괄 적용</span></h3>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => handleNewAdControl('on')} className="flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700">
+                    <Play size={16} /> {newAdAccounts.length ? '선택' : '전체'} ON
+                  </button>
+                  <button onClick={() => handleNewAdControl('off')} className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700">
+                    <Play size={16} /> {newAdAccounts.length ? '선택' : '전체'} OFF
+                  </button>
+                  <button onClick={handleStopControl} className="flex items-center gap-1 px-5 py-2.5 bg-gray-800 text-white rounded-lg hover:bg-black">
+                    🛑 강제 중지
+                  </button>
+                  {newAdRunning && <span className="flex items-center gap-1 text-sm text-orange-600"><RefreshCw size={14} className="animate-spin" /> 진행 중…</span>}
+                </div>
+              </div>
+
+              {/* 진행사항 / 이력 */}
+              <div>
+                <h3 className="font-semibold mb-2">진행사항 <span className="text-xs text-gray-400 font-normal">(계정별 ON/OFF 결과 — 캠페인 ON개수 전→후)</span></h3>
+                <div className="border rounded max-h-56 overflow-y-auto text-xs">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 sticky top-0"><tr className="text-gray-500">
+                      <th className="text-left px-2 py-1">시각</th><th className="text-left px-2 py-1">계정</th>
+                      <th className="text-left px-2 py-1">동작</th><th className="text-right px-2 py-1">전→후</th><th className="text-left px-2 py-1">출처</th>
+                    </tr></thead>
+                    <tbody>
+                      {newAdHistory.slice(0, 50).map((h: any, i: number) => (
+                        <tr key={i} className="border-t">
+                          <td className="px-2 py-1">{h.event_time ? new Date(h.event_time).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}</td>
+                          <td className="px-2 py-1">{h.gmarket_id}</td>
+                          <td className={`px-2 py-1 font-semibold ${h.action === 'on' ? 'text-green-600' : 'text-red-600'}`}>{(h.action || '').toUpperCase()}</td>
+                          <td className="px-2 py-1 text-right">{h.campaign_before}→{h.campaign_after}</td>
+                          <td className="px-2 py-1 text-gray-400">{h.source}</td>
+                        </tr>
+                      ))}
+                      {newAdHistory.length === 0 && <tr><td colSpan={5} className="px-2 py-3 text-center text-gray-400">이력 없음</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
           {tab === 'cpc2' && (
             <div className="space-y-6">
               {/* 예약 설정 */}

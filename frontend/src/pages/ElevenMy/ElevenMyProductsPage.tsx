@@ -126,6 +126,9 @@ export default function ElevenMyProductsPage() {
   const [needsCheckPct, setNeedsCheckPct] = useState(20);       // 확인필요 기준 — 마켓가 대비 몇 % 이상 저가일 때 역마진으로 볼지(기본 20%, 가격맞추기 실행기준과 통일)
   const [noMatch, setNoMatch] = useState(false);                // 미매칭(오너클랜 W코드 없음)만 보기
   const [noMatchTotal, setNoMatchTotal] = useState(0);
+  // 탭 배지 표시 전용(2026-09-04) — 같은 W코드를 여러 계정이 각자 등록해 팔면 noMatchTotal(리스팅 수)은
+  // 중복 집계된다. 실제 판매중지 대상 개수(noMatchTotal)는 그대로 두고, 배지에만 코드 기준 고유값을 쓴다.
+  const [noMatchUniqueTotal, setNoMatchUniqueTotal] = useState(0);
   const [highMargin, setHighMargin] = useState(false);          // 고마진(1.5배 이상)만 보기
   const [highMarginTotal, setHighMarginTotal] = useState(0);
   const [suspendingSelected, setSuspendingSelected] = useState(false);
@@ -174,6 +177,7 @@ export default function ElevenMyProductsPage() {
         setTotal(r.total);
         setTotalPages(r.total_pages);
         setNoMatchTotal(r.no_match_total ?? 0);
+        setNoMatchUniqueTotal(r.no_match_unique_total ?? r.no_match_total ?? 0);
         setNeedsCheckTotal(r.needs_check_total ?? 0);
       } else if (platform === 'gmarket') {
         const r = await fetchGmarketMyProducts(page, perPage, accountId, undefined, status || undefined, search || undefined, sortKey || undefined, sortOrder, dedup, needsCheck, noMatch, highMargin, undefined, needsCheckPct);
@@ -186,6 +190,7 @@ export default function ElevenMyProductsPage() {
         setTotalPages(r.total_pages);
         setNeedsCheckTotal(r.needs_check_total ?? 0);
         setNoMatchTotal(r.no_match_total ?? 0);
+        setNoMatchUniqueTotal(r.no_match_unique_total ?? r.no_match_total ?? 0);
         setHighMarginTotal(r.high_margin_total ?? 0);
       } else if (platform === 'smartstore') {
         const ssStatus = status ? SS_STATUS_REVERSE[status] : undefined;
@@ -209,6 +214,7 @@ export default function ElevenMyProductsPage() {
         setTotalPages(r.total_pages);
         setNeedsCheckTotal(r.needs_check_total ?? 0);
         setNoMatchTotal(r.no_match_total ?? 0);
+        setNoMatchUniqueTotal(r.no_match_unique_total ?? r.no_match_total ?? 0);
         setHighMarginTotal(r.high_margin_total ?? 0);
       } else if (platform === 'lotteon') {
         const r = await fetchLotteonMyProducts(page, perPage, accountId, status || undefined, search || undefined, sortKey || undefined, sortOrder, noMatch);
@@ -220,6 +226,7 @@ export default function ElevenMyProductsPage() {
         setTotal(r.total);
         setTotalPages(r.total_pages);
         setNoMatchTotal(r.no_match_total ?? 0);
+        setNoMatchUniqueTotal(r.no_match_unique_total ?? r.no_match_total ?? 0);
       } else {
         const r = await fetchElevenMyProducts(page, perPage, accountId, status || undefined, search || undefined, !allAccounts, sortKey || undefined, sortOrder, needsCheck, noMatch, highMargin, undefined, needsCheckPct);
         if (isStale()) return;
@@ -230,6 +237,7 @@ export default function ElevenMyProductsPage() {
         setTotalPages(r.total_pages);
         setNeedsCheckTotal(r.needs_check_total ?? 0);
         setNoMatchTotal(r.no_match_total ?? 0);
+        setNoMatchUniqueTotal(r.no_match_unique_total ?? r.no_match_total ?? 0);
         setHighMarginTotal(r.high_margin_total ?? 0);
       }
     } catch (e: any) {
@@ -1106,7 +1114,7 @@ export default function ElevenMyProductsPage() {
                   : `${inputBg} ${noMatchTotal > 0 ? 'text-orange-500 border-orange-400' : ''}`
               }`}
             >
-              🔍 미매칭{noMatchTotal > 0 ? ` (${fmt(noMatchTotal)})` : ''}
+              🔍 미매칭{noMatchUniqueTotal > 0 ? ` (${fmt(noMatchUniqueTotal)})` : ''}
             </button>
           )}
 

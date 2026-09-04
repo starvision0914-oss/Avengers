@@ -5,7 +5,7 @@ from .views import (
     CPCSummaryView, CPCChartView,
     CrawlerAccountViewSet, CrawlerLogViewSet, GmarketSnapshotViewSet,
     ElevenCostViewSet, GmarketGradeViewSet, ElevenGradeViewSet,
-    GmarketSummaryView, ElevenSummaryView, ProfitDashboardView, OverviewView, AllMallProfitView, ElevenAdKilllistView,
+    GmarketSummaryView, ElevenSummaryView, ProfitDashboardView, OverviewView, OverviewExpenseView, AllMallProfitView, ElevenAdKilllistView,
     MallProfitProductsView,
     TaxVatSummaryView, TaxVatCrawlView, ElevenGradeLatestView,
     GmarketAiViewSet, GmarketAiHistoryViewSet, St11CampaignViewSet,
@@ -16,6 +16,7 @@ from .views import (
     GmarketSuspendAllNoMatchView, WCodeDownloadView,
     LCodeCheckStartView, LCodeCheckStopView, LCodeStatusView,
     CpcAdStatusViewSet, Cpc2ScheduleViewSet, Cpc2HistoryViewSet,
+    NewAdCenterHistoryViewSet, NewAdCenterControlView,
     AiScheduleViewSet, TelegramConfigViewSet, TelegramRecipientViewSet,
     SellerGroupViewSet, TelegramSendView, Cpc2ControlView,
     CronScheduleViewSet, CronApplyView, AccountUnblockView,
@@ -64,6 +65,7 @@ router.register(r'st11-campaigns', St11CampaignViewSet)
 router.register(r'cpc-status', CpcAdStatusViewSet)
 router.register(r'cpc2-schedule', Cpc2ScheduleViewSet)
 router.register(r'cpc2-history', Cpc2HistoryViewSet, basename='cpc2history')
+router.register(r'new-adcenter-history', NewAdCenterHistoryViewSet, basename='newadcenterhistory')
 router.register(r'ai-schedule', AiScheduleViewSet)
 router.register(r'telegram/config', TelegramConfigViewSet)
 router.register(r'telegram/recipients', TelegramRecipientViewSet)
@@ -99,8 +101,10 @@ urlpatterns = [
     path('profit-dashboard/', ProfitDashboardView.as_view()),
     path('eleven-summary/', ElevenSummaryView.as_view()),
     path('overview/', OverviewView.as_view()),
+    path('overview/expense/', OverviewExpenseView.as_view()),
     path('telegram/send/', TelegramSendView.as_view()),
     path('cpc2/control/', Cpc2ControlView.as_view()),
+    path('new-adcenter/control/', NewAdCenterControlView.as_view()),
     path('cron/apply/', CronApplyView.as_view()),
     path('ai/control/', AiControlView.as_view()),
     path('gmarket-control/stop/', GmarketControlStopView.as_view()),

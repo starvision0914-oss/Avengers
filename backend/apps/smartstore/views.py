@@ -6,6 +6,7 @@ from datetime import date
 
 from django.db.models import Sum, Count, Q, Max, F
 from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -988,9 +989,83 @@ class NaverRoasBulkSuspendView(APIView):
         return Response({'status': 'started', 'message': f'판매중지 시작 — {len(pks)}건. 진행상황은 {self.LOG_FILE} 확인.', 'total': len(pks)})
 
 
+def _verify_loss_products(by_account: dict, cost_min=2000, roas_max=100, clicks_min=10):
+    """화면/자동화 어느 경로로 오든 실제 잠그기 직전 서버가 스스로 재검증.
+    2026-09-04 오탐 사고(프론트 stale 데이터로 무관 상품까지 OFF)의 재발 방지책 —
+    프론트가 보낸 목록을 그대로 믿지 않고, 최근 8개월 실데이터로 AND조건(광고센터ROAS≤100%
+    AND 실매출ROAS≤100%)을 다시 계산해 통과 못하는 항목은 조용히 제외한다."""
+    from apps.smartstore.models import NaverAdProductReport, SmartStoreProduct
+    from apps.cpc.views import _bare_seller_code
+
+    d1 = timezone.localdate()
+    d0 = d1.replace(month=1, day=1) if d1.month > 1 or d1.day > 1 else d1
+
+    all_pnos = {p for pnos in by_account.values() for p in pnos}
+    account_ids = list(by_account.keys())
+    agg = list(NaverAdProductReport.objects.filter(
+        account_id__in=account_ids, product_no__in=all_pnos, since_date__gte=d0, since_date__lte=d1
+    ).values('account_id', 'product_no').annotate(
+        total_cost=Sum('cost'), total_click=Sum('click'), total_conv_amt=Sum('conversion_amount')))
+    agg_by_key = {(r['account_id'], r['product_no']): r for r in agg}
+
+    prod_qs = SmartStoreProduct.objects.filter(account_id__in=account_ids, channel_product_no__in=all_pnos).only(
+        'account_id', 'channel_product_no', 'seller_management_code', 'status_type')
+    prod_by_key = {(p.account_id, p.channel_product_no): p for p in prod_qs}
+    codes = set()
+    for p in prod_by_key.values():
+        if p.seller_management_code:
+            codes.add(p.seller_management_code)
+            codes.add(_bare_seller_code(p.seller_management_code))
+    sales_by_code = {}
+    if codes:
+        d_from = d0 - datetime.timedelta(days=45)
+        for s in (SalesRecord.objects.filter(platform='smartstore', product_code__in=list(codes),
+                                              order_date__gte=d_from, order_date__lte=d1)
+                  .values('product_code').annotate(s=Sum('total_price'))):
+            sales_by_code[s['product_code']] = s['s'] or 0
+
+    verified, rejected = {}, []
+    for account_id, pnos in by_account.items():
+        keep = set()
+        for pno in pnos:
+            key = (account_id, pno)
+            r = agg_by_key.get(key)
+            cost = (r['total_cost'] if r else 0) or 0
+            click = (r['total_click'] if r else 0) or 0
+            conv = (r['total_conv_amt'] if r else 0) or 0
+            if cost < cost_min or click < clicks_min:
+                rejected.append((account_id, pno, '광고비/클릭 데이터 부족'))
+                continue
+            p = prod_by_key.get(key)
+            if not p or not p.seller_management_code:
+                rejected.append((account_id, pno, '실매출 근거 없음'))
+                continue
+            # 사용자 지시(2026-09-04): 광고 OFF는 판매중(SALE) 상품만 대상으로 한다 —
+            # 판매중지/품절 상품은 화면 목록에는 보이되 실제 OFF 액션에서는 조용히 제외.
+            if p.status_type != 'SALE':
+                rejected.append((account_id, pno, f'판매중 아님({p.status_type})'))
+                continue
+            ad_roas = round(conv * 100.0 / cost, 1) if cost else 0
+            sc = p.seller_management_code
+            real_sales = sum(sales_by_code.get(x, 0) for x in {sc, _bare_seller_code(sc)})
+            real_roas = round(real_sales * 100.0 / cost, 1) if cost else 0
+            # 실매출이 0원이면 광고센터 ROAS가 아무리 높아도(전환 허수 의심) OFF 대상(auto_naver_loss_adoff와 동일 규칙)
+            if real_sales != 0 and ad_roas > roas_max:
+                rejected.append((account_id, pno, f'광고센터ROAS {ad_roas}%>{roas_max}%'))
+                continue
+            if real_roas > roas_max:
+                rejected.append((account_id, pno, f'실매출ROAS {real_roas}%>{roas_max}%'))
+                continue
+            keep.add(pno)
+        if keep:
+            verified[account_id] = keep
+    return verified, rejected
+
+
 class NaverRoasBulkAdOffView(APIView):
     """네이버 상품별 ROAS 화면에서 고른 상품의 개별 광고 OFF — 검색광고 공식 API(userLock).
-    items=[{account_id, product_no(=mallProductId)}]. CPC/AI 두 광고계정 모두 확인."""
+    items=[{account_id, product_no(=mallProductId)}]. CPC/AI 두 광고계정 모두 확인.
+    프론트 선택값을 그대로 신뢰하지 않고 서버에서 AND조건을 재검증한 뒤 통과한 것만 OFF한다."""
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -1000,9 +1075,15 @@ class NaverRoasBulkAdOffView(APIView):
         if not items:
             return Response({'status': 'blocked', 'message': '대상이 없습니다.'}, status=400)
 
-        by_account = {}
+        raw_by_account = {}
         for it in items:
-            by_account.setdefault(it['account_id'], set()).add(str(it['product_no']))
+            raw_by_account.setdefault(it['account_id'], set()).add(str(it['product_no']))
+
+        by_account, rejected = _verify_loss_products(raw_by_account)
+        if not by_account:
+            return Response({'status': 'blocked',
+                              'message': f'서버 재검증 결과 조건(광고센터ROAS≤100% AND 실매출ROAS≤100%)을 '
+                                         f'만족하는 상품이 없습니다. (제외 {len(rejected)}건)'}, status=400)
 
         off_count, fail_count, no_ad_account = 0, 0, []
         for account_id, pnos in by_account.items():
@@ -1029,9 +1110,12 @@ class NaverRoasBulkAdOffView(APIView):
         msg = f'광고 OFF 완료 — {off_count}개 소재 OFF'
         if fail_count:
             msg += f', {fail_count}개 실패'
+        if rejected:
+            msg += f' (서버 재검증에서 제외된 상품 {len(rejected)}개)'
         if no_ad_account:
             msg += f' (광고 API 미설정 계정 제외: {", ".join(no_ad_account)})'
-        return Response({'status': 'done', 'off_count': off_count, 'fail_count': fail_count, 'message': msg})
+        return Response({'status': 'done', 'off_count': off_count, 'fail_count': fail_count,
+                          'rejected_count': len(rejected), 'message': msg})
 
 
 class SuspendProductsView(APIView):
@@ -1171,11 +1255,31 @@ class NaverProductRoasView(APIView):
             total_conv_amt=Sum('conversion_amount'),
         ))
 
+        # NaverAdProductReport.product_no는 실제로 mallProductId(=SmartStoreProduct.channel_product_no)와
+        # 매칭된다(2026-08-28 실측, _smartstore_loss_rows와 동일 원칙) — product_no(내부 표시번호)로
+        # 조회하면 상품상태·실매출 모두 거의 매칭이 안 된다(과거 버그).
+        from apps.cpc.views import _bare_seller_code
+        from apps.sales.models import SalesRecord
+
         pnos = {r['product_no'] for r in agg}
-        status_raw = {p.product_no: p.status_type
-                      for p in SmartStoreProduct.objects.filter(product_no__in=pnos)}
+        prod_qs = SmartStoreProduct.objects.filter(channel_product_no__in=pnos).only(
+            'account_id', 'channel_product_no', 'status_type', 'seller_management_code')
+        prod_by_key = {(p.account_id, p.channel_product_no): p for p in prod_qs}
         acc_map = {a.id: (a.display_name or a.store_name)
                    for a in SmartStoreAccount.objects.all()}
+
+        codes = set()
+        for p in prod_by_key.values():
+            if p.seller_management_code:
+                codes.add(p.seller_management_code)
+                codes.add(_bare_seller_code(p.seller_management_code))
+        sales_by_code = {}
+        if codes:
+            d_from = d0 - datetime.timedelta(days=45)  # 정산 시차 대비 여유
+            for s in (SalesRecord.objects.filter(platform='smartstore', product_code__in=list(codes),
+                                                 order_date__gte=d_from, order_date__lte=d1)
+                      .values('product_code').annotate(s=Sum('total_price'))):
+                sales_by_code[s['product_code']] = s['s'] or 0
 
         cost_min = int(request.query_params.get('cost_min') or 0)
         roas_max_s = request.query_params.get('roas_max')
@@ -1189,13 +1293,20 @@ class NaverProductRoasView(APIView):
             roas = round(conv_amt * 100.0 / cost, 1) if cost else 0
             if cost_min and cost < cost_min:
                 continue
-            if roas_max_s is not None and roas > float(roas_max_s):
+            if clicks_min and (r['total_click'] or 0) < clicks_min:
+                continue
+            p = prod_by_key.get((r['account_id'], r['product_no']))
+            st_raw = p.status_type if p else ''
+            sc = p.seller_management_code if p else ''
+            real_sales = sum(sales_by_code.get(x, 0) for x in {sc, _bare_seller_code(sc)}) if sc else 0
+            real_roas = round(real_sales * 100.0 / cost, 1) if cost else 0
+            # 사용자 지시(2026-09-04, 밀양사과 케이스): 광고센터 ROAS가 아무리 높아도 정산
+            # 실매출이 0원이면 전환이 허수일 가능성이 높다 — roas_max 필터에서도 real_sales==0인
+            # 상품은 예외로 적자상품에 포함시킨다(sc 있어야, 즉 실매출 매칭 근거가 있어야 함).
+            if roas_max_s is not None and roas > float(roas_max_s) and not (sc and real_sales == 0):
                 continue
             if roas_min_s is not None and roas < float(roas_min_s):
                 continue
-            if clicks_min and (r['total_click'] or 0) < clicks_min:
-                continue
-            st_raw = status_raw.get(r['product_no'], '')
             rows.append({
                 'account_id': r['account_id'],
                 'account_name': acc_map.get(r['account_id'], ''),
@@ -1207,6 +1318,8 @@ class NaverProductRoasView(APIView):
                 'conv_cnt': r['total_conv_cnt'] or 0,
                 'conv_amt': conv_amt,
                 'roas': roas,
+                'real_sales': real_sales,
+                'real_roas': real_roas,
                 'status': _NAVER_STATUS_LABEL.get(st_raw, st_raw or '-'),
             })
 
@@ -1216,15 +1329,18 @@ class NaverProductRoasView(APIView):
             resp['Content-Disposition'] = f'attachment; filename="{fname}"'
             resp.write('﻿')
             w = csv.writer(resp)
-            w.writerow(['계정', '상품번호', '상품명', '노출수', '클릭수', '광고비', '구매수', '구매금액', 'ROAS(%)', '비고(상품상태)'])
+            w.writerow(['계정', '상품번호', '상품명', '노출수', '클릭수', '광고비', '구매수', '구매금액(광고센터)', 'ROAS(광고센터,%)',
+                        '실매출(정산기준)', 'ROAS(실매출,%)', '비고(상품상태)'])
             for r in sorted(rows, key=lambda x: -x['cost']):
                 w.writerow([r['account_name'], r['product_no'], r['product_name'],
                             r['impression'], r['click'], r['cost'],
-                            r['conv_cnt'], r['conv_amt'], r['roas'], r['status']])
+                            r['conv_cnt'], r['conv_amt'], r['roas'],
+                            r['real_sales'], r['real_roas'], r['status']])
             return resp
 
         total_cost = sum(r['cost'] for r in rows)
         total_conv = sum(r['conv_amt'] for r in rows)
+        total_real_sales = sum(r['real_sales'] for r in rows)
         totals = {
             'cost': total_cost,
             'click': sum(r['click'] for r in rows),
@@ -1232,6 +1348,8 @@ class NaverProductRoasView(APIView):
             'conv_cnt': sum(r['conv_cnt'] for r in rows),
             'conv_amt': total_conv,
             'roas': round(total_conv * 100.0 / total_cost, 1) if total_cost else 0,
+            'real_sales': total_real_sales,
+            'real_roas': round(total_real_sales * 100.0 / total_cost, 1) if total_cost else 0,
             'products': len(rows),
         }
         return Response({'rows': rows, 'totals': totals})

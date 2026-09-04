@@ -152,7 +152,7 @@ class NaverAdProductReport(models.Model):
 
     class Meta:
         db_table = 'naver_ad_product_report'
-        unique_together = [('account', 'since_date', 'until_date', 'ad_type', 'product_no')]
+        unique_together = [('account', 'since_date', 'ad_type', 'product_no')]
         indexes = [
             models.Index(fields=['account', 'since_date', 'until_date']),
             models.Index(fields=['product_no']),
@@ -211,6 +211,21 @@ class SmartStoreCleanViolation(models.Model):
 
     def __str__(self):
         return f"[{self.account.store_name}] {self.violation_date} {self.violation_type} {self.product_name[:30]}"
+
+
+class DomeggookApiAccount(models.Model):
+    """도매매 오픈API 인증키 — market/키워드 등 조회용 공용키(로그인 불필요, aid 파라미터로 인증).
+    스마트스토어 판매자관리코드가 순수 숫자(도매매 상품번호)인 상품의 실재고/판매상태 조회에 사용."""
+    api_key = models.CharField(max_length=100, unique=True)
+    memo = models.CharField(max_length=200, blank=True, default='')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'domeggook_api_account'
+
+    def __str__(self):
+        return f'도매매API {self.api_key[:8]}...'
 
 
 class SmartStoreCrawlLog(models.Model):

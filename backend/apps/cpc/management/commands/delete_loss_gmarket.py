@@ -83,6 +83,15 @@ class Command(BaseCommand):
             skipped = before - len(rows)
             if skipped:
                 self.stdout.write(f'실매출ROAS>150% 제외(보호): {skipped}개')
+            # 판매중이 아닌 상품(이미 판매중지/품절/삭제됨)은 애초에 대상이 아님 — 광고비 이력은
+            # 1월~9월 누적이라 이미 오래전에 사라진 상품까지 섞여있음. 이걸 걸러내지 않고 실행하면
+            # 셀러오피스에서 '검색 안 됨'만 대량 발생(2026-09-03 실측: 3,099개 요청 중 960개만
+            # 실제 판매중이라 성공, 나머지 2,139개는 이미 존재하지 않아 전부 실패로 잡혔음).
+            before = len(rows)
+            rows = [r for r in rows if r.get('status') == '판매중']
+            skipped = before - len(rows)
+            if skipped:
+                self.stdout.write(f'판매중 아님(이미 판매중지/품절/삭제) 제외: {skipped}개')
         if o.get('limit'):
             rows = rows[:o['limit']]
         targets = [{'login_id': r['login_id'], 'product_no': r['product_no'],
