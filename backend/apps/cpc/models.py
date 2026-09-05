@@ -504,6 +504,8 @@ class AiSchedule(models.Model):
     custom_holidays = models.JSONField(default=list, blank=True)
     weekdays = models.JSONField(default=list, blank=True)        # ON 요일 [1=월 … 7=일], 빈값=매일
     off_weekdays = models.JSONField(default=list, blank=True)    # OFF 요일 [1=월 … 7=일], 빈값=매일
+    on_enabled = models.BooleanField(default=True)    # False면 시간이 있어도 ON 크론 미생성·미실행
+    off_enabled = models.BooleanField(default=True)   # False면 시간이 있어도 OFF 크론 미생성·미실행
     updated_at = models.DateTimeField(auto_now=True)
     class Meta:
         db_table = 'ai_schedule'

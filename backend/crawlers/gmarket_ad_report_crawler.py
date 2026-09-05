@@ -363,13 +363,24 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
     for a in all_accts:
         if a.gmarket_origin_id and a.gmarket_origin_id != a.login_id:
             sub_map.setdefault(a.gmarket_origin_id, []).append(a.login_id)
-    qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
-    if login_ids:
-        qs = qs.filter(login_id__in=login_ids)
+    target_ids = set(login_ids) if login_ids else None
+    if target_ids:
+        # 서브만 지정돼도 그 마스터를 자동 포함 — 서브는 반드시 마스터 크롤 내부의
+        # 안전경로(셀러전환/독립폴백+중복탐지)로만 처리해야 한다(아래 최상위 제외와 세트).
+        needed_masters = {mid for mid, subs in sub_map.items() if any(s in target_ids for s in subs)}
+        qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True,
+                                            login_id__in=(target_ids | needed_masters))
+    else:
+        qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
     accts = list(qs.order_by('display_order', 'login_id'))
-    # 공유ESM 서브계정 제외(대표 크롤 시 seller_id 기반으로 서브 데이터 자동 분리 저장)
+    # 공유ESM 서브계정은 항상 최상위 목록에서 제외 — login_ids로 서브를 직접 지정해도 마찬가지.
+    # (2026-09-05 실측 사고) 서브를 최상위 계정으로 바로 돌리면, CPC 리포트가 로그인한 세부
+    # 계정과 무관하게 공유그룹 전체 합계를 그대로 반환해서 마스터·서브 전부 똑같은 값으로
+    # 뻥튀기 저장됨(rejoice222/223/224가 CPC 47,696원으로 전부 동일하게 찍힌 사고로 확인) —
+    # 최상위 루프엔 dedup 로직이 없어 이 왜곡을 걸러내지 못한다. 서브는 반드시 마스터 크롤
+    # 안의 sub_map 경로(셀러전환/독립폴백 + 중복탐지)로만 처리한다.
+    accts = [a for a in accts if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
     if not login_ids:
-        accts = [a for a in accts if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
         _log(log_fn, f'[대표계정 {len(accts)}개] 공유ESM 서브({list(sub_map.keys())}) 포함 크롤')
     summary = {}
     driver = None
@@ -454,23 +465,56 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                         # 마스터 리포트를 서브 이름으로 재저장)'인지 '서브의 진짜 별도 광고비'인지 구분 못 함
                         # (2026-07-09 실측: rejoice235/236 실데이터가 이 체크로 매일 삭제되고 있었음).
                         # 광고비 합계까지 마스터와 거의 동일할 때만 '재수집 실패'로 보고 삭제한다.
+                        # (2026-09-05) CPC/AI를 합쳐서 비교하면 한쪽만 정확히 복제돼도 다른쪽 합계가
+                        # 달라 '정상 유지'로 오판해 중복이 안 지워짐(rejoice222/224 CPC 166,276원 완전
+                        # 동일값 실측 확인) — ad_type별로 따로 비교·삭제하도록 수정.
                         from django.db.models import Sum as _Sum2
-                        master_pnos = set(_G.objects.filter(login_id=a.login_id, year=y, month=m)
-                                          .values_list('product_no', flat=True))
-                        sub_pnos = set(_G.objects.filter(login_id=sub_lid, year=y, month=m)
-                                       .values_list('product_no', flat=True))
-                        if sub_pnos and master_pnos:
+                        for _at in ('cpc', 'ai'):
+                            master_pnos = set(_G.objects.filter(login_id=a.login_id, ad_type=_at, year=y, month=m)
+                                              .values_list('product_no', flat=True))
+                            sub_pnos = set(_G.objects.filter(login_id=sub_lid, ad_type=_at, year=y, month=m)
+                                           .values_list('product_no', flat=True))
+                            if not (sub_pnos and master_pnos):
+                                continue
                             overlap = len(sub_pnos & master_pnos) / len(sub_pnos)
-                            if overlap >= 0.9:
-                                master_cost = _G.objects.filter(login_id=a.login_id, year=y, month=m).aggregate(s=_Sum2('cost'))['s'] or 0
-                                sub_cost = _G.objects.filter(login_id=sub_lid, year=y, month=m).aggregate(s=_Sum2('cost'))['s'] or 0
-                                cost_diff = abs(sub_cost - master_cost) / master_cost if master_cost else 0
-                                if cost_diff < 0.01:
-                                    deleted = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
-                                    _log(log_fn, f'  [{sub_lid}] 마스터와 상품 {overlap:.0%} 겹침+광고비도 동일 → 중복 {deleted}건 삭제')
-                                    sub_res[f'{y}-{m:02d}'] = {'dup_deleted': deleted}
+                            if overlap < 0.9:
+                                continue
+                            master_cost = _G.objects.filter(login_id=a.login_id, ad_type=_at, year=y, month=m).aggregate(s=_Sum2('cost'))['s'] or 0
+                            sub_cost = _G.objects.filter(login_id=sub_lid, ad_type=_at, year=y, month=m).aggregate(s=_Sum2('cost'))['s'] or 0
+                            cost_diff = abs(sub_cost - master_cost) / master_cost if master_cost else 0
+                            if cost_diff < 0.01:
+                                deleted = _G.objects.filter(login_id=sub_lid, ad_type=_at, year=y, month=m).delete()[0]
+                                _log(log_fn, f'  [{sub_lid}/{_at}] 마스터와 상품 {overlap:.0%} 겹침+광고비도 동일 → 중복 {deleted}건 삭제')
+                                sub_res.setdefault(f'{y}-{m:02d}', {})
+                                if isinstance(sub_res[f'{y}-{m:02d}'], dict):
+                                    sub_res[f'{y}-{m:02d}'][f'dup_deleted_{_at}'] = deleted
+                            else:
+                                _log(log_fn, f'  [{sub_lid}/{_at}] 상품 {overlap:.0%} 겹치지만 광고비 다름(마스터 {master_cost:,}/서브 {sub_cost:,}) → 정상 유지')
+                    # (2026-09-05) 서브계정 ROAS≥200 키워드 수집 — 기존엔 마스터 로그인ID만 대상으로
+                    # 계산해 공유ESM 서브(rejoice223/224/235/236, starvisi)는 키워드가 사상 한 번도
+                    # 수집된 적 없었음(실측 확인: rejoice224 2026-09 ROAS200+ 3개 전부 누락).
+                    if with_keywords:
+                        try:
+                            from django.db.models import Sum as _SumKW
+                            from crawlers.gmarket_keyword_crawler import crawl_account_keywords
+                            ky, km = today.year, today.month
+                            grp = (_G.objects.filter(login_id=sub_lid, year=ky, month=km, ad_type='cpc')
+                                   .values('product_no').annotate(c=_SumKW('cost'), v=_SumKW('conv_amount')).filter(c__gt=0))
+                            pnos = [g['product_no'] for g in grp
+                                    if (g['v'] or 0) > 0 and (g['v'] * 100.0 / g['c']) >= 200]
+                            if pnos:
+                                if _select_seller_on_page(driver, sub_lid, log_fn):
+                                    _log(log_fn, f'  [{sub_lid}] 🔑 ROAS≥200 키워드 수집 대상 {len(pnos)}개')
+                                    sub_res.setdefault(f'{ky}-{km:02d}', {})
+                                    if isinstance(sub_res[f'{ky}-{km:02d}'], dict):
+                                        sub_res[f'{ky}-{km:02d}']['keywords'] = crawl_account_keywords(
+                                            driver, sub_lid, pnos, ky, km, log_fn)
                                 else:
-                                    _log(log_fn, f'  [{sub_lid}] 상품 {overlap:.0%} 겹치지만 광고비 다름(마스터 {master_cost:,}/서브 {sub_cost:,}) → 정상 유지')
+                                    _log(log_fn, f'  [{sub_lid}] 키워드 수집용 셀러전환 실패 — 스킵')
+                            else:
+                                _log(log_fn, f'  [{sub_lid}] ROAS≥200 상품 없음 — 키워드 스킵')
+                        except Exception as e:
+                            _log(log_fn, f'  [{sub_lid}] 키워드 수집 오류(광고비는 저장됨): {str(e)[:120]}')
                     summary[sub_lid] = sub_res
                 summary[a.login_id] = acct_res
                 # 광고 미집행(0건)이면 GmarketProductAdCost에 저장할 행이 없어 '오늘 수집됨'이
@@ -520,25 +564,51 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
                         # 폴백 독립로그인도 마스터와 상품번호 90%+ 겹칠 수 있지만(공유ESM 카탈로그라
                         # 정상), 광고비 합계까지 마스터와 거의 동일할 때만 '재수집 실패'로 보고 삭제
                         # (2026-07-09: 이 체크 때문에 rejoice224/235/236 실데이터가 매일 삭제되던 버그).
+                        # (2026-09-05) CPC/AI 합산비교라 한쪽만 정확히 복제돼도 못 잡던 사각지대를
+                        # ad_type별 비교로 수정(위 마스터세션 블록과 동일 이유).
                         from django.db.models import Sum as _Sum3
                         sub_acct2 = next((aa for aa in all_accts if aa.login_id == sub_lid), None)
                         if sub_acct2 and sub_acct2.gmarket_origin_id and sub_acct2.gmarket_origin_id != sub_lid:
                             master_lid2 = sub_acct2.gmarket_origin_id
-                            master_pnos2 = set(_G.objects.filter(login_id=master_lid2, year=y, month=m)
-                                               .values_list('product_no', flat=True))
-                            sub_pnos2 = set(_G.objects.filter(login_id=sub_lid, year=y, month=m)
-                                            .values_list('product_no', flat=True))
-                            if sub_pnos2 and master_pnos2:
+                            for _at in ('cpc', 'ai'):
+                                master_pnos2 = set(_G.objects.filter(login_id=master_lid2, ad_type=_at, year=y, month=m)
+                                                   .values_list('product_no', flat=True))
+                                sub_pnos2 = set(_G.objects.filter(login_id=sub_lid, ad_type=_at, year=y, month=m)
+                                                .values_list('product_no', flat=True))
+                                if not (sub_pnos2 and master_pnos2):
+                                    continue
                                 overlap2 = len(sub_pnos2 & master_pnos2) / len(sub_pnos2)
-                                if overlap2 >= 0.9:
-                                    master_cost2 = _G.objects.filter(login_id=master_lid2, year=y, month=m).aggregate(s=_Sum3('cost'))['s'] or 0
-                                    sub_cost2 = _G.objects.filter(login_id=sub_lid, year=y, month=m).aggregate(s=_Sum3('cost'))['s'] or 0
-                                    cost_diff2 = abs(sub_cost2 - master_cost2) / master_cost2 if master_cost2 else 0
-                                    if cost_diff2 < 0.01:
-                                        deleted2 = _G.objects.filter(login_id=sub_lid, year=y, month=m).delete()[0]
-                                        _log(log_fn, f'  [{sub_lid}] 폴백: 마스터와 상품 {overlap2:.0%} 겹침+광고비도 동일 → 중복 {deleted2}건 삭제')
-                                    else:
-                                        _log(log_fn, f'  [{sub_lid}] 폴백: 상품 {overlap2:.0%} 겹치지만 광고비 다름(마스터 {master_cost2:,}/서브 {sub_cost2:,}) → 정상 유지')
+                                if overlap2 < 0.9:
+                                    continue
+                                master_cost2 = _G.objects.filter(login_id=master_lid2, ad_type=_at, year=y, month=m).aggregate(s=_Sum3('cost'))['s'] or 0
+                                sub_cost2 = _G.objects.filter(login_id=sub_lid, ad_type=_at, year=y, month=m).aggregate(s=_Sum3('cost'))['s'] or 0
+                                cost_diff2 = abs(sub_cost2 - master_cost2) / master_cost2 if master_cost2 else 0
+                                if cost_diff2 < 0.01:
+                                    deleted2 = _G.objects.filter(login_id=sub_lid, ad_type=_at, year=y, month=m).delete()[0]
+                                    _log(log_fn, f'  [{sub_lid}/{_at}] 폴백: 마스터와 상품 {overlap2:.0%} 겹침+광고비도 동일 → 중복 {deleted2}건 삭제')
+                                else:
+                                    _log(log_fn, f'  [{sub_lid}/{_at}] 폴백: 상품 {overlap2:.0%} 겹치지만 광고비 다름(마스터 {master_cost2:,}/서브 {sub_cost2:,}) → 정상 유지')
+                    # (2026-09-05) 독립 로그인 폴백 서브계정도 마스터와 동일하게 ROAS≥200 키워드
+                    # 수집 — 이 driver는 이미 sub_lid 본인 계정으로 로그인돼 있어 셀러전환 불필요.
+                    if with_keywords:
+                        try:
+                            from django.db.models import Sum as _SumKW2
+                            from crawlers.gmarket_keyword_crawler import crawl_account_keywords
+                            ky, km = today.year, today.month
+                            grp = (_G.objects.filter(login_id=sub_lid, year=ky, month=km, ad_type='cpc')
+                                   .values('product_no').annotate(c=_SumKW2('cost'), v=_SumKW2('conv_amount')).filter(c__gt=0))
+                            pnos = [g['product_no'] for g in grp
+                                    if (g['v'] or 0) > 0 and (g['v'] * 100.0 / g['c']) >= 200]
+                            if pnos:
+                                _log(log_fn, f'  [{sub_lid}] 🔑 ROAS≥200 키워드 수집 대상 {len(pnos)}개(폴백)')
+                                sub_res.setdefault(f'{ky}-{km:02d}', {})
+                                if isinstance(sub_res[f'{ky}-{km:02d}'], dict):
+                                    sub_res[f'{ky}-{km:02d}']['keywords'] = crawl_account_keywords(
+                                        driver, sub_lid, pnos, ky, km, log_fn)
+                            else:
+                                _log(log_fn, f'  [{sub_lid}] ROAS≥200 상품 없음 — 키워드 스킵(폴백)')
+                        except Exception as e:
+                            _log(log_fn, f'  [{sub_lid}] 키워드 수집 오류(광고비는 저장됨): {str(e)[:120]}')
                     summary[sub_lid] = sub_res
                 except Exception as e:
                     _log(log_fn, f'[{sub_lid}] 독립 크롤 오류: {str(e)[:120]}')

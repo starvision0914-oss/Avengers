@@ -305,6 +305,21 @@ def _change_status_single(driver, code, status_index, status_label, log_fn=None)
     rid = rad_div.get_attribute('id')
     tr = driver.execute_script("return arguments[0].closest('tr');", rad_div)
     driver.execute_script("arguments[0].classList.remove('gft_hide'); arguments[0].style.display='';", tr)
+    # (2026-09-06) 사이트에 숨김 레이어가 하나 더 생겼음 — tr.gft_hide 위 조상에
+    # display:none인 div.hide_grp(id 접미사 _body_wfm_sale_grp_sale_hide)가 추가로 있어서
+    # tr만 풀어도 라디오가 여전히 0x0 크기(안 보이는 상태)라 클릭이 안 먹혔다(전 계정 15건 전부
+    # "선택 안 됨"으로 실패해 발견). 이 조상도 같이 풀어야 실제로 클릭 가능한 크기가 된다.
+    driver.execute_script("""
+        var el = document.getElementById(arguments[0]);
+        var cur = el;
+        for (var i = 0; i < 10 && cur; i++) {
+            if (cur.classList && cur.classList.contains('hide_grp')) {
+                cur.classList.remove('hide_grp');
+                cur.style.display = '';
+            }
+            cur = cur.parentElement;
+        }
+    """, rid)
     time.sleep(0.3)
     opt_label = driver.find_elements(By.CSS_SELECTOR, f"label[for='{rid}_input_{status_index}']")
     if not opt_label:

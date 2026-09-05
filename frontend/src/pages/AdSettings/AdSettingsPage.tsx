@@ -26,7 +26,7 @@ export default function AdSettingsPage() {
   const [cpc2Accounts, setCpc2Accounts] = useState<string[]>([]);   // 간편광고 제어 대상 선택 계정
   const [cpc2Running, setCpc2Running] = useState(false);            // 실행 중(진행사항 폴링)
   const [aiSched, setAiSched] = useState<any>(null);               // 지마켓 AI 예약(싱글톤)
-  const [aiForm, setAiForm] = useState<any>({ on_time: '20:00', off_time: '16:00', weekdays: [7, 1, 2, 3, 4], off_weekdays: [1, 2, 3, 4, 5] });
+  const [aiForm, setAiForm] = useState<any>({ on_time: '20:00', off_time: '16:00', weekdays: [7, 1, 2, 3, 4], off_weekdays: [1, 2, 3, 4, 5], on_enabled: true, off_enabled: true });
   const [aiAccounts, setAiAccounts] = useState<string[]>([]);      // AI 제어 대상 선택 계정
   const [aiRunning, setAiRunning] = useState(false);
   const [aiHistory, setAiHistory] = useState<any[]>([]);          // AI 제어 진행사항/이력
@@ -59,7 +59,7 @@ export default function AdSettingsPage() {
       setAiScheds(list);
       const gm = list.find((s: any) => s.platform === 'gmarket');
       if (gm) setAiSched(gm);
-      if (gm) { setAiForm({ on_time: gm.on_time || '20:00', off_time: gm.off_time || '16:00', weekdays: gm.weekdays?.length ? gm.weekdays : [7, 1, 2, 3, 4], off_weekdays: gm.off_weekdays?.length ? gm.off_weekdays : [1, 2, 3, 4, 5] }); setAiAccounts(gm.selected_accounts || []); }
+      if (gm) { setAiForm({ on_time: gm.on_time || '20:00', off_time: gm.off_time || '16:00', weekdays: gm.weekdays?.length ? gm.weekdays : [7, 1, 2, 3, 4], off_weekdays: gm.off_weekdays?.length ? gm.off_weekdays : [1, 2, 3, 4, 5], on_enabled: gm.on_enabled !== false, off_enabled: gm.off_enabled !== false }); setAiAccounts(gm.selected_accounts || []); }
     });
     getCpc2History().then(d => setCpc2History(Array.isArray(d) ? d : d.results || []));
     getNewAdCenterHistory().then(d => setNewAdHistory(Array.isArray(d) ? d : d.results || [])).catch(() => {});
@@ -334,7 +334,7 @@ export default function AdSettingsPage() {
               <span>🟦 간편: ON <b>{ctrlStatus.cpc2.on_days} {ctrlStatus.cpc2.on_time}</b> · OFF <b>{ctrlStatus.cpc2.off_days} {ctrlStatus.cpc2.off_time}</b> · 계정 {ctrlStatus.cpc2.accounts}{ctrlStatus.cpc2.include_cpc1 && ' · 일반포함'}</span>
             )}
             {ctrlStatus.ai && (
-              <span>🟪 AI: ON <b>{ctrlStatus.ai.on_days} {ctrlStatus.ai.on_time}</b> · OFF <b>{ctrlStatus.ai.off_days} {ctrlStatus.ai.off_time}</b> · 계정 {ctrlStatus.ai.accounts}</span>
+              <span>🟪 AI: ON <b>{ctrlStatus.ai.on_enabled === false ? '미사용' : `${ctrlStatus.ai.on_days} ${ctrlStatus.ai.on_time}`}</b> · OFF <b>{ctrlStatus.ai.off_enabled === false ? '미사용' : `${ctrlStatus.ai.off_days} ${ctrlStatus.ai.off_time}`}</b> · 계정 {ctrlStatus.ai.accounts}</span>
             )}
           </div>
           {ctrlStatus.proc_count > 1 && <p className="text-[11px] text-red-500 mt-1">※ 중복 실행이 큐에 쌓여 있습니다. 새로 실행하지 말고 끝날 때까지 기다리거나 강제 중지하세요.</p>}
@@ -771,23 +771,31 @@ export default function AdSettingsPage() {
                 <h3 className="font-semibold mb-3 flex items-center gap-2"><Clock size={16} /> AI 광고 ON/OFF 예약</h3>
                 <div className="space-y-3">
                   {/* ON 설정 */}
-                  <div className="flex items-center gap-3 flex-wrap">
+                  <div className={`flex items-center gap-3 flex-wrap ${aiForm.on_enabled === false ? 'opacity-40' : ''}`}>
+                    <label className="flex items-center gap-1 text-xs text-gray-500 select-none">
+                      <input type="checkbox" checked={aiForm.on_enabled !== false} onChange={e => setAiForm({ ...aiForm, on_enabled: e.target.checked })} />
+                      사용
+                    </label>
                     <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 text-xs font-bold w-12 text-center">ON</span>
-                    <input type="time" value={aiForm.on_time} onChange={e => setAiForm({ ...aiForm, on_time: e.target.value })} className="border rounded px-3 py-2" />
+                    <input type="time" disabled={aiForm.on_enabled === false} value={aiForm.on_time} onChange={e => setAiForm({ ...aiForm, on_time: e.target.value })} className="border rounded px-3 py-2" />
                     <div className="flex gap-1">
                       {WEEKDAYS.map(w => (
-                        <button key={w.v} onClick={() => toggleAiWeekday(w.v)}
+                        <button key={w.v} disabled={aiForm.on_enabled === false} onClick={() => toggleAiWeekday(w.v)}
                           className={`w-8 h-9 rounded text-xs font-medium ${aiForm.weekdays?.includes(w.v) ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{w.n}</button>
                       ))}
                     </div>
                   </div>
                   {/* OFF 설정 */}
-                  <div className="flex items-center gap-3 flex-wrap">
+                  <div className={`flex items-center gap-3 flex-wrap ${aiForm.off_enabled === false ? 'opacity-40' : ''}`}>
+                    <label className="flex items-center gap-1 text-xs text-gray-500 select-none">
+                      <input type="checkbox" checked={aiForm.off_enabled !== false} onChange={e => setAiForm({ ...aiForm, off_enabled: e.target.checked })} />
+                      사용
+                    </label>
                     <span className="px-2 py-0.5 rounded bg-red-100 text-red-700 text-xs font-bold w-12 text-center">OFF</span>
-                    <input type="time" value={aiForm.off_time} onChange={e => setAiForm({ ...aiForm, off_time: e.target.value })} className="border rounded px-3 py-2" />
+                    <input type="time" disabled={aiForm.off_enabled === false} value={aiForm.off_time} onChange={e => setAiForm({ ...aiForm, off_time: e.target.value })} className="border rounded px-3 py-2" />
                     <div className="flex gap-1">
                       {WEEKDAYS.map(w => (
-                        <button key={w.v} onClick={() => toggleAiOffWeekday(w.v)}
+                        <button key={w.v} disabled={aiForm.off_enabled === false} onClick={() => toggleAiOffWeekday(w.v)}
                           className={`w-8 h-9 rounded text-xs font-medium ${aiForm.off_weekdays?.includes(w.v) ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-500'}`}>{w.n}</button>
                       ))}
                     </div>
@@ -795,9 +803,12 @@ export default function AdSettingsPage() {
                   </div>
                 </div>
                 <p className="text-xs text-gray-400 mt-2">
-                  → <b className="text-green-600">{(aiForm.weekdays||[]).map((v:number)=>WEEKDAYS.find(w=>w.v===v)?.n).join('')||'매일'}</b> {aiForm.on_time} ON ·
-                  <b className="text-red-500"> {(aiForm.off_weekdays||[]).map((v:number)=>WEEKDAYS.find(w=>w.v===v)?.n).join('')||'매일'}</b> {aiForm.off_time} OFF
+                  → {aiForm.on_enabled === false ? <b className="text-gray-400">ON 미사용</b> : <>
+                    <b className="text-green-600">{(aiForm.weekdays||[]).map((v:number)=>WEEKDAYS.find(w=>w.v===v)?.n).join('')||'매일'}</b> {aiForm.on_time} ON</>} ·
+                  {aiForm.off_enabled === false ? <b className="text-gray-400"> OFF 미사용</b> : <>
+                    <b className="text-red-500"> {(aiForm.off_weekdays||[]).map((v:number)=>WEEKDAYS.find(w=>w.v===v)?.n).join('')||'매일'}</b> {aiForm.off_time} OFF</>}
                   <br/>ON·OFF 요일·시간을 따로 지정합니다 (예: ON 일·월·화·수·목 20:00 / OFF 월·화·수·목·금 16:00 → 금요일 저녁은 안 켜짐)
+                  · '사용' 체크를 끄면 그 방향은 저장해도 크론이 생성되지 않고 실행도 되지 않습니다.
                 </p>
               </div>
 

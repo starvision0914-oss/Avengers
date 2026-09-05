@@ -543,18 +543,27 @@ class GmarketSummaryView(views.APIView):
                     'contact_expiry': g.contact_expiry,
                 }
 
-        # CPC/AI 모두 GmarketProductAdCost 엑셀기반 월합계 사용 (스냅샷 값 불신뢰)
-        from apps.cpc.models import GmarketProductAdCost, CrawlerAccount as _CA
-        ex_year = start.year
-        ex_month = start.month
-        ai_excel_map = dict(
-            GmarketProductAdCost.objects.filter(ad_type='ai', year=ex_year, month=ex_month)
-            .values('login_id').annotate(total=Sum('cost')).values_list('login_id', 'total')
-        )
-        cpc_excel_map = dict(
-            GmarketProductAdCost.objects.filter(ad_type='cpc', year=ex_year, month=ex_month)
-            .values('login_id').annotate(total=Sum('cost')).values_list('login_id', 'total')
-        )
+        # CPC/AI 모두 거래원장(GmarketCostHistory) 사용 (스냅샷 값 불신뢰).
+        # (2026-09-05) 예전엔 상품별 리포트(GmarketProductAdCost)를 썼으나, 공유ESM 서브계정
+        # (dlwodb000/starvisi, rejoice222/223/224 등)에서 UI 셀러전환 실패 시 마스터↔서브
+        # 데이터가 섞여 뻥튀기/누락되는 버그가 실측 확인됨(예: dlwodb000 CPC가 실제 86,493원인데
+        # 리포트엔 starvisi 몫까지 섞여 183,920원). 거래원장은 계정별 독립 로그인+명시적
+        # searchAccount 파라미터로 조회돼 공유ESM이어도 계정별로 정확히 분리됨(재검증 완료).
+        # 부수효과: 기존엔 date_from~date_to가 두 달에 걸쳐도 start의 달만 봤는데, 이제
+        # 조회 기간 전체가 정확히 반영됨.
+        from apps.cpc.models import GmarketCostHistory as _GCH, CrawlerAccount as _CA
+        ai_excel_map = {}
+        cpc_excel_map = {}
+        for r in (_GCH.objects.filter(use_date__gte=start.date(), use_date__lt=end.date(),
+                                       transaction_type__in=['CPC', 'AI매출업'])
+                  .exclude(comment__icontains='판매예치금')
+                  .values('seller_id', 'transaction_type', 'market').annotate(total=Sum('amount'))):
+            amt = abs(r['total'] or 0)
+            sid = r['seller_id']
+            if r['transaction_type'] == 'AI매출업':
+                ai_excel_map[sid] = ai_excel_map.get(sid, 0) + amt
+            elif r['market'] != 'auction':   # auction CPC는 아래 snap.auction_cpc로 별도 표시
+                cpc_excel_map[sid] = cpc_excel_map.get(sid, 0) + amt
 
         snap_map = {s.gmarket_id: s for s in GmarketDepositSnapshot.objects.filter(id__in=latest_ids)}
         # 표시 순서: display_order 기준 전체 활성 계정
@@ -1424,7 +1433,10 @@ def _regenerate_ad_crons():
     cpc2 = Cpc2Schedule.objects.first()
     ai = AiSchedule.objects.filter(platform='gmarket').first()
     cpc2_on = bool(cpc2 and cpc2.selected_accounts)
-    ai_on = bool(ai and ai.selected_accounts)
+    # AI는 ON/OFF를 개별적으로 켜고 끌 수 있음(on_enabled/off_enabled) — 계정선택은 공유하되
+    # 방향별 활성화 여부는 독립적으로 크론 생성에 반영한다.
+    ai_on = bool(ai and ai.selected_accounts and ai.on_enabled)
+    ai_off = bool(ai and ai.selected_accounts and ai.off_enabled)
 
     def same(t1, t2, d1, d2):
         return t1 and t2 and t1 == t2 and sorted(d1 or []) == sorted(d2 or [])
@@ -1439,12 +1451,12 @@ def _regenerate_ad_crons():
         if ai_on:
             items.append((ai.on_time, _sched_dow_csv(ai.weekdays), f'{base}/cron_ai_on.sh'))
     # --- OFF ---
-    if cpc2_on and ai_on and same(cpc2.off_time, ai.off_time, cpc2.off_weekdays, ai.off_weekdays):
+    if cpc2_on and ai_off and same(cpc2.off_time, ai.off_time, cpc2.off_weekdays, ai.off_weekdays):
         items.append((cpc2.off_time, _sched_dow_csv(cpc2.off_weekdays), f'{base}/cron_ad_combined_off.sh'))
     else:
         if cpc2_on:
             items.append((cpc2.off_time, _sched_dow_csv(cpc2.off_weekdays), f'{base}/cron_cpc2_off.sh'))
-        if ai_on:
+        if ai_off:
             items.append((ai.off_time, _sched_dow_csv(ai.off_weekdays), f'{base}/cron_ai_off.sh'))
 
     _write_schedule_cron('AD_SCHEDULE', items)
@@ -1582,7 +1594,8 @@ class GmarketControlStatusView(views.APIView):
         if a:
             ai = {'on_time': str(a.on_time or '')[:5], 'off_time': str(a.off_time or '')[:5],
                   'on_days': days(a.weekdays), 'off_days': days(a.off_weekdays),
-                  'accounts': len(a.selected_accounts or [])}
+                  'accounts': len(a.selected_accounts or []),
+                  'on_enabled': a.on_enabled, 'off_enabled': a.off_enabled}
         return Response({'running': running, 'proc_count': proc_count, 'cpc2': cpc2, 'ai': ai})
 
 
@@ -6531,6 +6544,15 @@ class ElevenAdKilllistView(views.APIView):
                       .values('product_no', 'seller_product_code', 'product_name', 'status_type')):
                 code_map.setdefault(str(p['product_no']),
                                     (p['seller_product_code'] or '', p['product_name'] or '', p['status_type'] or ''))
+        # 카탈로그에서 삭제된 상품은 영구보존고(ProductCodeArchive)에서 판매자코드 보충 → 빈칸 자동채움
+        # (없으면 매출 확인이 아예 불가능한데도 매출0으로 단정해 킬리스트에 오분류될 위험이 있었음)
+        miss = [str(p) for (_, p) in cand.keys() if str(p) not in code_map]
+        if miss:
+            from apps.cpc.models import ProductCodeArchive
+            for p in (ProductCodeArchive.objects.filter(platform='11st', product_no__in=miss)
+                      .exclude(seller_code='').values('product_no', 'seller_code', 'product_name')):
+                code_map.setdefault(str(p['product_no']),
+                                    (p['seller_code'] or '', p['product_name'] or '', '삭제(코드보존)'))
         codes = set()
         for sc, _nm, _st in code_map.values():
             if sc:
@@ -6542,12 +6564,15 @@ class ElevenAdKilllistView(views.APIView):
                       .values('product_code').annotate(s=Sum('total_price'))):
                 sales_by_code[s['product_code']] = s['s'] or 0
 
-        # 4) 매출 0인 것만 = 킬 대상
+        # 4) 매출 0인 것만 = 킬 대상. 판매자코드를 끝내 못 찾은 상품은 매출 확인 자체가
+        # 불가능하므로(매출0 단정 금지) 킬리스트에서 제외한다 — mapped 안전장치와 동일 원칙.
         rows = []
         for (eid, pno), cost in cand.items():
             info = code_map.get(pno)
             sc = info[0] if info else ''
-            sales = sum(sales_by_code.get(x, 0) for x in {sc, _bare_seller_code(sc)}) if sc else 0
+            if not sc:
+                continue
+            sales = sum(sales_by_code.get(x, 0) for x in {sc, _bare_seller_code(sc)})
             if sales == 0:
                 rows.append({'eleven_id': eid, 'product_no': pno, 'seller_code': sc,
                              'product_name': info[1] if info else '', 'cost': cost,

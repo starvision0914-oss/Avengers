@@ -46,6 +46,7 @@ interface SearchTermRow {
   conv_cnt: number;
   conv_amt: number;
   roas: number;
+  ctr: number;
 }
 
 const now = new Date();
@@ -498,7 +499,7 @@ function NaverSearchTermSection({ accounts }: { accounts: { id: number; name: st
   const curYM = ymStr(now);
   const [ym, setYm] = useState(curYM);
   const [accountId, setAccountId] = useState('');
-  const [sort, setSort] = useState<'conv_amt' | 'cost' | 'click'>('conv_amt');
+  const [sort, setSort] = useState<'conv_amt' | 'cost' | 'click' | 'conv_cnt' | 'click_no_conv' | 'ctr'>('conv_amt');
   const [rows, setRows] = useState<SearchTermRow[]>([]);
   const [availYms, setAvailYms] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -551,6 +552,9 @@ function NaverSearchTermSection({ accounts }: { accounts: { id: number; name: st
           <option value="conv_amt">구매금액순</option>
           <option value="cost">광고비순</option>
           <option value="click">클릭순</option>
+          <option value="conv_cnt">① 전환多(신규키워드 후보)</option>
+          <option value="click_no_conv">② 클릭多·구매0(제외키워드 후보)</option>
+          <option value="ctr">③ CTR높음(입찰상향 후보)</option>
         </select>
         <button onClick={handleCrawl} disabled={busy}
           className="flex items-center gap-1 px-3 py-1.5 text-[14px] font-semibold text-white rounded disabled:opacity-50"
@@ -578,7 +582,7 @@ function NaverSearchTermSection({ accounts }: { accounts: { id: number; name: st
           <table className="w-full border-collapse" style={{ minWidth: 900 }}>
             <thead className="sticky top-0 z-10 bg-[#f5f6f8]">
               <tr>
-                {['계정', '검색어', '노출수', '클릭수', '광고비', '구매수', '구매금액', 'ROAS'].map((h, i) => (
+                {['계정', '검색어', '노출수', '클릭수', 'CTR', '광고비', '구매수', '구매금액', 'ROAS'].map((h, i) => (
                   <th key={h} className={`px-3 py-2.5 text-[13px] font-semibold text-[#555] whitespace-nowrap border-b border-[#e5e7eb] ${i >= 2 ? 'text-right' : 'text-left'}`}>
                     {h}
                   </th>
@@ -587,7 +591,7 @@ function NaverSearchTermSection({ accounts }: { accounts: { id: number; name: st
             </thead>
             <tbody className="divide-y divide-[#f3f4f6]">
               {rows.length === 0 && (
-                <tr><td colSpan={8} className="text-center py-16 text-[#bbb] text-[15px]">
+                <tr><td colSpan={9} className="text-center py-16 text-[#bbb] text-[15px]">
                   {loading ? '조회 중...' : '조회 결과가 없습니다 — 우측 상단 "수집" 버튼을 눌러주세요.'}
                 </td></tr>
               )}
@@ -597,6 +601,7 @@ function NaverSearchTermSection({ accounts }: { accounts: { id: number; name: st
                   <td className="px-3 py-2 text-[14px] text-[#333]">{r.keyword}</td>
                   <td className="px-3 py-2 text-[14px] text-right text-[#555]">{r.impression.toLocaleString()}</td>
                   <td className="px-3 py-2 text-[14px] text-right text-[#555]">{r.click.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-[14px] text-right text-[#555]">{r.ctr}%</td>
                   <td className="px-3 py-2 text-[14px] text-right font-semibold text-[#f97316]">{r.cost.toLocaleString()}</td>
                   <td className="px-3 py-2 text-[14px] text-right text-[#555]">{r.conv_cnt.toLocaleString()}</td>
                   <td className="px-3 py-2 text-[14px] text-right font-semibold text-[#2563eb]">{r.conv_amt.toLocaleString()}</td>

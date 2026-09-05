@@ -88,6 +88,35 @@ def fetch_products(account, log_fn=print, max_per_page=50):
     return all_items
 
 
+def stop_item_sale(account, vendor_item_id):
+    """옵션(vendorItemId) 단위 판매중지. 성공 시 응답 JSON 반환, 실패(4xx/5xx)면
+    requests.HTTPError 발생. (2026-09-05, 쿠팡 개발자센터 문서로 확정) 판매중지는
+    seller-products(등록상품) 단위가 아니라 vendor-items(옵션) 단위 API만 존재 —
+    상품 전체를 중지하려면 그 상품의 모든 vendorItemId를 각각 호출해야 한다."""
+    path = f'/v2/providers/seller_api/apis/api/v1/marketplace/vendor-items/{vendor_item_id}/sales/stop'
+    return _request(account, 'PUT', path)
+
+
+def stop_product_sale(account, seller_product_id, log_fn=print):
+    """등록상품(sellerProductId) 전체 판매중지 — 상세조회로 모든 옵션(vendorItemId)을
+    구해 하나씩 stop_item_sale 호출. 반환: (성공건수, 실패건수)."""
+    detail = fetch_product_detail(account, seller_product_id)
+    items = detail.get('items') or []
+    ok = fail = 0
+    for it in items:
+        vid = it.get('vendorItemId')
+        if not vid:
+            continue
+        try:
+            stop_item_sale(account, vid)
+            ok += 1
+        except requests.HTTPError as e:
+            body = e.response.text[:200] if e.response is not None else str(e)
+            log_fn(f'  옵션 {vid} 판매중지 실패: {body}')
+            fail += 1
+    return ok, fail
+
+
 def fetch_product_detail(account, seller_product_id):
     """등록상품 상세 조회 — 목록 API엔 없는 items[].marketplaceItemData.externalVendorSku(판매자관리코드/W코드) 포함."""
     path = f'/v2/providers/seller_api/apis/api/v1/marketplace/seller-products/{seller_product_id}'

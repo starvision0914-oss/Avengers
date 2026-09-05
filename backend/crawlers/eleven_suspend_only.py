@@ -244,6 +244,17 @@ def suspend_only(targets, mode='validate', eid_filter=None, log_fn=None, checkpo
                         checked_ok, popup_ok, applied = _suspend_current_search(driver, eid, log_fn)
                     if popup_ok and applied:
                         acc_applied += applied
+                        # (2026-09-05) 성공한 상품의 로컬 DB status_type을 즉시 갱신 — 안 하면 다음
+                        # 재크롤(익일 01시) 전까지 '판매중'으로 남아, 같은 날 재실행 시 이미 판매중지된
+                        # 상품이 다시 대상에 섞여 배치 전체가 거부됨(2026-09-04 16:58 30계정/41배치
+                        # 전량거부 사고 — [[project_11st_jinag7460_suspend_reject]] 패턴).
+                        try:
+                            from apps.cpc.models import ElevenMyProduct
+                            ElevenMyProduct.objects.filter(
+                                account__login_id=eid, product_no__in=chunk
+                            ).update(status_type='판매중지')
+                        except Exception as e:
+                            _log(log_fn, f'[{eid}] status_type 갱신 실패: {str(e)[:150]}')
                     else:
                         acc_fail_chunks += 1
                 results.append({'eleven_id': eid, 'requested': len(nums), 'applied': acc_applied,

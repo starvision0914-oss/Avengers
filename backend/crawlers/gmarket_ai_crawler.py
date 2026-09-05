@@ -4,40 +4,25 @@ import logging
 from datetime import date as date_cls
 from django.utils import timezone
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from .browser import create_driver, stop_display
+from .gmarket_crawler import _try_cookie_login, _full_login, _save_cookies
 
 logger = logging.getLogger('crawler')
 
-LOGIN_URL = 'https://ad.esmplus.com/Member/SignIn/LogOn'
 AI_MGMT_URL = 'https://ad.esmplus.com/Remarketing/Management'
 
 
-def _login(driver, login_id, password):
-    driver.get(LOGIN_URL)
-    time.sleep(2)
-    try:
-        try:
-            tab = driver.find_element(By.XPATH, '//*[@id="login_seller"]/ul/li[2]/label')
-            tab.click()
-            time.sleep(0.3)
-        except Exception:
-            pass
-        driver.find_element(By.ID, 'SellerId').clear()
-        driver.find_element(By.ID, 'SellerId').send_keys(login_id)
-        driver.find_element(By.ID, 'SellerPassword').clear()
-        driver.find_element(By.ID, 'SellerPassword').send_keys(password)
-        try:
-            driver.find_element(By.XPATH, '//*[@id="lnkSellerLogin"]/img').click()
-        except Exception:
-            driver.find_element(By.XPATH, '//img[@alt="로그인"]').click()
-        WebDriverWait(driver, 15).until(lambda d: 'SignIn' not in d.current_url and 'LogOn' not in d.current_url)
-        time.sleep(2)
+def _login(driver, account):
+    """ad.esmplus.com 로그인 — gmarket_crawler.py와 동일 로직(쿠키 우선, 실패시 풀로그인) 재사용.
+    (2026-09-05) 이 크롤러가 옛 SellerId/SellerPassword 셀렉터를 그대로 쓰다가 2026-07 UI개편으로
+    로그인 페이지 구조가 바뀐 뒤 계속 실패해왔음 — gmarket_crawler.py의 검증된 로그인 함수로 교체."""
+    driver.delete_all_cookies()
+    if _try_cookie_login(driver, account):
         return True
-    except Exception as e:
-        logger.error(f'[GM-AI:{login_id}] 로그인 실패: {e}')
-        return False
+    if _full_login(driver, account.login_id, account.password_enc):
+        _save_cookies(driver, account)
+        return True
+    return False
 
 
 def _collect_ai_status(driver, login_id, log_fn=None):
@@ -130,8 +115,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
         driver = create_driver()
         for acct in qs:
             try:
-                driver.delete_all_cookies()
-                if _login(driver, acct.login_id, acct.password_enc):
+                if _login(driver, acct):
                     results = _collect_ai_status(driver, acct.login_id, log_fn)
                     all_results.extend(results)
                 else:

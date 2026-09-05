@@ -1363,6 +1363,8 @@ class NaverSearchTermView(APIView):
     def get(self, request):
         ym = request.query_params.get('ym') or ''
         account_id = request.query_params.get('account_id') or ''
+        # sort: conv_amt(기본,전환매출순) / cost / click / conv_cnt(①전환多=신규키워드후보)
+        #       / click_no_conv(②클릭多·전환0=제외키워드후보) / ctr(③CTR높음=입찰상향후보)
         sort = request.query_params.get('sort', 'conv_amt')
 
         qs = NaverSearchTermReport.objects.select_related('account')
@@ -1371,8 +1373,16 @@ class NaverSearchTermView(APIView):
         if account_id:
             qs = qs.filter(account_id=account_id)
 
-        order_field = {'conv_amt': '-conv_amt', 'cost': '-cost', 'click': '-click'}.get(sort, '-conv_amt')
-        qs = qs.order_by(order_field)[:500]
+        if sort == 'click_no_conv':
+            qs = qs.filter(conv_cnt=0, click__gt=0).order_by('-click')
+        elif sort == 'ctr':
+            # 노출이 너무 적으면 우연히 CTR이 튀므로(예: 노출1·클릭1=100%) 최소 노출 기준 적용.
+            qs = qs.filter(impression__gte=20)
+        else:
+            order_field = {'conv_amt': '-conv_amt', 'cost': '-cost', 'click': '-click',
+                           'conv_cnt': '-conv_cnt'}.get(sort, '-conv_amt')
+            qs = qs.order_by(order_field)
+        qs = qs[:500]
 
         rows = [{
             'account_id': r.account_id,
@@ -1384,7 +1394,11 @@ class NaverSearchTermView(APIView):
             'conv_cnt': r.conv_cnt,
             'conv_amt': r.conv_amt,
             'roas': round(r.conv_amt * 100.0 / r.cost, 1) if r.cost else 0,
+            'ctr': round(r.click * 100.0 / r.impression, 1) if r.impression else 0,
         } for r in qs]
+
+        if sort == 'ctr':
+            rows.sort(key=lambda x: -x['ctr'])
 
         avail_yms = list(NaverSearchTermReport.objects.values_list('ym', flat=True).distinct().order_by('-ym'))
         return Response({'rows': rows, 'available_yms': avail_yms})

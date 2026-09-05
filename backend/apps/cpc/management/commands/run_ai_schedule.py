@@ -35,6 +35,19 @@ class Command(BaseCommand):
             self.stdout.write('선택된 계정 없음')
             return
 
+        action = options['action']
+        # 방향별 활성화 스위치 — 동적 크론(AD_SCHEDULE)뿐 아니라 고정 재시도 크론
+        # (cron_ai_on_retry.sh 등)에서 호출돼도 여기서 최종적으로 막힌다.
+        if action == 'on' and not schedule.on_enabled:
+            self.stdout.write('AI ON 비활성화 상태(on_enabled=False) → 스킵')
+            return
+        if action == 'off' and not schedule.off_enabled:
+            self.stdout.write('AI OFF 비활성화 상태(off_enabled=False) → 스킵')
+            return
+        if action == 'off-on' and not schedule.on_enabled:
+            self.stdout.write('AI ON 비활성화 상태(on_enabled=False) → off-on 스킵')
+            return
+
         today = datetime.now().date()
         today_str = today.isoformat()
 
@@ -56,7 +69,6 @@ class Command(BaseCommand):
         else:
             start_date = self._next_business_day(today, holidays)
 
-        action = options['action']
         self.stdout.write(f'예약 실행 — 오늘: {today_str}, 시작일: {start_date}, 액션: {action}, 대상: {selected}')
 
         # 선택한 계정(login_id=마스터)을 그대로 사용 — 수동 AI 제어와 동일.

@@ -309,6 +309,57 @@ def _save(eid, market, sdt, edt, rows):
     return len(objs)
 
 
+def _select_seller_ui(driver, target_login_id, log_fn=None):
+    """계정선택 위젯(/html/body/div[1]/div[1]/div[3]) 클릭 → 드롭다운 목록에서 대상 계정명
+    클릭 → 검색버튼 클릭. (2026-09-05, 사용자 지적) fetch()의 searchAccount 파라미터만 믿고
+    UI에서 계정을 선택하지 않은 채 조회하면, 특히 마스터 세션으로 서브계정을 수집할 때 실제로
+    어느 판매자 데이터가 반환되는지 서버측 세션 스코프가 보장되지 않는다 — 반드시 이 위젯으로
+    명시적으로 계정을 선택한 뒤 검색해야 정확한 판매자 거래내역이 조회된다.
+    단일 아이디 계정은 이 위젯 자체가 없을 수 있어(선택할 서브가 없음), 그 경우 조용히
+    스킵하고 기존 fetch 방식으로 진행한다(치명적 실패로 취급하지 않음)."""
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    try:
+        opener = WebDriverWait(driver, 5).until(
+            EC.element_to_be_clickable((By.XPATH, '/html/body/div[1]/div[1]/div[3]')))
+        driver.execute_script("arguments[0].click();", opener)
+        time.sleep(0.5)
+    except Exception:
+        return False   # 위젯 없음(단일아이디) — 정상, 기존 fetch로 계속
+
+    try:
+        candidates = driver.find_elements(By.XPATH, f"//*[contains(text(), '{target_login_id}')]")
+        clicked = False
+        for c in candidates:
+            try:
+                if c.is_displayed():
+                    driver.execute_script("arguments[0].click();", c)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if not clicked:
+            _log(log_fn, f'[{target_login_id}] 계정선택 목록에서 항목을 찾지 못함 — 기존 fetch로 진행')
+            return False
+        time.sleep(0.5)
+        for by, sel in [(By.ID, 'btnSearch'), (By.XPATH, '//*[@id="btnSearch"]/img'),
+                         (By.XPATH, "//button[contains(.,'검색')]"),
+                         (By.XPATH, "//a[contains(.,'검색')]")]:
+            try:
+                btn = driver.find_element(by, sel)
+                driver.execute_script("arguments[0].click();", btn)
+                break
+            except Exception:
+                continue
+        time.sleep(1.5)
+        _log(log_fn, f'[{target_login_id}] 계정선택 UI로 판매자 전환 완료')
+        return True
+    except Exception as e:
+        _log(log_fn, f'[{target_login_id}] 계정선택 UI 실패: {str(e)[:120]} — 기존 fetch로 진행')
+        return False
+
+
 def _get_auction_seller_id(login_id):
     """옥션 seller_id 반환 — auction_seller_id 설정 시 그 값, 없으면 login_id."""
     try:
@@ -331,6 +382,10 @@ def _collect_account_months(driver, login_id, months, log_fn):
         driver.get(GMKT_PAGE)
         time.sleep(1.5)
         _dismiss_esm_popups(driver)
+    # (2026-09-05) 매 호출마다(같은 드라이버로 서브 여러 개를 연달아 처리하는 마스터세션 경로
+    # 포함) UI에서 명시적으로 이 계정을 선택 — fetch()의 searchAccount 파라미터만으로는
+    # 실제 조회 스코프가 보장 안 됨. 단일아이디 계정은 위젯이 없어 조용히 스킵될 수 있음.
+    _select_seller_ui(driver, login_id, log_fn)
     for endpoint, market, norm in (
         ('GmktSellBalanceUseListSearch', 'gmarket', _norm_gmkt),
         ('IacSellBalanceUseListSearch', 'auction', _norm_iac),
