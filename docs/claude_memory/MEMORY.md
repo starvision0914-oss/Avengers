@@ -135,3 +135,6 @@
 - [도매매코드 명칭](reference_domeggook_code_format.md) — 스마트스토어 순수숫자7자리 판매자코드
 - [스마트스토어 W코드 정규식 누락](project_smartstore_wcode_regex_gap.md) — 비16진수 W코드 42건 누락
 - [11번가 판매중지 처리지연](project_11st_suspend_processing_delay.md) — 성공해도 반영까지 몇시간 지연
+- [토스몰 광고비 연동](project_toss_integration.md) — 크론 01:00(전일확정)으로 변경, 계정1개
+- [크론탭 파이프 위험](feedback_crontab_pipe_danger.md) — sed 구분자실패시 전체삭제, python치환 필수
+- [스마트스토어 계정목록 정렬](project_smartstore_sort_order.md) — 매출desc→등록상품수desc 고정

@@ -153,6 +153,137 @@ def _suspend_current_search(driver, eid, log_fn):
     return True, True, applied_count
 
 
+def _get_real_statuses(driver, nums, log_fn, eid):
+    """nums(<=30)를 검색 후 jqxGrid('getrows')로 실시간 판매상태를 직접 읽는다
+    (2026-08-26 검증된 방법, [[project_11st_jqxgrid_realtime_verify]] — DOM 파싱/가상스크롤 함정 회피).
+    반환: {product_no: '판매중'|'품절'|'판매중지'|... 라벨}."""
+    from crawlers.eleven_loss_delete import _paste_and_search
+    rows = _paste_and_search(driver, nums, log_fn, eid)
+    if not rows:
+        return {}
+    try:
+        data = driver.execute_script("return jQuery('#dvdataGrid').jqxGrid('getrows');") or []
+    except Exception as e:
+        _log(log_fn, f'  [{eid}] getrows 조회 실패: {str(e)[:100]}')
+        return {}
+    out = {}
+    for r in data:
+        prd = str(r.get('prdNo') or '').strip()
+        if not prd:
+            continue
+        raw = r.get('selStatCdVal') or ''
+        m = re.search(r'<span>([^<]*)</span>', raw)
+        out[prd] = m.group(1) if m else raw.strip()
+    return out
+
+
+def verify_and_suspend_by_status(targets, log_fn=None, chunk_size=CHUNK_SIZE):
+    """대량 판매중지 전, 계정별로 먼저 실시간 상태를 조회해 '판매중' 그룹과 '품절' 그룹으로
+    순수 분리한 뒤 각각 따로 배치 처리한다 — 판매중/품절이 섞인 배치는 11번가 API가 통째로
+    거부하기 때문([[project_11st_jinag7460_suspend_reject]]). 이미 판매중지 등 그 외 상태는 스킵.
+    targets: [{'eleven_id' 또는 'login_id', 'product_no'}]."""
+    from apps.cpc.models import CrawlerAccount, ElevenMyProduct
+    from apps.cpc import eleven_block_guard as guard
+    from crawlers.eleven_crawler import _do_login, _drain_alerts
+    from crawlers.browser import create_driver, stop_display
+    from crawlers.eleven_loss_delete import PRODUCT_PAGE, _paste_and_search
+
+    grouped = {}
+    for t in targets:
+        eid = t.get('eleven_id') or t.get('login_id')
+        grouped.setdefault(eid, []).append(str(t['product_no']))
+
+    ok, reason = guard.preflight('11번가판매중지재검증', wait=True)
+    if not ok:
+        _log(log_fn, f'⏭️ 건너뜀 — {reason}')
+        return {'ok': False, 'skipped': reason}
+
+    pw_map = {a.login_id: a.password_enc for a in CrawlerAccount.objects.filter(platform='11st')}
+    summary = {'accounts': 0, 'sale_applied': 0, 'soldout_applied': 0, 'skipped_other': 0, 'failed_batches': 0}
+    results = []
+
+    try:
+        for eid, nums in grouped.items():
+            blocked, _, _ = guard.is_blocked()
+            if blocked:
+                _log(log_fn, '⛔ 차단 감지 — 중단')
+                break
+            driver = None
+            try:
+                driver = create_driver(kill_existing=False)
+                driver.set_window_size(1920, 1080)
+                sn = _do_login(driver, eid, pw_map.get(eid, ''))
+                if not sn:
+                    _log(log_fn, f'[{eid}] 로그인 실패 — 건너뜀')
+                    continue
+                driver.implicitly_wait(0)
+                driver.set_page_load_timeout(30)
+                _drain_alerts(driver, login_id=eid)
+                driver.get(PRODUCT_PAGE)
+                time.sleep(3)
+
+                status_map = {}
+                verify_chunks = [nums[i:i + chunk_size] for i in range(0, len(nums), chunk_size)]
+                for vc in verify_chunks:
+                    status_map.update(_get_real_statuses(driver, vc, log_fn, eid))
+                    time.sleep(1)
+
+                sale_list = [n for n in nums if status_map.get(n) in ('판매중', '전시전')]
+                soldout_list = [n for n in nums if status_map.get(n) == '품절']
+                other = [n for n in nums if n not in sale_list and n not in soldout_list]
+                _log(log_fn, f'[{eid}] 실시간 확인: 판매중 {len(sale_list)} / 품절 {len(soldout_list)} / '
+                             f'스킵(이미판매중지 등) {len(other)}')
+                summary['skipped_other'] += len(other)
+
+                for label, group in (('판매중', sale_list), ('품절', soldout_list)):
+                    if not group:
+                        continue
+                    for gc in [group[i:i + chunk_size] for i in range(0, len(group), chunk_size)]:
+                        rows = _paste_and_search(driver, gc, log_fn, eid)
+                        applied = 0
+                        if rows:
+                            _, popup_ok, applied = _suspend_current_search(driver, eid, log_fn)
+                        if applied:
+                            key = 'sale_applied' if label == '판매중' else 'soldout_applied'
+                            summary[key] += applied
+                            try:
+                                ElevenMyProduct.objects.filter(
+                                    account__login_id=eid, product_no__in=gc).update(status_type='판매중지')
+                            except Exception as e:
+                                _log(log_fn, f'  [{eid}] status_type 갱신 실패: {str(e)[:100]}')
+                        else:
+                            summary['failed_batches'] += 1
+                            _log(log_fn, f'  [{eid}/{label}] 배치 실패({len(gc)}건)')
+                        time.sleep(1.5)
+                summary['accounts'] += 1
+                results.append({'eleven_id': eid, 'sale': len(sale_list), 'soldout': len(soldout_list), 'skipped': len(other)})
+            except Exception as e:
+                _log(log_fn, f'[{eid}] 오류: {str(e)[:150]}')
+            finally:
+                try:
+                    if driver:
+                        driver.quit()
+                except Exception:
+                    pass
+            time.sleep(2)
+    finally:
+        guard.release_global_lock()
+        try:
+            stop_display()
+        except Exception:
+            pass
+
+    msg = (f"⛔ [11번가 판매중지 재검증실행] 계정 {summary['accounts']} / "
+           f"판매중그룹 적용 {summary['sale_applied']} / 품절그룹 적용 {summary['soldout_applied']} / "
+           f"스킵 {summary['skipped_other']} / 실패배치 {summary['failed_batches']}")
+    _log(log_fn, msg)
+    try:
+        guard._send_telegram_alert(msg)
+    except Exception:
+        pass
+    return {'ok': True, **summary, 'results': results}
+
+
 def suspend_only(targets, mode='validate', eid_filter=None, log_fn=None, checkpoint_path=None):
     """targets: [{'eleven_id' or 'login_id','product_no'}...]. mode: validate(검색만) | real(실제 판매중지).
     checkpoint_path: 지정 시 계정 처리 완료마다 이 파일에 계정ID를 한 줄씩 append하고,

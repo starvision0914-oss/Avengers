@@ -2339,6 +2339,64 @@ class GmarketSuspendAllNoMatchView(views.APIView):
         return Response({'status': 'started', 'message': msg, 'accounts': len(acc_map), 'total': total})
 
 
+class Eleven11stSoldoutUnifiedView(views.APIView):
+    """11번가 판매중 상품 전체를 판매자코드 유형(W코드/L코드/도매매코드)별로 실제 소싱처 상태를
+    검증해 품절·미확인 확인된 것을 판매중지로 전환 — suspend_11st_soldout_unified 커맨드를
+    백그라운드로 실행. W/L은 캐시 기반이라 GET에서 빠르게 예상건수를 미리 계산해 보여준다
+    (도매매코드는 실행시점 라이브조회라 예상치 계산 안 함, 실행 후 로그로 확인)."""
+    LOG_FILE = '/tmp/suspend_11st_unified.log'
+
+    def get(self, request):
+        import os
+        from apps.cpc.models import ElevenMyProduct, protected_login_ids
+        from apps.cpc.eleven_my_product_service import get_lcode_soldout_rows, get_ownerclan_wcode_soldout_rows
+
+        protected = protected_login_ids('11st')
+        w_rows = get_ownerclan_wcode_soldout_rows(
+            ElevenMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중')
+        l_rows = get_lcode_soldout_rows(
+            ElevenMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중')
+        w_count = sum(1 for l, _ in w_rows if l not in protected)
+        l_count = sum(1 for l, _ in l_rows if l not in protected)
+        import re
+        dome_count = ElevenMyProduct.objects.filter(
+            status_type='판매중', seller_product_code__regex=r'^[0-9]{7}$'
+        ).exclude(account__login_id__in=protected).count()
+
+        pid, busy = _crawl_lock_busy()
+        log_tail = ''
+        try:
+            with open(self.LOG_FILE, encoding='utf-8', errors='ignore') as f:
+                log_tail = ''.join(f.readlines()[-60:])
+        except FileNotFoundError:
+            pass
+        return Response({
+            'w_soldout_confirmed': w_count, 'l_soldout_confirmed': l_count,
+            'dome_candidates': dome_count, 'busy': busy, 'log': log_tail,
+        })
+
+    def post(self, request):
+        import subprocess
+        account = request.data.get('account')
+
+        pid, busy = _crawl_lock_busy()
+        if busy:
+            return Response({'status': 'blocked', 'message': f'⛔ 다른 11번가 작업 실행중(PID {pid}) — 끝난 뒤 다시 시도'}, status=409)
+
+        acct_arg = f" --account '{account}'" if account else ''
+        script = (f"cd /home/rejoice888/Avengers/backend && "
+                  f"/usr/bin/python3 manage.py suspend_11st_soldout_unified --real{acct_arg} "
+                  f"> {self.LOG_FILE} 2>&1")
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+
+        return Response({'status': 'started',
+                          'message': '🛑 11번가 통합 품절관리(W코드+L코드+도매매코드) 시작 — 진행상황은 잠시 후 새로고침해서 확인하세요.'})
+
+
 class ElevenLossMarkDeletedView(views.APIView):
     """적자상품 삭제완료 표시 — 11번가에서 삭제한 상품을 기록(비고 '삭제완료' 파란색).
     body: {product_nos:[...], eleven_id?} 또는 {all:true}(현재 적자 전체 삭제완료 처리)."""

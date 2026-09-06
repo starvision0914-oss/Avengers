@@ -284,6 +284,28 @@ export async function suspendAllNoMatchProducts(accountId?: number, search?: str
   return data;
 }
 
+export interface SoldoutUnifiedStatus {
+  w_soldout_confirmed: number;
+  l_soldout_confirmed: number;
+  dome_candidates: number;
+  busy: boolean;
+  log: string;
+}
+
+/** 11번가 판매중 상품 전체(W코드/L코드/도매매코드) 통합 품절검증 현황 조회. */
+export async function fetchSoldoutUnifiedStatus(): Promise<SoldoutUnifiedStatus> {
+  const { data } = await api.get('/cpc/eleven-my/suspend-soldout-unified/');
+  return data;
+}
+
+/** 11번가 판매중 상품 전체(W코드/L코드/도매매코드) 통합 품절검증+판매중지 실행(백그라운드). */
+export async function runSoldoutUnified(account?: string): Promise<{ status: string; message?: string }> {
+  const body: Record<string, unknown> = {};
+  if (account) body.account = account;
+  const { data } = await api.post('/cpc/eleven-my/suspend-soldout-unified/', body);
+  return data;
+}
+
 export type DuplicateMode = 'strict' | 'loose' | 'image';
 
 export interface DuplicateItem {

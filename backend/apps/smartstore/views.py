@@ -217,6 +217,11 @@ class DashboardView(APIView):
 
         acc_naver_ad = {a.id: a.naver_ad_account_id for a in accounts_qs}
         acc_bizmoney = {a.id: a.bizmoney_balance for a in accounts_qs}
+        acc_product_count = {
+            row['account_id']: row['cnt']
+            for row in SmartStoreProduct.objects.filter(status_type='SALE')
+                .values('account_id').annotate(cnt=Count('id'))
+        }
 
         account_list = []
         for aid, row in by_account.items():
@@ -228,11 +233,12 @@ class DashboardView(APIView):
                 'account_name': name,
                 'naver_ad_account_id': acc_naver_ad.get(aid),
                 'bizmoney_balance': acc_bizmoney.get(aid),
+                'product_count': acc_product_count.get(aid, 0),
                 **row,
                 'excel_revenue': sales,
                 'roas': round(sales / ad * 100, 1) if ad > 0 else None,
             })
-        account_list.sort(key=lambda x: x['sales'], reverse=True)
+        account_list.sort(key=lambda x: (-x['sales'], -x['product_count']))
 
         total_sales = sum(r['sales'] for r in by_account.values())
         total_settlement = sum(r['settlement'] for r in by_account.values())

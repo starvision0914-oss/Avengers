@@ -6,6 +6,7 @@ import {
   exportElevenMyProducts, triggerIntegratedSync, triggerProductRecrawl, suspendSoldoutProducts,
   suspendSelectedProducts, suspendAllNoMatchProducts, downloadWCodes,
   startLCodeCheck, stopLCodeCheck, fetchLCodeStatus, type LCodeStatusSummary,
+  fetchSoldoutUnifiedStatus, runSoldoutUnified, type SoldoutUnifiedStatus,
   type ElevenAccountSummary,
   fetchElevenPrecheckDiff, type PrecheckDiffResponse,
   previewElevenPriceMatch, applyElevenPriceMatch, type ElevenPriceMatchPreviewResponse,
@@ -110,6 +111,7 @@ export default function ElevenMyProductsPage() {
   const [priceMatchOpen, setPriceMatchOpen] = useState(false);
   const [priceMatchLoading, setPriceMatchLoading] = useState(false);
   const [priceMatchApplying, setPriceMatchApplying] = useState(false);
+  const [priceMatchAllApplying, setPriceMatchAllApplying] = useState(false);
   const [priceMatchData, setPriceMatchData] = useState<PriceMatchPreviewResponse | ElevenPriceMatchPreviewResponse | GmarketPriceMatchPreviewResponse | null>(null);
   const [priceCapOpen, setPriceCapOpen] = useState(false);
   const [priceCapLoading, setPriceCapLoading] = useState(false);
@@ -528,6 +530,35 @@ export default function ElevenMyProductsPage() {
     }
   };
 
+  // 전체쇼핑몰 확인필요(역마진) 가격맞추기 — 판매중지 통합버튼(suspendAllNoMatchAction의 platform==='all' 분기)과
+  // 동일 패턴. 플랫폼별로 서로 다른 사이트/락이라 프론트에서는 동시에 시작해도 되고(Promise.allSettled),
+  // 각 플랫폼 백엔드가 자기 플랫폼 전역락(guard.preflight 등)으로 겹침을 이미 막아준다 — 지금까지 판매중지가
+  // 이 방식으로 안전하게 운영돼 온 것과 같은 이유(플랫폼 간 IP/세션이 분리돼 있어 겹쳐도 문제없음, 같은
+  // 플랫폼 내 중복실행만 백엔드 락이 막음).
+  const priceMatchAllAction = async () => {
+    const msg = `전체 쇼핑몰(11번가+지마켓+스마트스토어)의 확인필요(역마진 ${needsCheckPct}%+) 상품 판매가를 `
+      + `예비상품 마켓가로 실제 변경합니다.\n(정확한 건수는 플랫폼별로 서버에서 처리 시 계산됩니다) 계속할까요?`;
+    if (!window.confirm(msg)) return;
+    setPriceMatchAllApplying(true);
+    const tid = toast.loading('전체 쇼핑몰 가격맞추기 시작 중...');
+    const tasks = [
+      applyElevenPriceMatch(needsCheckPct),
+      applyGmarketPriceMatch(needsCheckPct),
+      applyPriceMatch(needsCheckPct),
+    ];
+    const labels = ['11번가', '지마켓', '스마트스토어'];
+    const results = await Promise.allSettled(tasks);
+    const lines = results.map((r, i) => {
+      if (r.status === 'rejected') return `${labels[i]}: 실패(${(r.reason as any)?.response?.data?.error || (r.reason as any)?.message || '오류'})`;
+      const v = r.value;
+      return v.status === 'started' ? `${labels[i]}: ${v.message || '시작됨'}` : `${labels[i]}: ${v.message || v.error || '시작 실패'}`;
+    });
+    const anyOk = results.some(r => r.status === 'fulfilled' && r.value.status === 'started');
+    if (anyOk) toast.success(lines.join('\n'), { id: tid, duration: 10000 });
+    else toast.error(lines.join('\n'), { id: tid, duration: 10000 });
+    setPriceMatchAllApplying(false);
+  };
+
   // 나의상품(전체 플랫폼) 판매중 W코드 목록 다운로드 — 오너클랜 등에 대량조회 붙여넣기용, 하나로 통합(2026-08-22)
   const [downloadingWCodes, setDownloadingWCodes] = useState(false);
   const downloadAllWCodes = async () => {
@@ -589,6 +620,37 @@ export default function ElevenMyProductsPage() {
       toast.error(e.response?.data?.message || e.message);
     } finally {
       setLCodeBusy(false);
+    }
+  };
+
+  // 11번가 판매중 상품 통합 품절관리(W코드/L코드/도매매코드) — 실제 소싱처 상태 확인 후 판매중지.
+  const [soldoutUnified, setSoldoutUnified] = useState<SoldoutUnifiedStatus | null>(null);
+  const [soldoutUnifiedRunning, setSoldoutUnifiedRunning] = useState(false);
+  const loadSoldoutUnified = useCallback(async () => {
+    try { setSoldoutUnified(await fetchSoldoutUnifiedStatus()); } catch { /* noop */ }
+  }, []);
+  useEffect(() => {
+    loadSoldoutUnified();
+    const t = setInterval(loadSoldoutUnified, 60000);
+    return () => clearInterval(t);
+  }, [loadSoldoutUnified]);
+  const handleRunSoldoutUnified = async () => {
+    const w = soldoutUnified?.w_soldout_confirmed ?? 0;
+    const l = soldoutUnified?.l_soldout_confirmed ?? 0;
+    const dc = soldoutUnified?.dome_candidates ?? 0;
+    if (!window.confirm(
+      `11번가 판매중 상품 전체를 W코드/L코드/도매매코드로 나눠 실제 상태를 검증하고, 품절·미확인 확인된 것을 판매중지합니다.\n` +
+      `W코드 확인된 대상 ${fmt(w)}건 · L코드 확인된 대상 ${fmt(l)}건 · 도매매코드 조회대상 ${fmt(dc)}건(실행시 라이브조회).\n진행할까요?`
+    )) return;
+    setSoldoutUnifiedRunning(true);
+    try {
+      const r = await runSoldoutUnified();
+      toast.success(r.message || '시작됨');
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || e.message);
+    } finally {
+      setSoldoutUnifiedRunning(false);
+      setTimeout(loadSoldoutUnified, 3000);
     }
   };
 
@@ -1188,6 +1250,17 @@ export default function ElevenMyProductsPage() {
             </button>
           )}
 
+          {platform === 'all' && needsCheck && (
+            <button
+              onClick={priceMatchAllAction}
+              disabled={priceMatchAllApplying}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-pink-700 hover:bg-pink-800 text-white disabled:opacity-40"
+              title="선택 없이, 11번가+지마켓+스마트스토어 확인필요(역마진, 판매중) 상품 판매가를 각 플랫폼 서버에서 한 번에 예비상품 마켓가로 맞춤"
+            >
+              {priceMatchAllApplying ? '실행 중…' : `💰 전체쇼핑몰 확인필요 가격맞추기 (약 ${fmt(needsCheckTotal)})`}
+            </button>
+          )}
+
 
           {(platform === 'gmarket' || platform === 'all') && (
             <label
@@ -1313,6 +1386,17 @@ export default function ElevenMyProductsPage() {
               🛑 L코드 품절/미확인 판매중지 (약 {fmt(lCodeStatus.soldout_target_count)})
             </button>
           )}
+
+          <button
+            onClick={handleRunSoldoutUnified}
+            disabled={soldoutUnifiedRunning || soldoutUnified?.busy}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold bg-rose-800 hover:bg-rose-900 text-white disabled:opacity-40"
+            title="11번가 '판매중' 상품 전체를 판매자코드로 W코드/L코드/도매매코드 구분해 각 소싱처 실제 상태를 검증하고, 품절·미확인 확인된 것을 판매중지합니다."
+          >
+            {soldoutUnified?.busy
+              ? '⏳ 11번가 다른 작업 실행중...'
+              : `🛑 11번가 통합 품절관리 실행 (W ${fmt(soldoutUnified?.w_soldout_confirmed ?? 0)} · L ${fmt(soldoutUnified?.l_soldout_confirmed ?? 0)} · 도매매 조회 ${fmt(soldoutUnified?.dome_candidates ?? 0)})`}
+          </button>
 
           {selProd.size > 0 && (
             <>

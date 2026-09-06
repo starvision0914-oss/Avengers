@@ -13,6 +13,15 @@ python3 manage.py crawl_smartstore --days 7 >> "$LOG" 2>&1
 echo "$(date '+%Y-%m-%d %H:%M:%S') [정리] 크롤 3일+ 누락 상품 DELETED 표시" >> "$LOG"
 python3 manage.py mark_smartstore_unavailable >> "$LOG" 2>&1
 
+echo "$(date '+%Y-%m-%d %H:%M:%S') [구매원가] 예비상품 마켓가 전체 갱신(미매칭 최신화)" >> "$LOG"
+python3 -c "
+import django, os
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
+from apps.cpc.eleven_my_product_service import refresh_smartstore_purchase_costs
+print('구매원가 갱신:', refresh_smartstore_purchase_costs(), '건')
+" >> "$LOG" 2>&1
+
 echo "$(date '+%Y-%m-%d %H:%M:%S') [광고비] 네이버 검색광고 API 수집 시작" >> "$LOG"
 python3 manage.py crawl_smartstore_adcost --with-gsheet >> "$LOG" 2>&1
 STATUS=$?

@@ -74,6 +74,41 @@ def get_lcode_soldout_rows(model, code_field, product_no_field, status_field, st
     return rows
 
 
+W_CODE_RE = __import__('re').compile(r'^(?:WDM_|AUTO_)?(W[0-9A-Za-z]{6})$', __import__('re').IGNORECASE)
+
+
+def get_ownerclan_wcode_soldout_rows(model, code_field, product_no_field, status_field, status_val,
+                                      account_id=None, search=None, search_fields=None, return_objects=False):
+    """W코드(오너클랜 소싱)가 오너클랜 라이브상태(OwnerclanLiveStatus, 주5일 순환점검)에서
+    available이 아닌 것(soldout/unavailable/discontinued/NOT_FOUND=미확인)으로 확인된 상품의
+    (login_id, product_no) 목록. get_lcode_soldout_rows와 동일 원칙 — 아직 오너클랜 라이브
+    점검 자체를 안 한 코드(캐시에 없음)는 대상이 아니다(오탐 방지, 확인된 것만 대상)."""
+    from apps.ownerclan.models import OwnerclanLiveStatus
+    bad_codes = set(OwnerclanLiveStatus.objects.exclude(status='available').values_list('product_code', flat=True))
+    if not bad_codes:
+        return []
+
+    qs = model.objects.select_related('account').filter(
+        **{f'{code_field}__iregex': r'^(WDM_|AUTO_)?W', status_field: status_val}
+    ).exclude(**{f'{code_field}__regex': r'[가-힣]'})
+    if account_id:
+        qs = qs.filter(account_id=int(account_id))
+    if search and search_fields:
+        from django.db.models import Q
+        cond = Q()
+        for f in search_fields:
+            cond |= Q(**{f'{f}__icontains': search})
+        qs = qs.filter(cond)
+
+    rows = []
+    for obj in qs.iterator(chunk_size=2000):
+        code = getattr(obj, code_field) or ''
+        m = W_CODE_RE.match(code.strip())
+        if m and m.group(1).upper() in bad_codes:
+            rows.append(obj if return_objects else (obj.account.login_id, getattr(obj, product_no_field)))
+    return rows
+
+
 # 오너클랜 라이브 상태캐시(OwnerclanLiveStatus)로 "진짜 미매칭(존재 자체가 불확실)"과
 # "가격만 안 채워진 실제 상품"을 구분한다. 미매칭 = 오너클랜에 이 코드가 실제로 있는지조차
 # 확인이 안 된 것(아직 라이브검증 안 함) 또는 검색해도 안 나오는 것(NOT_FOUND)뿐이다.
