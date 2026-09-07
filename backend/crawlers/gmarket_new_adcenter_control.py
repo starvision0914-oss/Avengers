@@ -129,7 +129,9 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
     from apps.cpc import eleven_block_guard as guard
 
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
-    protected = protected_login_ids('gmarket')
+    # dlwodb777: 상품삭제/판매중지 자동화는 계속 금지(project_gmarket_dlwod777_manual_only)지만,
+    # 2026-09-07 사용자가 신규광고센터 on/off만 명시적으로 재요청 — 이 기능에 한해서만 보호 예외.
+    protected = protected_login_ids('gmarket') - {'dlwodb777'}
     if protected:
         qs = qs.exclude(login_id__in=protected)
     if account_filter:
@@ -138,19 +140,21 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
     else:
         qs = [a for a in qs if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
 
-    if not guard.try_acquire_adcontrol('지마켓신규광고센터제어', platform='gmarket'):
+    LOCK_PLATFORM = 'gmarket_newad'  # adcenter.esmplus.com 전용 락 — ad.esmplus.com(간편광고/AI) 크롤과 분리(2026-09-07)
+
+    if not guard.try_acquire_adcontrol('지마켓신규광고센터제어', platform=LOCK_PLATFORM):
         if log_fn:
             log_fn('⏭️ 이미 광고제어 실행 중 — 중복 방지로 스킵')
         return []
 
-    ok, reason = guard.preflight('지마켓신규광고센터제어', platform='gmarket', wait=True, wait_timeout=10800)
+    ok, reason = guard.preflight('지마켓신규광고센터제어', platform=LOCK_PLATFORM, wait=True, wait_timeout=10800)
     if not ok:
-        guard.clear_adcontrol_busy('gmarket')
+        guard.clear_adcontrol_busy(LOCK_PLATFORM)
         if log_fn:
             log_fn(f'⏭️ 건너뜀 — {reason}')
         return []
 
-    guard.clear_control_stop('gmarket')
+    guard.clear_control_stop(LOCK_PLATFORM)
     results, driver = [], None
     try:
         driver = create_driver()

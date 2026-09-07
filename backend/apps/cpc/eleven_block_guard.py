@@ -40,6 +40,7 @@ _REACH_URL = {
     'gmarket': 'https://www.gmarket.co.kr/',
     'gmarket_b': 'https://www.gmarket.co.kr/',   # 2개조 동시 백필용 별도 락(접속점검은 지마켓 동일)
     'gmarket_product': 'https://www.esmplus.com/',  # ESM PLUS 상품수집 전용 락(광고센터 ad.esmplus.com과 분리 — 별도 서브도메인/세션)
+    'gmarket_newad': 'https://adcenter.esmplus.com/',  # 신규광고센터 전용 락(간편광고/AI광고 ad.esmplus.com과 분리 — 별도 서브도메인/세션, 2026-09-07)
     'auction': 'https://www.auction.co.kr/',
     'coupang': 'https://www.coupang.com/',
     'smartstore': 'https://smartstore.naver.com/',

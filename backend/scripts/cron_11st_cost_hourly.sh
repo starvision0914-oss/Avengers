@@ -16,6 +16,8 @@ else
 fi
 echo "$(date '+%F %T') CPC 증가분 텔레그램" >> "$LOG"
 /usr/bin/python3 manage.py notify_11st_adcost_hourly --always >> "$LOG" 2>&1
+echo "$(date '+%F %T') 증가계정 8~16시 전략설정 자동적용(가드, 2026-09-07)" >> "$LOG"
+/usr/bin/python3 manage.py guard_11st_ad_schedule_on_spike >> "$LOG" 2>&1
 echo "$(date '+%F %T') 전계정 크롤 종료 알림" >> "$LOG"
 /usr/bin/python3 manage.py notify_crawl_done --platform 11st --started "$START" >> "$LOG" 2>&1
 echo "$(date '+%F %T') 완료" >> "$LOG"

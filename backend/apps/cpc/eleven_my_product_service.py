@@ -53,7 +53,9 @@ def get_lcode_soldout_rows(model, code_field, product_no_field, status_field, st
     if not soldout_codes:
         return []
 
-    qs = model.objects.select_related('account').filter(
+    qs = model.objects.select_related('account').only(
+        'id', code_field, product_no_field, 'account_id', 'account__login_id'
+    ).filter(
         **{f'{code_field}__istartswith': 'LCE_', status_field: status_val}
     )
     if account_id:
@@ -88,7 +90,9 @@ def get_ownerclan_wcode_soldout_rows(model, code_field, product_no_field, status
     if not bad_codes:
         return []
 
-    qs = model.objects.select_related('account').filter(
+    qs = model.objects.select_related('account').only(
+        'id', code_field, product_no_field, 'account_id', 'account__login_id'
+    ).filter(
         **{f'{code_field}__iregex': r'^(WDM_|AUTO_)?W', status_field: status_val}
     ).exclude(**{f'{code_field}__regex': r'[가-힣]'})
     if account_id:

@@ -2348,20 +2348,29 @@ class Eleven11stSoldoutUnifiedView(views.APIView):
 
     def get(self, request):
         import os
+        from django.core.cache import cache
         from apps.cpc.models import ElevenMyProduct, protected_login_ids
         from apps.cpc.eleven_my_product_service import get_lcode_soldout_rows, get_ownerclan_wcode_soldout_rows
 
-        protected = protected_login_ids('11st')
-        w_rows = get_ownerclan_wcode_soldout_rows(
-            ElevenMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중')
-        l_rows = get_lcode_soldout_rows(
-            ElevenMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중')
-        w_count = sum(1 for l, _ in w_rows if l not in protected)
-        l_count = sum(1 for l, _ in l_rows if l not in protected)
-        import re
-        dome_count = ElevenMyProduct.objects.filter(
-            status_type='판매중', seller_product_code__regex=r'^[0-9]{7}$'
-        ).exclude(account__login_id__in=protected).count()
+        # W/L코드 판정은 REGEXP(비인덱스) 전수스캔 + account JOIN이라 요청마다 다시 돌리면
+        # (예: /myproduct 페이지가 열릴 때마다) 수십~수백초씩 걸려 대시보드 전체가 느려짐
+        # (2026-09-07 실측: eleven_my_product 대상 쿼리가 60~220초씩 동시 4건 걸려있었음).
+        # 소스(오너클랜 라이브상태 주5일 점검/L코드 순환조회)가 실시간으로 안 바뀌므로 캐시로 충분.
+        counts = cache.get('eleven_soldout_unified_counts')
+        if counts is None:
+            protected = protected_login_ids('11st')
+            w_rows = get_ownerclan_wcode_soldout_rows(
+                ElevenMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중')
+            l_rows = get_lcode_soldout_rows(
+                ElevenMyProduct, 'seller_product_code', 'product_no', 'status_type', '판매중')
+            w_count = sum(1 for l, _ in w_rows if l not in protected)
+            l_count = sum(1 for l, _ in l_rows if l not in protected)
+            dome_count = ElevenMyProduct.objects.filter(
+                status_type='판매중', seller_product_code__regex=r'^[0-9]{7}$'
+            ).exclude(account__login_id__in=protected).count()
+            counts = {'w_soldout_confirmed': w_count, 'l_soldout_confirmed': l_count, 'dome_candidates': dome_count}
+            cache.set('eleven_soldout_unified_counts', counts, 300)
+        w_count, l_count, dome_count = counts['w_soldout_confirmed'], counts['l_soldout_confirmed'], counts['dome_candidates']
 
         pid, busy = _crawl_lock_busy()
         log_tail = ''
