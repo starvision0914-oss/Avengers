@@ -612,7 +612,10 @@ def _do_login(driver, login_id, password):
                 logger.info(f'[11st:{login_id}] OTP 인증 성공!')
                 try:
                     from apps.cpc.models import CrawlerAccount
-                    CrawlerAccount.objects.filter(login_id=login_id, platform='11st').update(last_otp_at=timezone.now())
+                    # last_real_otp_at: 실제로 OTP 번호입력 화면을 거쳐 통과한 경우만 갱신
+                    # (아래 세션스킵 분기와 구분 — 2026-09-08 대시보드 인증현황 판정용 신설).
+                    CrawlerAccount.objects.filter(login_id=login_id, platform='11st').update(
+                        last_otp_at=timezone.now(), last_real_otp_at=timezone.now())
                 except Exception:
                     pass
                 return True

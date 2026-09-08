@@ -6121,7 +6121,11 @@ def _verify_lock_pid_alive():
 
 
 class ElevenAuthStatusView(views.APIView):
-    """11번가 계정별 OTP 인증 현황 — last_otp_at 기준 경과시간 반환."""
+    """11번가 계정별 OTP 인증 현황 — last_real_otp_at(실제 OTP번호입력 통과시각) 기준 경과시간 반환.
+    2026-09-08 이전엔 last_otp_at(세션스킵 로그인도 갱신됨)을 썼는데, 그러면 "만료계정"이
+    사실상 영원히 안 잡히는 문제가 있었음(사용자 실측: 실제론 전계정 OTP 걸려있는데 대시보드는
+    0건). last_real_otp_at은 진짜 OTP 화면을 거친 경우만 갱신되므로 이게 없으면(NULL 포함)
+    무조건 '인증 필요'로 잡는다."""
     def get(self, request):
         import os
         from datetime import timedelta
@@ -6141,8 +6145,8 @@ class ElevenAuthStatusView(views.APIView):
         result = []
         for a in accounts:
             otp_hours = None
-            if a.last_otp_at:
-                otp_hours = (now - a.last_otp_at).total_seconds() / 3600
+            if a.last_real_otp_at:
+                otp_hours = (now - a.last_real_otp_at).total_seconds() / 3600
             if otp_hours is None or otp_hours >= 24:
                 status = 'expired'
             elif otp_hours >= 22:
@@ -6150,19 +6154,20 @@ class ElevenAuthStatusView(views.APIView):
             else:
                 status = 'ok'
 
-            # last_otp_at 5분 이내에 수신된 가장 가까운 OTP SMS
+            # last_real_otp_at 5분 이내에 수신된 가장 가까운 OTP SMS
             sms_received_at = None
-            if a.last_otp_at:
-                window_start = a.last_otp_at - timedelta(minutes=5)
+            if a.last_real_otp_at:
+                window_start = a.last_real_otp_at - timedelta(minutes=5)
                 for sms_ts in otp_smses:
-                    if window_start <= sms_ts <= a.last_otp_at:
+                    if window_start <= sms_ts <= a.last_real_otp_at:
                         sms_received_at = sms_ts.isoformat()
                         break
 
             result.append({
                 'login_id': a.login_id,
                 'seller_name': a.seller_name or a.login_id,
-                'last_otp_at': a.last_otp_at.isoformat() if a.last_otp_at else None,
+                'last_otp_at': a.last_real_otp_at.isoformat() if a.last_real_otp_at else None,
+                'last_login_at': a.last_otp_at.isoformat() if a.last_otp_at else None,
                 'sms_received_at': sms_received_at,
                 'otp_hours': round(otp_hours, 1) if otp_hours is not None else None,
                 'status': status,
@@ -6285,11 +6290,13 @@ class ElevenVerifyOtpView(views.APIView):
 
         if auto or not login_ids:
             now = timezone.now()
-            # 24시간 10분 초과 계정 자동 선택
+            # 24시간 10분 초과 계정 자동 선택 — last_real_otp_at(실제 OTP통과) 기준.
+            # last_otp_at(세션스킵도 갱신)을 쓰면 "만료된 계정 없음"이 거의 항상 떠서 이 버튼이
+            # 무의미해지는 문제가 있었다(2026-09-08 사용자 실측 지적으로 교체).
             threshold = 24 + 10 / 60
             expired = [
                 a.login_id for a in CrawlerAccount.objects.filter(platform='11st', is_active=True)
-                if a.last_otp_at is None or (now - a.last_otp_at).total_seconds() / 3600 >= threshold
+                if a.last_real_otp_at is None or (now - a.last_real_otp_at).total_seconds() / 3600 >= threshold
             ]
             if not expired and not login_ids:
                 return Response({'message': '만료된 계정 없음 (24h10m 기준)', 'count': 0})

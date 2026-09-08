@@ -235,14 +235,39 @@ def find_campaign_links(driver):
     return [(a.text.strip(), a) for a in links if a.text.strip()]
 
 
+def get_all_group_links(driver):
+    """캠페인 안의 광고그룹 링크 전부 수집 — 이름 무관(find_campaign_links와 동일한
+    MUI 테이블 행 구조를 재사용; 캠페인 목록·그룹 목록이 같은 UI 컴포넌트)."""
+    els = driver.find_elements(By.XPATH, "//*[@id='root']//table/tbody/tr/td[2]/div/div/a")
+    if not els:
+        els = driver.find_elements(By.XPATH, "//table/tbody/tr//a")
+    if not els:
+        els = driver.find_elements(By.CSS_SELECTOR, "a[href*='group']")
+    seen, out = set(), []
+    for a in els:
+        t = a.text.strip()
+        h = a.get_attribute('href')
+        if not t or not h or t in seen:
+            continue
+        seen.add(t)
+        out.append((t, h))
+    return out
+
+
 def get_group_links(driver):
-    """'전체-XX' 로 시작하는 광고그룹 링크 수집."""
+    """'전체-XX' 로 시작하는 광고그룹 링크 수집(수동 캠페인 명명 관례).
+    AI추천/AI검색 등 자동 생성 캠페인은 그룹명이 이 관례를 안 따르는 경우가 있어,
+    '전체-' 매칭이 0개면 캠페인 안의 그룹 전부를 폴백으로 반환한다
+    (캠페인 자체는 이미 사용자가 명시 선택한 것이라 안전)."""
     try:
         els = WebDriverWait(driver, 15).until(
             EC.presence_of_all_elements_located((By.XPATH, "//a[contains(text(),'전체-')]")))
     except Exception:
         els = driver.find_elements(By.XPATH, "//a[contains(text(),'전체-')]")
-    return [(a.text.strip(), a.get_attribute('href')) for a in els if a.text.strip().startswith('전체-')]
+    groups = [(a.text.strip(), a.get_attribute('href')) for a in els if a.text.strip().startswith('전체-')]
+    if groups:
+        return groups
+    return get_all_group_links(driver)
 
 
 def _dump_radios(driver):
@@ -539,6 +564,8 @@ def run_account(driver, run_id, eid, campaigns, on_start, on_end, weekdays, exec
         # 캠페인 진입 후: 광고그룹 목록을 100개까지 노출
         set_page_size_100(driver, run_id, eid)
         groups = get_group_links(driver)
+        if groups and not any(g[0].startswith('전체-') for g in groups):
+            _log(run_id, 'INFO', f"그룹명 '전체-' 관례 미사용 → 전체 그룹 폴백 매칭: {[g[0] for g in groups]}", eid, camp)
         if max_groups and max_groups > 0:
             groups = groups[:max_groups]
             _log(run_id, 'INFO', f"'{target[0]}' 그룹 {len(groups)}개(진단: 처음 {max_groups}개만)", eid, camp)

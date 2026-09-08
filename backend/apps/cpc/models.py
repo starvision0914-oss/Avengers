@@ -69,7 +69,8 @@ class CrawlerAccount(models.Model):
     is_focused = models.BooleanField(default=False, help_text='집중관리 대상 표시')
     api_key = models.CharField(max_length=200, blank=True, default='', help_text='11번가 셀러 OpenAPI 키')
     connect_fail_count = models.IntegerField(default=0, help_text='연속 접속(로그인) 실패 횟수 - 3회 도달 시 실패 표시')
-    last_otp_at = models.DateTimeField(null=True, blank=True, help_text='마지막 OTP 인증 완료 시각 (11번가 OTP는 24시간 유지)')
+    last_otp_at = models.DateTimeField(null=True, blank=True, help_text='마지막 로그인 성공 시각(OTP 실제입력/세션스킵 구분없이 갱신 — 쿠키세션 유효성 판단용, 대시보드 인증현황엔 쓰지 말것)')
+    last_real_otp_at = models.DateTimeField(null=True, blank=True, help_text='11번가가 실제로 OTP 인증번호 입력을 요구해서 통과한 시각만 기록(세션/기기인식 스킵은 제외) — 대시보드 "인증 필요" 판정은 이 필드 기준')
     hide_from_dashboard = models.BooleanField(default=False, help_text='지마켓/옥션 대시보드 계정목록에서 숨김(ROAS 등 리포트에는 계속 표시) — 타사 테스트 계정용')
     is_test_account = models.BooleanField(default=False, help_text='테스트/타사 계정 — 조회·다운로드만 허용, 판매중지·삭제·광고on/off 등 실제 조치는 전부 차단')
     # 11번가 상품크롤 사전체크(전체상품수 탭)와 실제 엑셀 다운로드/파싱 결과 비교용 —
