@@ -182,6 +182,7 @@ class ProfitDashboardView(views.APIView):
                   .filter(use_date__gte=month_start, use_date__lte=today,
                           transaction_type__in=['CPC', 'AI매출업'])
                   .exclude(comment__icontains='판매예치금')
+                  .exclude(use_type='적립')  # 2026-09-09: 적립(광고성이머니 충전)이 지출합계에 섞여 왜곡되던 것 제외
                   .values('seller_id', 'transaction_type', 'use_date')
                   .annotate(amt=Sum('amount'))):
             gid = r['seller_id']
@@ -557,6 +558,7 @@ class GmarketSummaryView(views.APIView):
         for r in (_GCH.objects.filter(use_date__gte=start.date(), use_date__lt=end.date(),
                                        transaction_type__in=['CPC', 'AI매출업'])
                   .exclude(comment__icontains='판매예치금')
+                  .exclude(use_type='적립')  # 2026-09-09: 적립(광고성이머니 충전)이 지출합계에 섞여 왜곡되던 것 제외
                   .values('seller_id', 'transaction_type', 'market').annotate(total=Sum('amount'))):
             amt = abs(r['total'] or 0)
             sid = r['seller_id']
@@ -726,17 +728,22 @@ class ElevenSummaryView(views.APIView):
             if sidk:
                 sales_map[sidk] = r
 
-        # 이전 크롤링 시점 CPC (증감 계산용) — CrawlerLog에서 직전 성공 시각 조회
+        # 이전 크롤링 시점 CPC (증감 계산용) — CrawlerLog에서 직전 성공 시각 조회.
+        # 조회 기간과 무관(전체 로그 기준)한 결과라 짧게 캐시(2026-09-09, 0.2초 절감).
         from .models import CrawlerLog
-        prev_crawl_map = {}
-        # .values로 message(TextField) 제외해 경량화 (인덱스 platform,level,-created_at 사용)
-        for log in (CrawlerLog.objects.filter(platform='11st', level='success')
-                    .order_by('-created_at').values('account_id', 'created_at')):
-            sid = log['account_id']
-            if sid not in prev_crawl_map:
-                prev_crawl_map[sid] = []
-            if len(prev_crawl_map[sid]) < 2:
-                prev_crawl_map[sid].append(log['created_at'])
+        from django.core.cache import cache as _es_cache
+        prev_crawl_map = _es_cache.get('eleven_prev_crawl_map_v1')
+        if prev_crawl_map is None:
+            prev_crawl_map = {}
+            # .values로 message(TextField) 제외해 경량화 (인덱스 platform,level,-created_at 사용)
+            for log in (CrawlerLog.objects.filter(platform='11st', level='success')
+                        .order_by('-created_at').values('account_id', 'created_at')):
+                sid = log['account_id']
+                if sid not in prev_crawl_map:
+                    prev_crawl_map[sid] = []
+                if len(prev_crawl_map[sid]) < 2:
+                    prev_crawl_map[sid].append(log['created_at'])
+            _es_cache.set('eleven_prev_crawl_map_v1', prev_crawl_map, 90)
 
         # 표시 대상: 활성 11번가 계정 전체 (api 없는 대기계정도 로스터에 표시)
         accounts = list(
@@ -755,35 +762,53 @@ class ElevenSummaryView(views.APIView):
                     'collected_at': g.collected_at.isoformat() if g.collected_at else None,
                 }
 
-        # 셀러오피스 현황 (계정별 최신 성공 데이터 — error 비어있는 것만)
-        office_latest_ids = ElevenSellerOfficeStat.objects.filter(error='').values('account_id').annotate(
-            latest=Max('id')
-        ).values_list('latest', flat=True)
-        office_map = {}
-        for ofs in ElevenSellerOfficeStat.objects.filter(id__in=office_latest_ids).select_related('account'):
-            office_map[ofs.account.login_id] = ofs
+        # 셀러오피스 현황 (계정별 최신 성공 데이터 — error 비어있는 것만) — 역시 조회기간과
+        # 무관, 셀러오피스 크론이 며칠씩 묵기도 해 90초 캐시로도 데이터 신선도엔 영향 없음.
+        office_map = _es_cache.get('eleven_office_map_v1')
+        if office_map is None:
+            office_latest_ids = ElevenSellerOfficeStat.objects.filter(error='').values('account_id').annotate(
+                latest=Max('id')
+            ).values_list('latest', flat=True)
+            office_map = {}
+            for ofs in ElevenSellerOfficeStat.objects.filter(id__in=office_latest_ids).select_related('account'):
+                office_map[ofs.account.login_id] = ofs
+            _es_cache.set('eleven_office_map_v1', office_map, 90)
 
         # 상품수/판매금지 — 셀러오피스 페이지는 자동 갱신 크론이 없어 며칠씩 묵는 경우가 있고,
         # 반대로 나의상품(ElevenMyProduct)도 계정별 상품수집이 계속 실패하면(예: 실제 상품 0개라
         # 엑셀생성이 안 끝나는 계정) 마지막 성공 시점 그대로 오래 묵을 수 있다.
         # → 두 데이터 중 "실제로 더 최근에 수집된 쪽"을 골라 쓴다(synced_at vs collected_at 비교).
         from .models import ElevenMyProduct as _EMP
-        myprod_counts = {}
-        myprod_synced = {}
-        for r in (_EMP.objects.filter(account__platform='11st')
-                  .values('account__login_id', 'status_type')
-                  .annotate(c=Count('id'), latest=Max('synced_at'))):
-            lid = r['account__login_id']
-            d = myprod_counts.setdefault(lid, {})
-            d[r['status_type']] = r['c']
-            if r['latest'] and (lid not in myprod_synced or r['latest'] > myprod_synced[lid]):
-                myprod_synced[lid] = r['latest']
+        # eleven_my_product(49만행) 풀스캔 GROUP BY라 매번 2초+ 걸림(2026-09-09 실측) — 상품
+        # 상태는 크롤이 성공할 때만 바뀌므로 짧게 캐시해 재사용(Overview 자동새로고침 5분 주기보다 짧게).
+        from django.core.cache import cache as _mp_cache
+        _mp_key = 'eleven_myprod_status_agg_v1'
+        _mp_cached = _mp_cache.get(_mp_key)
+        if _mp_cached is not None:
+            myprod_counts, myprod_synced = _mp_cached
+        else:
+            myprod_counts = {}
+            myprod_synced = {}
+            for r in (_EMP.objects.filter(account__platform='11st')
+                      .values('account__login_id', 'status_type')
+                      .annotate(c=Count('id'), latest=Max('synced_at'))):
+                lid = r['account__login_id']
+                d = myprod_counts.setdefault(lid, {})
+                d[r['status_type']] = r['c']
+                if r['latest'] and (lid not in myprod_synced or r['latest'] > myprod_synced[lid]):
+                    myprod_synced[lid] = r['latest']
+            _mp_cache.set(_mp_key, (myprod_counts, myprod_synced), 180)
 
         # 계정별 N+1 제거: 최신잔액 + CPC증감을 루프 전 일괄 집계
+        # 최신잔액은 조회기간과 무관(전체 이력 중 가장 최근 1건)한 값이라 캐시 재사용 가능
+        # (2026-09-09 11번가 대시보드 로딩지연 실측 — 이 MAX(id) 조회가 0.3초 소요).
         _acct_ids = [a.login_id for a in accounts]
-        _bal_ids = list(ElevenCostHistory.objects.filter(seller_id__in=_acct_ids)
-                        .values('seller_id').annotate(mx=Max('id')).values_list('mx', flat=True))
-        balance_by = {r.seller_id: r.balance for r in ElevenCostHistory.objects.filter(id__in=_bal_ids)}
+        balance_by = _es_cache.get('eleven_balance_by_v1')
+        if balance_by is None:
+            _bal_ids = list(ElevenCostHistory.objects.filter(seller_id__in=_acct_ids)
+                            .values('seller_id').annotate(mx=Max('id')).values_list('mx', flat=True))
+            balance_by = {r.seller_id: r.balance for r in ElevenCostHistory.objects.filter(id__in=_bal_ids)}
+            _es_cache.set('eleven_balance_by_v1', balance_by, 90)
         # CPC 증감(delta) = 직전 성공크롤 시각 이후의 CPC 합 — seller별 경계가 달라 최근창 1쿼리로 묶음
         prev_bounds = {sid: t[1] for sid, t in prev_crawl_map.items() if len(t) >= 2}
         cpc_delta_by = {}
@@ -1380,8 +1405,8 @@ class AdDetailView(views.APIView):
 from .models import GmarketAiAdSummary, GmarketAiAdHistory, St11AdofficeCampaign
 from .serializers import GmarketAiSummarySerializer, GmarketAiHistorySerializer, St11CampaignSerializer
 
-from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup, NewAdCenterHistory
-from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer, NewAdCenterHistorySerializer
+from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup, NewAdCenterHistory, NewAdCenterSchedule
+from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer, NewAdCenterHistorySerializer, NewAdCenterScheduleSerializer
 
 class CpcAdStatusViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketCpcAdStatus.objects.all()
@@ -1427,16 +1452,20 @@ def _regenerate_ad_crons():
     """간편(CPC2)+AI 스케줄을 읽어 광고 ON/OFF 크론을 통째로 재생성.
     AI와 간편의 (시각·요일)이 동일하면 → 통합 1회 로그인 크론(cron_ad_combined),
     다르면 → 각자 별도 크론. 한 시각에 둘이 겹쳐 한쪽이 스킵되는 문제·이중 로그인 방지.
+    신규광고센터(adcenter.esmplus.com)는 완전히 별도 로그인 체계라 통합 대상에서 제외하고 항상 독립 크론.
     태그 'AD_SCHEDULE'(구 CPC2_AD_SCHEDULE/AI_AD_SCHEDULE도 substring 매칭으로 정리됨)."""
-    from apps.cpc.models import Cpc2Schedule, AiSchedule
+    from apps.cpc.models import Cpc2Schedule, AiSchedule, NewAdCenterSchedule
     base = '/home/rejoice888/Avengers/backend/scripts'
     cpc2 = Cpc2Schedule.objects.first()
     ai = AiSchedule.objects.filter(platform='gmarket').first()
+    newad = NewAdCenterSchedule.objects.first()
     cpc2_on = bool(cpc2 and cpc2.selected_accounts)
     # AI는 ON/OFF를 개별적으로 켜고 끌 수 있음(on_enabled/off_enabled) — 계정선택은 공유하되
     # 방향별 활성화 여부는 독립적으로 크론 생성에 반영한다.
     ai_on = bool(ai and ai.selected_accounts and ai.on_enabled)
     ai_off = bool(ai and ai.selected_accounts and ai.off_enabled)
+    newad_on = bool(newad and newad.selected_accounts and newad.on_time)
+    newad_off = bool(newad and newad.selected_accounts and newad.off_time)
 
     def same(t1, t2, d1, d2):
         return t1 and t2 and t1 == t2 and sorted(d1 or []) == sorted(d2 or [])
@@ -1450,6 +1479,8 @@ def _regenerate_ad_crons():
             items.append((cpc2.on_time, _sched_dow_csv(cpc2.weekdays), f'{base}/cron_cpc2_on.sh'))
         if ai_on:
             items.append((ai.on_time, _sched_dow_csv(ai.weekdays), f'{base}/cron_ai_on.sh'))
+    if newad_on:
+        items.append((newad.on_time, _sched_dow_csv(newad.weekdays), f'{base}/cron_newad_on.sh'))
     # --- OFF ---
     if cpc2_on and ai_off and same(cpc2.off_time, ai.off_time, cpc2.off_weekdays, ai.off_weekdays):
         items.append((cpc2.off_time, _sched_dow_csv(cpc2.off_weekdays), f'{base}/cron_ad_combined_off.sh'))
@@ -1458,6 +1489,8 @@ def _regenerate_ad_crons():
             items.append((cpc2.off_time, _sched_dow_csv(cpc2.off_weekdays), f'{base}/cron_cpc2_off.sh'))
         if ai_off:
             items.append((ai.off_time, _sched_dow_csv(ai.off_weekdays), f'{base}/cron_ai_off.sh'))
+    if newad_off:
+        items.append((newad.off_time, _sched_dow_csv(newad.off_weekdays), f'{base}/cron_newad_off.sh'))
 
     _write_schedule_cron('AD_SCHEDULE', items)
 
@@ -1480,6 +1513,16 @@ class Cpc2HistoryViewSet(viewsets.ReadOnlyModelViewSet):
 class NewAdCenterHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = NewAdCenterHistory.objects.all()[:100]
     serializer_class = NewAdCenterHistorySerializer
+
+class NewAdCenterScheduleViewSet(viewsets.ModelViewSet):
+    queryset = NewAdCenterSchedule.objects.all()
+    serializer_class = NewAdCenterScheduleSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(); _regenerate_ad_crons()
+
+    def perform_update(self, serializer):
+        serializer.save(); _regenerate_ad_crons()
 
 class AiScheduleViewSet(viewsets.ModelViewSet):
     queryset = AiSchedule.objects.all()
@@ -1536,7 +1579,7 @@ class GmarketControlStatusView(views.APIView):
     """지마켓 광고제어 예약·실행 현황 — 상단 배너용(중복/겹침 확인)."""
     def get(self, request):
         import os, subprocess
-        from apps.cpc.models import Cpc2Schedule, AiSchedule
+        from apps.cpc.models import Cpc2Schedule, AiSchedule, NewAdCenterSchedule
         WD = {1: '월', 2: '화', 3: '수', 4: '목', 5: '금', 6: '토', 7: '일'}
 
         def days(w):
@@ -1544,7 +1587,8 @@ class GmarketControlStatusView(views.APIView):
 
         # 실행 판정 = 실제 제어 프로세스 존재 여부(락 pid 재사용 오판 방지).
         # ps로 실제 명령 프로세스만 카운트(pgrep 자기매칭/ps 자신 제외).
-        pats = ('crawl_gmarket_cpc2', 'run_ai_schedule', 'crawl_gmarket_ad_combined', 'gmarket_ai_control')
+        # 신규광고센터는 백엔드 스레드로 돌아 ps에 안 잡히므로 아래 busy 마커로 별도 확인.
+        pats = ('crawl_gmarket_cpc2', 'run_ai_schedule', 'crawl_gmarket_ad_combined', 'gmarket_ai_control', 'crawl_gmarket_new_adcenter')
         procs = []
         try:
             out = subprocess.run(['ps', '-eo', 'pid,args'], capture_output=True, text=True).stdout
@@ -1556,8 +1600,10 @@ class GmarketControlStatusView(views.APIView):
         proc_count = len(procs)
 
         # 광고제어 실행중 마커 — 대시보드 버튼은 스레드라 ps에 안 잡히므로 이 마커가 정확한 진행상태.
+        # 신규광고센터는 platform='gmarket_newad'로 별도 마커 사용 — 기존엔 여기서 안 잡혀
+        # 실행 중이어도 상단 배너에 표시가 안 됐음(2026-09-09 수정).
         from apps.cpc import eleven_block_guard as guard
-        busy = guard.adcontrol_busy_info('gmarket')
+        busy = guard.adcontrol_busy_info('gmarket') or guard.adcontrol_busy_info('gmarket_newad')
 
         lockf = '/tmp/avengers_crawl_chrome_gmarket.lock'
         running = None
@@ -1585,6 +1631,7 @@ class GmarketControlStatusView(views.APIView):
 
         c = Cpc2Schedule.objects.first()
         a = AiSchedule.objects.filter(platform='gmarket').first()
+        n = NewAdCenterSchedule.objects.first()
         cpc2 = None
         if c:
             cpc2 = {'on_time': str(c.on_time or '')[:5], 'off_time': str(c.off_time or '')[:5],
@@ -1596,7 +1643,12 @@ class GmarketControlStatusView(views.APIView):
                   'on_days': days(a.weekdays), 'off_days': days(a.off_weekdays),
                   'accounts': len(a.selected_accounts or []),
                   'on_enabled': a.on_enabled, 'off_enabled': a.off_enabled}
-        return Response({'running': running, 'proc_count': proc_count, 'cpc2': cpc2, 'ai': ai})
+        newad = None
+        if n:
+            newad = {'on_time': str(n.on_time or '')[:5], 'off_time': str(n.off_time or '')[:5],
+                     'on_days': days(n.weekdays), 'off_days': days(n.off_weekdays),
+                     'accounts': len(n.selected_accounts or [])}
+        return Response({'running': running, 'proc_count': proc_count, 'cpc2': cpc2, 'ai': ai, 'newad': newad})
 
 
 class Cpc2ControlView(views.APIView):
@@ -1623,7 +1675,9 @@ class NewAdCenterControlView(views.APIView):
     def post(self, request):
         import threading as th
         from apps.cpc import eleven_block_guard as guard
-        busy = guard.adcontrol_busy_info('gmarket')
+        # 신규광고센터 락은 platform='gmarket_newad'로 별도 관리(run_control 내부와 동일 키) —
+        # 기존엔 여기서 'gmarket'만 확인해 신규광고센터 자체 중복실행은 못 걸렀음(2026-09-09 수정).
+        busy = guard.adcontrol_busy_info('gmarket') or guard.adcontrol_busy_info('gmarket_newad')
         if busy:
             return Response({'status': 'busy',
                              'message': f'이미 광고제어 실행 중({busy["name"]}) — 끝난 뒤 다시 시도하세요.'},
@@ -4408,15 +4462,21 @@ class GmarketDashboardView(views.APIView):
                     _ex.display_order = _ord.get(_old, _ex.display_order)
                     accts.append(_ex)
             accts.sort(key=lambda a: (a.display_order, a.login_id))
-        # 계정별 최신 잔액 스냅샷
-        bal = {}
-        for s in (GmarketDepositSnapshot.objects.values('gmarket_id')
-                  .annotate(m=Max('collected_at'))):
-            last = (GmarketDepositSnapshot.objects.filter(gmarket_id=s['gmarket_id'], collected_at=s['m'])
-                    .values('total_balance', 'total_usage', 'gmarket_cpc', 'ai_usage',
-                            'auction_cpc', 'collected_at').first())
-            if last:
-                bal[s['gmarket_id']] = last
+        # 계정별 최신 잔액 스냅샷 — market 파라미터와 무관(지마켓/옥션 탭 공용)한 결과라
+        # 캐시해 재사용한다(2026-09-09: Overview가 이 뷰를 gmarket/auction 두 번 부르며
+        # 매번 통째로 재계산해 느렸음 — N+1 쿼리라 계정 수만큼 라운드트립도 발생).
+        from django.core.cache import cache as _gmkt_agg_cache
+        bal = _gmkt_agg_cache.get('gmarket_bal_agg_v1')
+        if bal is None:
+            bal = {}
+            for s in (GmarketDepositSnapshot.objects.values('gmarket_id')
+                      .annotate(m=Max('collected_at'))):
+                last = (GmarketDepositSnapshot.objects.filter(gmarket_id=s['gmarket_id'], collected_at=s['m'])
+                        .values('total_balance', 'total_usage', 'gmarket_cpc', 'ai_usage',
+                                'auction_cpc', 'auction_ai_usage', 'collected_at').first())
+                if last:
+                    bal[s['gmarket_id']] = last
+            _gmkt_agg_cache.set('gmarket_bal_agg_v1', bal, 180)
         # 광고비 — 기본은 판매예치금 거래내역(GmarketCostHistory) 기준(과거 날짜는 이걸로 충분히 정확).
         # market('gmarket'/'auction')로 분리 집계해 탭별 정확한 값 표시.
         # '오늘' 구간은 아래에서 스냅샷으로 보강함(2026-08-27, 정산지연 오차 최소화 요청).
@@ -4440,6 +4500,7 @@ class GmarketDashboardView(views.APIView):
                           transaction_type__in=['CPC', 'AI매출업', '서버비용'],
                           use_date__gte=d0, use_date__lte=d1)
                   .exclude(comment__icontains='판매예치금')
+                  .exclude(use_type='적립')  # 2026-09-09: 적립(광고성이머니 충전)이 지출합계에 섞여 왜곡되던 것 제외
                   .values('seller_id', 'transaction_type', 'market')
                   .annotate(spend=Sum('amount'), cnt=Count('id'))):
             c = cost[r['seller_id']]
@@ -4481,6 +4542,7 @@ class GmarketDashboardView(views.APIView):
                               transaction_type__in=['CPC', 'AI매출업'],
                               use_date=today)
                       .exclude(comment__icontains='판매예치금')
+                      .exclude(use_type='적립')  # 2026-09-09: 적립(광고성이머니 충전)이 지출합계에 섞여 왜곡되던 것 제외
                       .values('seller_id', 'transaction_type', 'market')
                       .annotate(spend=Sum('amount'))):
                 tl = today_ledger[r['seller_id']]
@@ -4533,20 +4595,27 @@ class GmarketDashboardView(views.APIView):
                     # 옥션쪽은 CPC/AI 분리 불가 — 부족분을 auct_cpc에 몰아서라도 총액은 정확히 맞춘다
                     c['auct_cpc'] += snap_auct_combined - tl_auct_combined
 
-        # 계정별 상품수
-        prod = {r['account__login_id']: r['n'] for r in (
-            GmarketMyProduct.objects.values('account__login_id').annotate(n=Count('id')))}
-        prod_mkt = {(r['account__login_id'], r['market']): r['n'] for r in (
-            GmarketMyProduct.objects.filter(status_type__in=['판매중', '11', '21'])
-            .values('account__login_id', 'market').annotate(n=Count('id')))}
-        # 등록가능수량(등급별 최대 상품등록수) — 최신 수집분만
-        max_items = {}
-        for g in (GmarketSellerGrade.objects.values('gmarket_id')
-                  .annotate(m=Max('collected_at'))):
-            last = (GmarketSellerGrade.objects.filter(gmarket_id=g['gmarket_id'], collected_at=g['m'])
-                    .values('max_item_count').first())
-            if last:
-                max_items[g['gmarket_id']] = last['max_item_count']
+        # 계정별 상품수 + 등록가능수량 — 역시 market 파라미터·기간과 무관한 전체 집계라 캐시.
+        # (gmarket_my_product 36만행 풀스캔 GROUP BY 2개가 이 뷰 시간의 대부분을 차지했음:
+        #  실측 0.68초+0.57초, Overview가 뷰를 2번 부르니 페이지당 2.5초씩 낭비)
+        _prod_agg = _gmkt_agg_cache.get('gmarket_prodcount_agg_v1')
+        if _prod_agg is not None:
+            prod, prod_mkt, max_items = _prod_agg
+        else:
+            prod = {r['account__login_id']: r['n'] for r in (
+                GmarketMyProduct.objects.values('account__login_id').annotate(n=Count('id')))}
+            prod_mkt = {(r['account__login_id'], r['market']): r['n'] for r in (
+                GmarketMyProduct.objects.filter(status_type__in=['판매중', '11', '21'])
+                .values('account__login_id', 'market').annotate(n=Count('id')))}
+            # 등록가능수량(등급별 최대 상품등록수) — 최신 수집분만
+            max_items = {}
+            for g in (GmarketSellerGrade.objects.values('gmarket_id')
+                      .annotate(m=Max('collected_at'))):
+                last = (GmarketSellerGrade.objects.filter(gmarket_id=g['gmarket_id'], collected_at=g['m'])
+                        .values('max_item_count').first())
+                if last:
+                    max_items[g['gmarket_id']] = last['max_item_count']
+            _gmkt_agg_cache.set('gmarket_prodcount_agg_v1', (prod, prod_mkt, max_items), 180)
 
         # 계정별 매출/순수익 — SalesRecord(지마켓+옥션 플랫폼, 셀러 login_id, 기간)
         # 공유ESM 서브아이디(활성계정 아님)의 매출은 상호(shop_name)로 부모 활성계정에 합산.
@@ -4615,23 +4684,47 @@ class GmarketDashboardView(views.APIView):
         except Exception:
             pass
 
+        # 지마켓 신규광고센터(adcenter.esmplus.com) 캠페인별 광고비 — 기존 판매예치금 거래내역
+        # 광고비(cost)와는 별도 소스(광고센터 화면 직접수집, 캠페인명 '통합운영'=AI, 나머지=GM_CPC,
+        # 2026-09-09 신설). _row_for에서 ai_spend/cpc_spend 계산에 실제로 합산되며(2026-09-09
+        # 사용자 확정), newad_ai_spend/newad_cpc_spend는 그 합계 중 신규광고센터 몫만 보여주는
+        # 참고용 세부내역이다(별도로 추가되는 금액 아님).
+        newad_map = {}
+        if market != 'auction':
+            from apps.cpc.models import GmarketNewAdCost
+            for r in (GmarketNewAdCost.objects
+                      .filter(login_id__in=acct_ids, use_date__gte=d0, use_date__lte=d1)
+                      .values('login_id', 'is_ai').annotate(s=Sum('cost'))):
+                d = newad_map.setdefault(r['login_id'], {'ai': 0, 'cpc': 0})
+                d['ai' if r['is_ai'] else 'cpc'] += r['s'] or 0
+
         def _row_for(a):
             lid = a.login_id
             b = bal.get(lid) or {}
             c = cost.get(lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0, 'server': 0, 'manual': 0, 'cnt': 0}
+            has_newad = lid in newad_map
+            nad = newad_map.get(lid) or {'ai': 0, 'cpc': 0}
+            # 지마켓 CPC/AI 최종 계산(2026-09-09 사용자 확정 — 신규광고센터 이관 반영):
+            # AI = 신규광고센터 '통합운영' 캠페인 금액만(구광고센터 정산장부의 AI매출업은 더 안 씀).
+            # CPC = 신규광고센터 나머지 캠페인(집중/직접운영) + 구광고센터 정산장부의 지마켓 CPC(잔존분).
+            # 단, 신규광고센터 비용수집은 2026-09-09에 신설돼 그 이전 날짜(예: '어제')는 데이터가
+            # 전혀 없어 AI가 0으로 통째로 누락되던 버그(2026-09-09 발견) — 해당 기간에 신규광고센터
+            # 데이터가 없으면 구장부의 AI매출업으로 대체(백필 완료 전까지의 임시 보정, 이후 자동 정정됨).
+            gmkt_ai_final = nad['ai'] if has_newad else c['ai']
+            gmkt_cpc_final = c['gmkt_cpc'] + nad['cpc']
             # 판매예치금 거래내역 기준, market별 분리
             if market == 'combined':
-                cpc = c['gmkt_cpc'] + c['auct_cpc']
-                ai = c['ai'] + c['auct_ai']
+                cpc = gmkt_cpc_final + c['auct_cpc']
+                ai = gmkt_ai_final + c['auct_ai']
                 auction = 0
             elif market == 'gmarket':
-                cpc = c['gmkt_cpc']
-                ai = c['ai']
+                cpc = gmkt_cpc_final
+                ai = gmkt_ai_final
                 auction = c['auct_cpc']   # 참고용(他마켓)
             else:  # auction
                 cpc = c['auct_cpc']
                 ai = c['auct_ai']
-                auction = c['gmkt_cpc'] + c['ai']   # 참고용(他마켓)
+                auction = gmkt_cpc_final + gmkt_ai_final   # 참고용(他마켓)
             server = c['server']
             manual = c['manual']   # 광고센터 외부 수동비용(바이럴 등) — 지마켓 탭에만 귀속(옥션 탭은 0, 이중계산 방지)
             spend = cpc + ai + server + manual   # 광고비합계 = 현재 마켓(지마켓/옥션 토글)만 — 마켓별 완전 분리
@@ -4645,6 +4738,8 @@ class GmarketDashboardView(views.APIView):
                 'balance': b.get('total_balance') or 0,
                 'ad_spend': spend, 'cpc_spend': cpc, 'ai_spend': ai, 'server_spend': server,
                 'manual_spend': manual, 'auction_spend': auction,
+                'newad_ai_spend': nad['ai'], 'newad_cpc_spend': nad['cpc'],
+                'auction_ai_spend': b.get('auction_ai_usage') or 0,  # 옥션 리마케팅(AI) 실시간 스냅샷(참고용)
                 'ad_count': c['cnt'], 'product_count': pc,
                 'gmarket_products': prod_mkt.get((lid, 'gmarket'), 0),
                 'auction_products': prod_mkt.get((lid, 'auction'), 0),
@@ -4660,6 +4755,7 @@ class GmarketDashboardView(views.APIView):
         rows = []
         tot = {'ad_spend': 0, 'cpc_spend': 0, 'ai_spend': 0, 'server_spend': 0,
                'auction_spend': 0, 'balance': 0, 'product_count': 0,
+               'newad_ai_spend': 0, 'newad_cpc_spend': 0, 'auction_ai_spend': 0,
                'revenue': 0, 'profit': 0, 'net_after_ad': 0, 'orders': 0, 'max_item_count': 0}
         for a in accts:
             r = _row_for(a)
@@ -4667,6 +4763,8 @@ class GmarketDashboardView(views.APIView):
             rows.append(r)
             tot['ad_spend'] += r['ad_spend']; tot['cpc_spend'] += r['cpc_spend']; tot['ai_spend'] += r['ai_spend']
             tot['server_spend'] += r['server_spend']; tot['auction_spend'] += r['auction_spend']
+            tot['newad_ai_spend'] += r['newad_ai_spend']; tot['newad_cpc_spend'] += r['newad_cpc_spend']
+            tot['auction_ai_spend'] += r['auction_ai_spend']
             # 잔액 합계: 공유ESM 서브계정은 마스터와 같은 지갑(잔액) → 중복합산 방지 위해 서브는 제외(마스터만 1회)
             if not is_sub:
                 tot['balance'] += r['balance']
@@ -4747,7 +4845,8 @@ class GmarketCostDetailView(views.APIView):
         if dt:
             qs = qs.filter(use_date__lte=dt)
         ad_types = ['CPC', 'AI매출업', '서버비용']
-        ad = qs.filter(transaction_type__in=ad_types)
+        # 적립(광고성이머니 충전)은 지출이 아니라 잔액충전이라 합계에서 제외(2026-09-09).
+        ad = qs.filter(transaction_type__in=ad_types).exclude(use_type='적립')
         agg = ad.aggregate(spend=Sum('amount'), cnt=Count('id'))
         by_type = {x['transaction_type']: abs(x['s'] or 0) for x in
                    ad.values('transaction_type').annotate(s=Sum('amount'))}
@@ -4774,7 +4873,7 @@ class GmarketAdDailyView(views.APIView):
         from datetime import datetime, timedelta
         import pytz
         from django.db.models import Sum
-        from apps.cpc.models import GmarketCostHistory
+        from apps.cpc.models import GmarketCostHistory, GmarketManualCost
         kst = pytz.timezone('Asia/Seoul')
         sid = request.query_params.get('seller_id')
         df = request.query_params.get('date_from')
@@ -4805,12 +4904,39 @@ class GmarketAdDailyView(views.APIView):
                 'seq': r['seq'] or '',
                 'market': r['market'] or '',
             })
+        # 적립(광고성이머니 충전)은 목록엔 그대로 보여주되 합계에선 제외 — 지출이 아니라 잔액충전이라
+        # 섞으면 순지출액이 왜곡됨(2026-09-09).
         bt = {x['transaction_type']: abs(x['s'] or 0)
-              for x in qs.values('transaction_type').annotate(s=Sum('amount'))}
+              for x in qs.exclude(use_type='적립').values('transaction_type').annotate(s=Sum('amount'))}
+
+        # 수동 비용(바이럴 등, 광고센터 외부) — 그동안 이 뷰(거래내역 모달)의 합계·목록에서
+        # 빠져 있어서 "입력은 되는데 광고비에 안 잡힌다"는 오판을 낳았음(2026-09-09 사용자 지적).
+        # 대시보드 목록(GmarketDashboardView)의 광고비합계엔 이미 포함돼 있었지만, 그 셀을 눌러
+        # 여는 이 상세모달만 별도 API(CPC/AI/서버비용만 합산)를 써서 누락됐던 것 — 여기도 합산.
+        manual_qs = GmarketManualCost.objects.filter(use_date__gte=d0, use_date__lte=d1)
+        if sid:
+            manual_qs = manual_qs.filter(seller_id=sid)
+        manual_total = 0
+        for r in manual_qs.values('use_date', 'amount', 'label', 'memo').order_by('-use_date', '-id'):
+            amt = abs(r['amount'] or 0)
+            manual_total += amt
+            rows.append({
+                'traded_at': str(r['use_date']),
+                'use_date': str(r['use_date']),
+                'transaction_type': r['label'] or '수동비용',
+                'use_type': '수동입력',
+                'comment': r['memo'] or '',
+                'amount': amt,
+                'seq': '',
+                'market': '',
+            })
+        rows.sort(key=lambda x: x['use_date'], reverse=True)
+
         return Response({
             'seller_id': sid, 'date_from': str(d0), 'date_to': str(d1),
             'cpc_spend': bt.get('CPC', 0), 'ai_spend': bt.get('AI매출업', 0),
-            'ad_spend': bt.get('CPC', 0) + bt.get('AI매출업', 0) + bt.get('서버비용', 0),
+            'manual_spend': manual_total,
+            'ad_spend': bt.get('CPC', 0) + bt.get('AI매출업', 0) + bt.get('서버비용', 0) + manual_total,
             'total_count': len(rows), 'rows': rows,
         })
 
@@ -6403,6 +6529,7 @@ class AllMallProfitView(views.APIView):
                           transaction_type__in=['CPC', 'AI매출업'],
                           seller_id__in=_visible_gmkt_ids)
                   .exclude(comment__icontains='판매예치금')   # 판매예치금 송금 등 비광고 차감 제외
+                  .exclude(use_type='적립')  # 2026-09-09: 적립(광고성이머니 충전)이 지출합계에 섞여 왜곡되던 것 제외
                   .values('market').annotate(a=Sum('amount'))):
             mk = r['market'] or 'gmarket'
             ad[mk] = ad.get(mk, 0) + abs(r['a'] or 0)
@@ -6419,6 +6546,7 @@ class AllMallProfitView(views.APIView):
                       .filter(use_date=_today, transaction_type__in=['CPC', 'AI매출업'],
                               seller_id__in=_visible_gmkt_ids)
                       .exclude(comment__icontains='판매예치금')
+                      .exclude(use_type='적립')  # 2026-09-09: 적립(광고성이머니 충전)이 지출합계에 섞여 왜곡되던 것 제외
                       .values('seller_id', 'transaction_type', 'market')
                       .annotate(spend=Sum('amount'))):
                 tl = _today_ledger.setdefault(r['seller_id'], {'gmkt_cpc': 0, 'auct': 0, 'ai': 0})

@@ -5,7 +5,8 @@ import {
   controlCpc2, getCpc2History, getGmarketMyAccounts, controlAi, getAiHistory, stopGmarketControl, getGmarketControlStatus,
   getSt11StrategyAccounts, getSt11StrategyCampaigns, fetchSt11StrategyCampaigns, controlSt11Strategy, stopSt11Strategy, getSt11StrategyLogs, getSt11StrategyRuns,
   getSt11StrategySchedule, saveSt11StrategySchedule,
-  getNewAdCenterHistory, controlNewAdCenter
+  getNewAdCenterHistory, controlNewAdCenter,
+  getNewAdCenterSchedule, updateNewAdCenterSchedule, createNewAdCenterSchedule
 } from '../../api/crawler';
 import { Save, Play, Clock, Zap, Target, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -18,6 +19,8 @@ export default function AdSettingsPage() {
   const [newAdAccounts, setNewAdAccounts] = useState<string[]>([]);
   const [newAdRunning, setNewAdRunning] = useState(false);
   const [newAdHistory, setNewAdHistory] = useState<any[]>([]);
+  const [newAdSched, setNewAdSched] = useState<any>(null);
+  const [newAdForm, setNewAdForm] = useState<any>({ on_time: '08:00', off_time: '20:00', weekdays: [1, 2, 3, 4, 5], off_weekdays: [1, 2, 3, 4, 5] });
   const [cpc2Sched, setCpc2Sched] = useState<any>(null);
   const [aiScheds, setAiScheds] = useState<any[]>([]);
   const [cpc2History, setCpc2History] = useState<any[]>([]);
@@ -63,6 +66,14 @@ export default function AdSettingsPage() {
     });
     getCpc2History().then(d => setCpc2History(Array.isArray(d) ? d : d.results || []));
     getNewAdCenterHistory().then(d => setNewAdHistory(Array.isArray(d) ? d : d.results || [])).catch(() => {});
+    getNewAdCenterSchedule().then(d => {
+      const list = Array.isArray(d) ? d : d.results || [];
+      if (list[0]) {
+        setNewAdSched(list[0]);
+        setNewAdForm({ on_time: list[0].on_time || '08:00', off_time: list[0].off_time || '20:00', weekdays: list[0].weekdays?.length ? list[0].weekdays : [1, 2, 3, 4, 5], off_weekdays: list[0].off_weekdays?.length ? list[0].off_weekdays : [1, 2, 3, 4, 5] });
+        setNewAdAccounts(list[0].selected_accounts || []);
+      }
+    }).catch(() => {});
     getAiHistory().then(d => setAiHistory(Array.isArray(d) ? d : d.results || [])).catch(() => {});
     getGmarketMyAccounts().then(d => setGmAccounts(d.accounts || [])).catch(() => {});
     getSt11StrategyAccounts().then(d => setElOrdered(d.accounts || [])).catch(() => {});
@@ -118,6 +129,20 @@ export default function AdSettingsPage() {
   const toggleNewAdAccount = (id: string) =>
     setNewAdAccounts(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
 
+  const toggleNewAdWeekday = (v: number) =>
+    setNewAdForm((f: any) => ({ ...f, weekdays: f.weekdays.includes(v) ? f.weekdays.filter((x: number) => x !== v) : [...f.weekdays, v].sort() }));
+  const toggleNewAdOffWeekday = (v: number) =>
+    setNewAdForm((f: any) => ({ ...f, off_weekdays: (f.off_weekdays || []).includes(v) ? f.off_weekdays.filter((x: number) => x !== v) : [...(f.off_weekdays || []), v].sort() }));
+
+  const saveNewAdSchedule = async () => {
+    if (!newAdAccounts.length && !confirm('계정이 선택되지 않았습니다.\n계정을 선택해야 예약(크론)이 등록됩니다.\n그래도 저장할까요?')) return;
+    const payload = { ...newAdForm, selected_accounts: newAdAccounts };
+    if (newAdSched) await updateNewAdCenterSchedule(newAdSched.id, payload);
+    else await createNewAdCenterSchedule(payload);
+    toast.success(`신규광고센터 예약 저장 (계정 ${newAdAccounts.length}개)`);
+    load();
+  };
+
   const handleNewAdControl = async (action: string) => {
     const accts = newAdAccounts.length ? newAdAccounts : undefined;
     const label = accts ? `선택 ${accts.length}개 계정` : '전체 계정';
@@ -139,7 +164,7 @@ export default function AdSettingsPage() {
     if (!cpc2Accounts.length && !confirm('계정이 선택되지 않았습니다.\n계정을 선택해야 예약(크론)이 등록됩니다.\n그래도 저장할까요?')) return;
     const payload = { ...cpc2Form, selected_accounts: cpc2Accounts };
     if (cpc2Sched) await updateCpc2Schedule(cpc2Sched.id, payload);
-    toast.success(`간편광고 예약 저장 (계정 ${cpc2Accounts.length}개)`);
+    toast.success(`옥션 간편/일반광고 예약 저장 (계정 ${cpc2Accounts.length}개)`);
     load();
   };
 
@@ -155,9 +180,9 @@ export default function AdSettingsPage() {
     const accts = cpc2Accounts.length ? cpc2Accounts : undefined;
     const label = accts ? `선택 ${accts.length}개 계정` : '전체 계정';
     const withGen = cpc2Form.include_cpc1 ? ' + 일반광고' : '';
-    if (!confirm(`간편광고${withGen} ${action.toUpperCase()}\n대상: ${label}\n진행할까요?`)) return;
+    if (!confirm(`옥션 간편/일반광고${withGen} ${action.toUpperCase()}\n대상: ${label}\n진행할까요?`)) return;
     await controlCpc2({ action, accounts: accts, source: 'manual', include_cpc1: cpc2Form.include_cpc1 });
-    toast.success(`간편광고 ${action.toUpperCase()} 실행 시작 (${label})`);
+    toast.success(`옥션 간편/일반광고 ${action.toUpperCase()} 실행 시작 (${label})`);
     // 진행사항 폴링: 이력(계정별 ON/OFF 결과)을 주기적으로 갱신
     setCpc2Running(true);
     let n = 0;
@@ -175,7 +200,7 @@ export default function AdSettingsPage() {
     const payload = { ...aiForm, platform: 'gmarket', selected_accounts: aiAccounts };
     if (aiSched) await updateAiSchedule(aiSched.id, payload);
     else await createAiSchedule(payload);
-    toast.success(`AI 예약 저장 (계정 ${aiAccounts.length}개)`);
+    toast.success(`옥션 AI 예약 저장 (계정 ${aiAccounts.length}개)`);
     load();
   };
   const toggleAiWeekday = (v: number) =>
@@ -195,9 +220,9 @@ export default function AdSettingsPage() {
   const handleAiControl = async (action: string) => {
     const accts = aiAccounts.length ? aiAccounts : undefined;
     const label = accts ? `선택 ${accts.length}개 계정` : '전체 계정';
-    if (!confirm(`AI 광고 ${action.toUpperCase()}\n대상: ${label}\n진행할까요?`)) return;
+    if (!confirm(`옥션 AI 광고 ${action.toUpperCase()}\n대상: ${label}\n진행할까요?`)) return;
     await controlAi({ action, accounts: accts, source: 'manual' });
-    toast.success(`AI 광고 ${action.toUpperCase()} 실행 시작 (${label})`);
+    toast.success(`옥션 AI 광고 ${action.toUpperCase()} 실행 시작 (${label})`);
     // 진행사항 폴링: AI 이력(계정별 ON/OFF 결과)을 주기적으로 갱신
     setAiRunning(true);
     let n = 0;
@@ -331,10 +356,13 @@ export default function AdSettingsPage() {
           </div>
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-600">
             {ctrlStatus.cpc2 && (
-              <span>🟦 간편: ON <b>{ctrlStatus.cpc2.on_days} {ctrlStatus.cpc2.on_time}</b> · OFF <b>{ctrlStatus.cpc2.off_days} {ctrlStatus.cpc2.off_time}</b> · 계정 {ctrlStatus.cpc2.accounts}{ctrlStatus.cpc2.include_cpc1 && ' · 일반포함'}</span>
+              <span>🟦 옥션간편/일반: ON <b>{ctrlStatus.cpc2.on_days} {ctrlStatus.cpc2.on_time}</b> · OFF <b>{ctrlStatus.cpc2.off_days} {ctrlStatus.cpc2.off_time}</b> · 계정 {ctrlStatus.cpc2.accounts}{ctrlStatus.cpc2.include_cpc1 && ' · 일반포함'}</span>
             )}
             {ctrlStatus.ai && (
-              <span>🟪 AI: ON <b>{ctrlStatus.ai.on_enabled === false ? '미사용' : `${ctrlStatus.ai.on_days} ${ctrlStatus.ai.on_time}`}</b> · OFF <b>{ctrlStatus.ai.off_enabled === false ? '미사용' : `${ctrlStatus.ai.off_days} ${ctrlStatus.ai.off_time}`}</b> · 계정 {ctrlStatus.ai.accounts}</span>
+              <span>🟪 옥션AI: ON <b>{ctrlStatus.ai.on_enabled === false ? '미사용' : `${ctrlStatus.ai.on_days} ${ctrlStatus.ai.on_time}`}</b> · OFF <b>{ctrlStatus.ai.off_enabled === false ? '미사용' : `${ctrlStatus.ai.off_days} ${ctrlStatus.ai.off_time}`}</b> · 계정 {ctrlStatus.ai.accounts}</span>
+            )}
+            {ctrlStatus.newad && (
+              <span>🟧 신규광고센터: ON <b>{ctrlStatus.newad.on_days} {ctrlStatus.newad.on_time}</b> · OFF <b>{ctrlStatus.newad.off_days} {ctrlStatus.newad.off_time}</b> · 계정 {ctrlStatus.newad.accounts}</span>
             )}
           </div>
           {ctrlStatus.proc_count > 1 && <p className="text-[11px] text-red-500 mt-1">※ 중복 실행이 큐에 쌓여 있습니다. 새로 실행하지 말고 끝날 때까지 기다리거나 강제 중지하세요.</p>}
@@ -345,8 +373,8 @@ export default function AdSettingsPage() {
         <div className="border-b flex">
           {[
             { key: 'newadcenter', label: '지마켓 신규광고센터' },
-            { key: 'cpc2', label: '간편광고 제어' },
-            { key: 'ai', label: 'AI 광고 제어' },
+            { key: 'cpc2', label: '옥션 간편/일반광고 제어' },
+            { key: 'ai', label: '옥션 AI 광고 제어' },
             { key: 'st11strategy', label: '11번가 전략설정' },
             { key: 'history', label: '제어 이력' },
           ].map(t => (
@@ -368,10 +396,44 @@ export default function AdSettingsPage() {
                 </p>
               </div>
 
-              {/* 계정 선택 */}
+              {/* 예약 설정 */}
+              <div>
+                <h3 className="font-semibold mb-3 flex items-center gap-2"><Clock size={16} /> 신규광고센터 ON/OFF 예약</h3>
+                <div className="space-y-3">
+                  {/* ON 설정 */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 text-xs font-bold w-12 text-center">ON</span>
+                    <input type="time" value={newAdForm.on_time} onChange={e => setNewAdForm({ ...newAdForm, on_time: e.target.value })} className="border rounded px-3 py-2" />
+                    <div className="flex gap-1">
+                      {WEEKDAYS.map(w => (
+                        <button key={w.v} onClick={() => toggleNewAdWeekday(w.v)}
+                          className={`w-8 h-9 rounded text-xs font-medium ${newAdForm.weekdays?.includes(w.v) ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500'}`}>{w.n}</button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* OFF 설정 */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="px-2 py-0.5 rounded bg-red-100 text-red-700 text-xs font-bold w-12 text-center">OFF</span>
+                    <input type="time" value={newAdForm.off_time} onChange={e => setNewAdForm({ ...newAdForm, off_time: e.target.value })} className="border rounded px-3 py-2" />
+                    <div className="flex gap-1">
+                      {WEEKDAYS.map(w => (
+                        <button key={w.v} onClick={() => toggleNewAdOffWeekday(w.v)}
+                          className={`w-8 h-9 rounded text-xs font-medium ${newAdForm.off_weekdays?.includes(w.v) ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-500'}`}>{w.n}</button>
+                      ))}
+                    </div>
+                    <button onClick={saveNewAdSchedule} className="flex items-center gap-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm"><Save size={14} /> 저장</button>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  → <b className="text-green-600">{(newAdForm.weekdays || []).map((v: number) => WEEKDAYS.find(w => w.v === v)?.n).join('') || '매일'}</b> {newAdForm.on_time} ON ·
+                  <b className="text-red-500"> {(newAdForm.off_weekdays || []).map((v: number) => WEEKDAYS.find(w => w.v === v)?.n).join('') || '매일'}</b> {newAdForm.off_time} OFF (ON·OFF 요일/시간 독립 설정)
+                </p>
+              </div>
+
+              {/* 계정 선택 — 수동 제어와 예약 저장이 공유 */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-semibold text-sm">계정 선택 ({newAdAccounts.length}/{gmAccounts.length}) <span className="text-xs text-gray-400 font-normal">— 미선택=전체</span></h3>
+                  <h3 className="font-semibold text-sm">계정 선택 ({newAdAccounts.length}/{gmAccounts.length}) <span className="text-xs text-gray-400 font-normal">— 수동: 미선택=전체 / 예약: 계정 선택 필수(0개면 예약 안 됨)</span></h3>
                   <button onClick={() => setNewAdAccounts(newAdAccounts.length === gmAccounts.length ? [] : gmAccounts.map((a: any) => a.login_id))}
                     className="text-xs text-blue-600">{newAdAccounts.length === gmAccounts.length ? '전체해제' : '전체선택'}</button>
                 </div>
@@ -437,7 +499,7 @@ export default function AdSettingsPage() {
             <div className="space-y-6">
               {/* 예약 설정 */}
               <div>
-                <h3 className="font-semibold mb-3 flex items-center gap-2"><Clock size={16} /> 간편광고 ON/OFF 예약</h3>
+                <h3 className="font-semibold mb-3 flex items-center gap-2"><Clock size={16} /> 옥션 간편/일반광고 ON/OFF 예약</h3>
                 <div className="space-y-3">
                   {/* ON 설정 */}
                   <div className="flex items-center gap-3 flex-wrap">
@@ -766,9 +828,13 @@ export default function AdSettingsPage() {
 
           {tab === 'ai' && (
             <div className="space-y-6">
+              <p className="text-sm text-gray-500 -mt-1">
+                지마켓 광고가 신규광고센터로 이전(2026-09-04)하며 이 화면(ad.esmplus.com)엔 <b>옥션</b> 리마케팅(AI) 광고만 남았습니다.
+                지마켓 AI 광고 제어는 "지마켓 신규광고센터" 탭을 이용하세요.
+              </p>
               {/* 예약 설정 (익일 자동 인식) */}
               <div>
-                <h3 className="font-semibold mb-3 flex items-center gap-2"><Clock size={16} /> AI 광고 ON/OFF 예약</h3>
+                <h3 className="font-semibold mb-3 flex items-center gap-2"><Clock size={16} /> 옥션 AI 광고 ON/OFF 예약</h3>
                 <div className="space-y-3">
                   {/* ON 설정 */}
                   <div className={`flex items-center gap-3 flex-wrap ${aiForm.on_enabled === false ? 'opacity-40' : ''}`}>
@@ -884,7 +950,7 @@ export default function AdSettingsPage() {
 
           {tab === 'history' && (
             <div>
-              <h3 className="font-semibold mb-3">간편광고 제어 이력</h3>
+              <h3 className="font-semibold mb-3">옥션 간편/일반광고 제어 이력</h3>
               <table className="w-full text-sm">
                 <thead className="bg-gray-50">
                   <tr>

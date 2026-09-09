@@ -66,11 +66,23 @@ class Command(BaseCommand):
             pct = round(checked / total * 100, 1) if total else 0
             done = log_done and not running   # 로그가 완료를 찍었고 프로세스도 실제로 안 살아있을 때만 진짜 완료
         else:
-            # 로그를 못 읽으면(최초 실행 등) 예전 방식으로 폴백 — 부정확할 수 있음을 감안
+            # 로그를 못 읽으면(로그파일 소실 등) 예전엔 '한 번이라도 조회된 적 있는 코드' 비율로
+            # 폴백해 recheck_days(14일) 경과분을 전혀 고려 안 하고 거의 항상 done=True로 오판했음
+            # (2026-09-09 발견: /tmp/check_domemart_lcodes.log가 사라진 뒤 이 경로를 타면서
+            #  재점검 대상이 3만건 넘게 쌓였는데도 계속 '완료'로 찍혀 도매마트 재점검이
+            #  2026-09-06부터 사흘 가까이 멈춰있었음). check_domemart_lcodes와 동일 기준
+            #  (미확인 + 14일 경과)으로 남은 작업이 있는지 계산해야 자동재개가 실제로 동작한다.
+            from django.utils import timezone as _tz
             total = len(all_codes)
-            checked = LCodeStatus.objects.filter(l_code__in=all_codes).count()
+            rows = {r['l_code']: r['checked_at']
+                    for r in LCodeStatus.objects.filter(l_code__in=all_codes).values('l_code', 'checked_at')}
+            cutoff = _tz.now() - _tz.timedelta(days=14)
+            never_checked = total - len(rows)
+            stale = sum(1 for ts in rows.values() if ts < cutoff)
+            pending = never_checked + stale
+            checked = len(rows)
             pct = round(checked / total * 100, 1) if total else 0
-            done = checked >= total and not running
+            done = pending == 0 and not running
         resumed = False
         if not running and not done:
             try:

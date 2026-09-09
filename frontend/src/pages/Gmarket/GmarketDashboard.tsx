@@ -18,6 +18,7 @@ function todayStrKST(): string {
 interface Row {
   no: number; login_id: string; seller_name: string; shop_name?: string; balance: number;
   ad_spend: number; cpc_spend: number; ai_spend: number; server_spend: number; auction_spend: number;
+  newad_ai_spend: number; newad_cpc_spend: number; auction_ai_spend: number;
   ad_count: number; product_count: number;
   gmarket_products: number; auction_products: number; collected_at: string | null;
   revenue: number; profit: number; net_after_ad: number; orders: number; margin: number; roas: number;
@@ -26,6 +27,7 @@ interface Row {
 interface DashResp {
   date_from: string; date_to: string;
   totals: { ad_spend: number; cpc_spend: number; ai_spend: number; server_spend: number;
+    newad_ai_spend: number; newad_cpc_spend: number; auction_ai_spend: number;
     balance: number; product_count: number; account_count: number;
     revenue: number; profit: number; net_after_ad: number; orders: number; max_item_count: number };
   rows: Row[];
@@ -141,11 +143,13 @@ export default function GmarketDashboard() {
   const sums = (data?.rows || []).reduce((s, r) => {
     s.balance += r.balance || 0; s.cpc_spend += r.cpc_spend || 0; s.ai_spend += r.ai_spend || 0;
     s.server_spend += r.server_spend || 0; s.auction_spend += r.auction_spend || 0; s.ad_spend += r.ad_spend || 0;
+    s.newad_ai_spend += r.newad_ai_spend || 0; s.newad_cpc_spend += r.newad_cpc_spend || 0;
+    s.auction_ai_spend += r.auction_ai_spend || 0;
     s.product_count += r.product_count || 0; s.gmarket_products += r.gmarket_products || 0;
     s.auction_products += r.auction_products || 0; s.max_item_count += r.max_item_count || 0;
     s.revenue += r.revenue || 0; s.profit += r.profit || 0; s.net_after_ad += r.net_after_ad || 0;
     return s;
-  }, { balance: 0, cpc_spend: 0, ai_spend: 0, server_spend: 0, auction_spend: 0, ad_spend: 0, product_count: 0, gmarket_products: 0, auction_products: 0, max_item_count: 0, revenue: 0, profit: 0, net_after_ad: 0 });
+  }, { balance: 0, cpc_spend: 0, ai_spend: 0, server_spend: 0, auction_spend: 0, ad_spend: 0, newad_ai_spend: 0, newad_cpc_spend: 0, auction_ai_spend: 0, product_count: 0, gmarket_products: 0, auction_products: 0, max_item_count: 0, revenue: 0, profit: 0, net_after_ad: 0 });
   const t = data?.totals;
   const cell = 'px-3 py-1.5';
   const arrow = (k: string) => (sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
@@ -263,6 +267,9 @@ export default function GmarketDashboard() {
                 <Th k="cpc_spend" label="CPC" />
                 <Th k="ai_spend" label="AI매출업" />
                 <Th k="server_spend" label="서버비용" />
+                <Th k="newad_ai_spend" label="신규AI" />
+                <Th k="newad_cpc_spend" label="신규CPC" />
+                <Th k="auction_ai_spend" label="AI옥션" />
                 <Th k="ad_spend" label="광고비합계" />
                 <Th k="revenue" label="매출" />
                 <Th k="net_after_ad" label="순수익" />
@@ -275,7 +282,7 @@ export default function GmarketDashboard() {
             </thead>
             <tbody className="divide-y divide-[#f0f0f0]">
               {rows.length === 0 ? (
-                <tr><td colSpan={14} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
+                <tr><td colSpan={17} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
               ) : (<>
                 <tr className="bg-[#eef5ff] font-bold text-[#222] border-b-2 border-[#cfe0f5]">
                   <td className={cell}></td>
@@ -284,6 +291,9 @@ export default function GmarketDashboard() {
                   <td className={`${cell} text-right text-[#e67700]`}>{fmt(sums.cpc_spend)}</td>
                   <td className={`${cell} text-right text-[#9333ea]`}>{fmt(sums.ai_spend)}</td>
                   <td className={`${cell} text-right text-[#dc2626]`}>{fmt(sums.server_spend)}</td>
+                  <td className={`${cell} text-right text-[#0891b2]`}>{fmt(sums.newad_ai_spend)}</td>
+                  <td className={`${cell} text-right text-[#0d9488]`}>{fmt(sums.newad_cpc_spend)}</td>
+                  <td className={`${cell} text-right text-[#be185d]`}>{fmt(sums.auction_ai_spend)}</td>
                   <td className={`${cell} text-right`}>{fmt(sums.ad_spend)}</td>
                   <td className={`${cell} text-right text-[#1e6fd9]`}>{fmt(sums.revenue)}</td>
                   <td className={`${cell} text-right text-[#7c3aed]`}>{fmt(sums.net_after_ad)}</td>
@@ -304,6 +314,9 @@ export default function GmarketDashboard() {
                     title="클릭 → AI매출업 내역" onClick={() => setCostModal({ seller: r.login_id, type: 'AI매출업' })}>{fmt(r.ai_spend)}</td>
                   <td className={`${cell} text-right text-[#dc2626] cursor-pointer hover:underline`}
                     onClick={() => setCostModal({ seller: r.login_id, type: '서버비용' })}>{fmt(r.server_spend)}</td>
+                  <td className={`${cell} text-right text-[#0891b2]`} title="신규광고센터 캠페인 '통합운영' 광고비(참고용, 광고비합계 미포함)">{fmt(r.newad_ai_spend)}</td>
+                  <td className={`${cell} text-right text-[#0d9488]`} title="신규광고센터 나머지 캠페인 광고비(참고용, 광고비합계 미포함)">{fmt(r.newad_cpc_spend)}</td>
+                  <td className={`${cell} text-right text-[#be185d]`} title="옥션 리마케팅(AI) 오늘 청구예정액 — 구광고센터 실시간 스냅샷(참고용, 광고비합계 미포함)">{fmt(r.auction_ai_spend)}</td>
                   <td className={`${cell} text-right font-bold cursor-pointer hover:underline`}
                     onClick={() => setCostModal({ seller: r.login_id })}>{fmt(r.ad_spend)}</td>
                   <td className={`${cell} text-right text-[#1e6fd9]`}>{fmt(r.revenue)}</td>
@@ -322,6 +335,7 @@ export default function GmarketDashboard() {
           </table>
         </div>
         <p className="text-[11px] text-[#aaa]">※ CPC·AI매출업 = ESM 광고센터 '당일 소진액'을 기간 내 일별로 합산. 숫자를 클릭하면 일별 내역이 모달로 보입니다. (크롤이 안 된 날은 합산에서 빠집니다)</p>
+        <p className="text-[11px] text-[#aaa]">※ 신규AI·신규CPC = 지마켓 신규광고센터(adcenter.esmplus.com) 캠페인별 광고비 — 판매예치금 거래내역과 별도 소스라 참고용으로만 표시하며 광고비합계·순수익 계산에는 포함하지 않습니다.</p>
 
         {!!data?.excluded_rows?.length && (
           <div className="bg-white border border-[#f0d9b5] rounded-lg overflow-auto">
@@ -456,6 +470,9 @@ function CostModal({ seller, type, from, to, onClose }: { seller: string; type?:
                   <span className='text-[#e67700]'>CPC {fmt(d.cpc_spend)}</span>
                   {' · '}
                   <span className='text-[#9333ea]'>AI {fmt(d.ai_spend)}</span>
+                  {d.manual_spend > 0 && (
+                    <>{' · '}<span className='text-[#b45309]'>수동(바이럴) {fmt(d.manual_spend)}</span></>
+                  )}
                   {' · '}합계 {fmt(d.ad_spend)}원
                 </>
               )}

@@ -41,12 +41,16 @@ _SEARCH_JS = (
 
 
 def _norm_gmkt(r):
-    """지마켓 GmktSellBalanceUseListSearch 행 → 표준 dict."""
+    """지마켓 GmktSellBalanceUseListSearch 행 → 표준 dict.
+    금액은 판매예치금 발생액(SdMoney) + 광고성이머니 발생액(AdMoney) 합산 — 'AI Product AD 광고구매'류는
+    SdMoney가 0이고 AdMoney에만 실제 차감액이 찍혀 예전 코드(SdMoney 우선)로는 전부 0원으로 누락됐음
+    (2026-09-09 사용자 지적으로 발견). TransMoney가 이미 SdMoney+AdMoney와 정확히 일치하는 필드라
+    실측(dlwodb777 9일치 238건 전수 검증, 불일치 0건)로 확인해 그대로 사용."""
     td = (r.get('TransDate') or '').strip()
     return {'d': td[:10], 'dt': td if len(td) > 10 else None,
             'use_type': r.get('SaveTypeNm') or '',
             'comment': r.get('SdCodeNm') or r.get('Comment') or '',
-            'amount': _parse_amt(r.get('SdMoney') if r.get('SdMoney') not in (None, '') else r.get('TransMoney')),
+            'amount': int(float(r.get('TransMoney') or 0)),
             'related': str(r.get('RefNo') or r.get('GoodsNo') or '')}
 
 

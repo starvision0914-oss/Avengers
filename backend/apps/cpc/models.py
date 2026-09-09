@@ -152,6 +152,7 @@ class GmarketDepositSnapshot(models.Model):
     gmarket_cpc = models.IntegerField(default=0)
     auction_cpc = models.IntegerField(default=0)
     ai_usage = models.IntegerField(default=0)
+    auction_ai_usage = models.IntegerField(default=0)   # 옥션 리마케팅(AI) 청구예정액 — 2026-09-09 신설
     total_usage = models.IntegerField(default=0)
     collected_at = models.DateTimeField()
     class Meta:
@@ -180,6 +181,10 @@ class ElevenCostHistory(models.Model):
         ordering = ['-transaction_datetime']
         indexes = [
             models.Index(fields=['transaction_type', 'transaction_datetime']),
+            # 기존 유니크(seller_id,transaction_datetime,seq)는 seller_id가 선두라 날짜범위만으로
+            # 필터하는 쿼리(ElevenSummaryView의 기간 집계)엔 무력 — 27만행 풀 인덱스스캔의 원인
+            # (2026-09-09 11번가 대시보드 로딩지연 실측). 날짜 선두 인덱스 추가.
+            models.Index(fields=['transaction_datetime'], name='eleven_sph_txn_dt_idx'),
         ]
 
 
@@ -468,7 +473,39 @@ class NewAdCenterHistory(models.Model):
     class Meta:
         db_table = 'gmarket_new_adcenter_history'
         ordering = ['-event_time']
-        ordering = ['-event_time']
+
+
+class NewAdCenterSchedule(models.Model):
+    """지마켓 신규 광고센터(adcenter.esmplus.com) ON/OFF 예약 설정 (싱글톤).
+    간편광고(Cpc2Schedule)와 동일 패턴 — 예약은 selected_accounts 필수(0개면 크론 미등록)."""
+    on_time = models.TimeField(null=True, blank=True)
+    off_time = models.TimeField(null=True, blank=True)
+    selected_accounts = models.JSONField(default=list, blank=True)
+    weekdays = models.JSONField(default=list, blank=True)        # ON 요일 [1=월 … 7=일], 빈값=매일
+    off_weekdays = models.JSONField(default=list, blank=True)    # OFF 요일 [1=월 … 7=일], 빈값=매일
+    updated_at = models.DateTimeField(auto_now=True)
+    class Meta:
+        db_table = 'gmarket_new_adcenter_schedule'
+
+class GmarketNewAdCost(models.Model):
+    """지마켓 신규 광고센터(adcenter.esmplus.com) 캠페인별 광고비용 — 관리 페이지 '오늘' 탭 값을
+    당일 내내 upsert(누적값을 그대로 덮어씀). 캠페인명에 '통합운영'이 들어가면 AI광고(is_ai=True),
+    나머지는 GM_CPC(2026-09-09 사용자 확인). 기간 조회는 use_date 범위 SUM으로 처리."""
+    login_id = models.CharField(max_length=50, db_index=True)
+    use_date = models.DateField(db_index=True)
+    campaign_name = models.CharField(max_length=255)
+    campaign_type = models.CharField(max_length=32, blank=True, default='')
+    is_ai = models.BooleanField(default=False)
+    cost = models.IntegerField(default=0)
+    collected_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'gmarket_new_ad_cost'
+        constraints = [
+            models.UniqueConstraint(fields=['login_id', 'use_date', 'campaign_name'], name='uniq_newadcost_login_date_campaign')
+        ]
+        indexes = [models.Index(fields=['login_id', 'use_date'])]
+
 
 class CppSchedule(models.Model):
     """프라임 입찰기간 변경 예약 (싱글톤)"""

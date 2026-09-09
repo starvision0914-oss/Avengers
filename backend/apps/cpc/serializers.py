@@ -82,7 +82,7 @@ class St11AiHistorySerializer(serializers.ModelSerializer):
         model = St11AiAdHistory
         fields = '__all__'
 
-from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, CppSchedule, CppBidHistory, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup, NewAdCenterHistory
+from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, CppSchedule, CppBidHistory, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup, NewAdCenterHistory, NewAdCenterSchedule
 
 class CpcAdStatusSerializer(serializers.ModelSerializer):
     class Meta:
@@ -102,6 +102,11 @@ class Cpc2HistorySerializer(serializers.ModelSerializer):
 class NewAdCenterHistorySerializer(serializers.ModelSerializer):
     class Meta:
         model = NewAdCenterHistory
+        fields = '__all__'
+
+class NewAdCenterScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NewAdCenterSchedule
         fields = '__all__'
 
 class CppScheduleSerializer(serializers.ModelSerializer):

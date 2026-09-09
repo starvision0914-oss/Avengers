@@ -258,8 +258,7 @@ export default function OwnerclanCrawlerPage() {
     setInfoMsg('');
     try {
       await api.post('/ownerclan/account-info-crawl/');
-      setInfoMsg('계정정보 새로고침 시작됨 (약 15초 소요) — 잠시 후 자동 갱신됩니다.');
-      setTimeout(load, 16000);
+      setInfoMsg('계정정보 새로고침 시작됨 — 계정별로 순차 진행되며 전체 완료까지 몇 분 정도 걸립니다(5초마다 자동 갱신).');
     } catch (e: any) {
       setInfoMsg(e?.response?.data?.error || '시작 실패');
     }

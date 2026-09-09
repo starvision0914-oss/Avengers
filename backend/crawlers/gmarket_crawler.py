@@ -30,12 +30,17 @@ def _dismiss_alert(driver):
 logger = logging.getLogger('crawler')
 
 # XPath 상수
+# 2026-09-09: 지마켓 광고가 신규광고센터(adcenter.esmplus.com)로 이전하며 이 페이지 최상단에
+# '기존 광고 이전하기' 배너(div.box__banner-strip)가 #container의 새 첫 자식으로 추가돼
+# 기존 위치기반 XPath(div[1]/div[1]/...)가 전부 어긋나며 잔액/CPC/AI가 통째로 0으로 깨졌음
+# (실측: 계정당 재시도로 ~7분씩 낭비하며 전량 0원 기록). id는 안 바뀌어서 id기반으로 교체.
 XPATHS = {
-    'gmarket_balance': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[1]/td[2]/div/strong',
-    'auction_balance': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[2]/td[2]/div/strong',
-    'gmarket_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[1]/td[4]/div/strong',
-    'auction_cpc': '//*[@id="container"]/div[1]/div[1]/div/table/tbody/tr[2]/td[4]/div/strong',
-    'ai_usage': '//*[@id="spnGmktBillingMinusAmnt"]',
+    'gmarket_balance': '//*[@id="spnGmktTotalBalance"]',
+    'auction_balance': '//*[@id="spnIacTotalBalance"]',
+    'gmarket_cpc': '//*[@id="spnGmktBillingMinusAmnt"]',   # 지마켓 오늘 청구예정액(전체) — CPC페이지
+    'auction_cpc': '//*[@id="spnIacBillingMinusAmnt"]',    # 옥션 오늘 청구예정액(전체) — CPC페이지
+    'ai_usage': '//*[@id="spnGmktBillingMinusAmnt"]',      # AI페이지 — 지마켓은 더 이상 이 페이지에 없어 0 고정(정상)
+    'auction_ai_usage': '//*[@id="spnIacBillingMinusAmnt"]',  # AI페이지 — 옥션 리마케팅(AI) 청구예정액
     'login_btn': '#lnkLogin',
     'site_tab': '//button[@data-site="GMKT" and @data-member="S"]',
     'id_field': '//input[@placeholder="G마켓 판매 아이디"]',
@@ -227,10 +232,13 @@ def collect_one_account(driver, account, log_fn=None):
     _dismiss_alert(driver)
 
     ai_usage = parse_int(_safe_text(driver, XPATHS['ai_usage']))
+    auction_ai_usage = parse_int(_safe_text(driver, XPATHS['auction_ai_usage']))
 
-    # AI 비용 차감 계산
+    # AI 비용 차감 계산 — 지마켓은 이 페이지에서 빠져 ai_usage가 항상 0이라 gmarket_cpc=raw 그대로.
+    # 옥션은 리마케팅(AI)이 아직 이 페이지에 남아있어 raw에서 분리 가능.
     gmarket_cpc = max(gmarket_cpc_raw - ai_usage, 0)
-    total_usage = gmarket_cpc + auction_cpc + ai_usage
+    auction_cpc = max(auction_cpc - auction_ai_usage, 0)
+    total_usage = gmarket_cpc + auction_cpc + ai_usage + auction_ai_usage
 
     result = {
         'gmarket_id': login_id,
@@ -238,11 +246,12 @@ def collect_one_account(driver, account, log_fn=None):
         'gmarket_cpc': gmarket_cpc,
         'auction_cpc': auction_cpc,
         'ai_usage': ai_usage,
+        'auction_ai_usage': auction_ai_usage,
         'total_usage': total_usage,
         'collected_at': timezone.now(),
     }
 
-    log(f'잔액={gmarket_balance:,} CPC={gmarket_cpc:,} AI={ai_usage:,} 합계={total_usage:,}')
+    log(f'잔액={gmarket_balance:,} CPC={gmarket_cpc:,} AI={ai_usage:,} 옥션CPC={auction_cpc:,} 옥션AI={auction_ai_usage:,} 합계={total_usage:,}')
     return result
 
 
@@ -288,9 +297,11 @@ def _collect_sub_account(driver, sub_account, log_fn=None):
     driver.get(AI_URL)
     time.sleep(2)
     ai_usage = parse_int(_safe_text(driver, XPATHS['ai_usage']))
+    auction_ai_usage = parse_int(_safe_text(driver, XPATHS['auction_ai_usage']))
 
     gmarket_cpc = max(gmarket_cpc_raw - ai_usage, 0)
-    total_usage = gmarket_cpc + auction_cpc + ai_usage
+    auction_cpc = max(auction_cpc - auction_ai_usage, 0)
+    total_usage = gmarket_cpc + auction_cpc + ai_usage + auction_ai_usage
 
     result = {
         'gmarket_id': login_id,
@@ -298,6 +309,7 @@ def _collect_sub_account(driver, sub_account, log_fn=None):
         'gmarket_cpc': gmarket_cpc,
         'auction_cpc': auction_cpc,
         'ai_usage': ai_usage,
+        'auction_ai_usage': auction_ai_usage,
         'total_usage': total_usage,
         'collected_at': timezone.now(),
     }

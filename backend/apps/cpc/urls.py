@@ -16,7 +16,7 @@ from .views import (
     GmarketSuspendAllNoMatchView, WCodeDownloadView, Eleven11stSoldoutUnifiedView,
     LCodeCheckStartView, LCodeCheckStopView, LCodeStatusView,
     CpcAdStatusViewSet, Cpc2ScheduleViewSet, Cpc2HistoryViewSet,
-    NewAdCenterHistoryViewSet, NewAdCenterControlView,
+    NewAdCenterHistoryViewSet, NewAdCenterControlView, NewAdCenterScheduleViewSet,
     AiScheduleViewSet, TelegramConfigViewSet, TelegramRecipientViewSet,
     SellerGroupViewSet, TelegramSendView, Cpc2ControlView,
     CronScheduleViewSet, CronApplyView, AccountUnblockView,
@@ -66,6 +66,7 @@ router.register(r'cpc-status', CpcAdStatusViewSet)
 router.register(r'cpc2-schedule', Cpc2ScheduleViewSet)
 router.register(r'cpc2-history', Cpc2HistoryViewSet, basename='cpc2history')
 router.register(r'new-adcenter-history', NewAdCenterHistoryViewSet, basename='newadcenterhistory')
+router.register(r'new-adcenter-schedule', NewAdCenterScheduleViewSet, basename='newadcenterschedule')
 router.register(r'ai-schedule', AiScheduleViewSet)
 router.register(r'telegram/config', TelegramConfigViewSet)
 router.register(r'telegram/recipients', TelegramRecipientViewSet)

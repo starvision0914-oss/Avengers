@@ -26,6 +26,9 @@ export const getCpc2History = () => api.get('/cpc/cpc2-history/').then(r => r.da
 export const controlCpc2 = (data: any) => api.post('/cpc/cpc2/control/', data).then(r => r.data);
 export const getNewAdCenterHistory = () => api.get('/cpc/new-adcenter-history/').then(r => r.data);
 export const controlNewAdCenter = (data: any) => api.post('/cpc/new-adcenter/control/', data).then(r => r.data);
+export const getNewAdCenterSchedule = () => api.get('/cpc/new-adcenter-schedule/').then(r => r.data);
+export const updateNewAdCenterSchedule = (id: number, data: any) => api.put(`/cpc/new-adcenter-schedule/${id}/`, data).then(r => r.data);
+export const createNewAdCenterSchedule = (data: any) => api.post('/cpc/new-adcenter-schedule/', data).then(r => r.data);
 export const getGmarketMyAccounts = () => api.get('/cpc/gmarket-my/accounts/').then(r => r.data);
 export const getAiSchedule = () => api.get('/cpc/ai-schedule/').then(r => r.data);
 export const updateAiSchedule = (id: number, data: any) => api.put(`/cpc/ai-schedule/${id}/`, data).then(r => r.data);
