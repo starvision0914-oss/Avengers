@@ -24,6 +24,11 @@ urlpatterns = [
     path('weekly-popular/', views.OwnerclanWeeklyPopularView.as_view()),
     path('weekly-popular/download/', views.OwnerclanWeeklyPopularDownloadView.as_view()),
     path('weekly-popular/download-all/', views.OwnerclanWeeklyPopularDownloadAllView.as_view()),
+    path('order-files/collect/', views.OwnerclanOrderFileCollectView.as_view()),
+    path('order-files/', views.OwnerclanOrderFileListView.as_view()),
+    path('order-files/download-all/', views.OwnerclanOrderFileDownloadAllView.as_view()),
+    path('order-files/<int:pk>/download/', views.OwnerclanOrderFileDownloadView.as_view()),
+    path('order-files/<int:pk>/', views.OwnerclanOrderFileDeleteView.as_view()),
 
     path('my/copy/', views.MyProductCopyView.as_view()),
     path('my/products/upload/', views.MyProductUploadView.as_view()),

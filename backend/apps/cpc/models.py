@@ -497,6 +497,8 @@ class GmarketNewAdCost(models.Model):
     campaign_type = models.CharField(max_length=32, blank=True, default='')
     is_ai = models.BooleanField(default=False)
     cost = models.IntegerField(default=0)
+    conv_amount = models.BigIntegerField(default=0)   # 전환금액(매출액) — 관리 페이지 표 12번째(0-index 11) td
+    roas = models.DecimalField(max_digits=12, decimal_places=2, default=0)   # 광고수익율(%) — 표 14번째(0-index 13) td
     collected_at = models.DateTimeField(auto_now=True)
 
     class Meta:

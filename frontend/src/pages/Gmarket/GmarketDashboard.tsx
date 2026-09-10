@@ -21,7 +21,7 @@ interface Row {
   newad_ai_spend: number; newad_cpc_spend: number; auction_ai_spend: number;
   ad_count: number; product_count: number;
   gmarket_products: number; auction_products: number; collected_at: string | null;
-  revenue: number; profit: number; net_after_ad: number; orders: number; margin: number; roas: number;
+  revenue: number; cost: number; profit: number; net_after_ad: number; orders: number; margin: number; roas: number;
   max_item_count: number | null;
 }
 interface DashResp {
@@ -29,7 +29,7 @@ interface DashResp {
   totals: { ad_spend: number; cpc_spend: number; ai_spend: number; server_spend: number;
     newad_ai_spend: number; newad_cpc_spend: number; auction_ai_spend: number;
     balance: number; product_count: number; account_count: number;
-    revenue: number; profit: number; net_after_ad: number; orders: number; max_item_count: number };
+    revenue: number; cost: number; profit: number; net_after_ad: number; orders: number; max_item_count: number };
   rows: Row[];
   excluded_rows?: Row[];
 }
@@ -147,9 +147,9 @@ export default function GmarketDashboard() {
     s.auction_ai_spend += r.auction_ai_spend || 0;
     s.product_count += r.product_count || 0; s.gmarket_products += r.gmarket_products || 0;
     s.auction_products += r.auction_products || 0; s.max_item_count += r.max_item_count || 0;
-    s.revenue += r.revenue || 0; s.profit += r.profit || 0; s.net_after_ad += r.net_after_ad || 0;
+    s.revenue += r.revenue || 0; s.cost += r.cost || 0; s.profit += r.profit || 0; s.net_after_ad += r.net_after_ad || 0;
     return s;
-  }, { balance: 0, cpc_spend: 0, ai_spend: 0, server_spend: 0, auction_spend: 0, ad_spend: 0, newad_ai_spend: 0, newad_cpc_spend: 0, auction_ai_spend: 0, product_count: 0, gmarket_products: 0, auction_products: 0, max_item_count: 0, revenue: 0, profit: 0, net_after_ad: 0 });
+  }, { balance: 0, cpc_spend: 0, ai_spend: 0, server_spend: 0, auction_spend: 0, ad_spend: 0, newad_ai_spend: 0, newad_cpc_spend: 0, auction_ai_spend: 0, product_count: 0, gmarket_products: 0, auction_products: 0, max_item_count: 0, revenue: 0, cost: 0, profit: 0, net_after_ad: 0 });
   const t = data?.totals;
   const cell = 'px-3 py-1.5';
   const arrow = (k: string) => (sortKey === k ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
@@ -245,6 +245,7 @@ export default function GmarketDashboard() {
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
           <Card icon={<ShoppingBag size={18} />} color="#1e6fd9" label="매출" value={`${fmt(t?.revenue || 0)}원`} />
+          <Card icon={<Package size={18} />} color="#c2410c" label="구매가" value={`${fmt(t?.cost || 0)}원`} />
           <Card icon={<Megaphone size={18} />} color="#e08000" label="광고비 합계" value={`${fmt(t?.ad_spend || 0)}원`} />
           <Card icon={<Wallet size={18} />} color="#7c3aed" label="순수익(−원가−광고비)" value={`${fmt(t?.net_after_ad || 0)}원`} />
         </div>
@@ -272,6 +273,7 @@ export default function GmarketDashboard() {
                 <Th k="auction_ai_spend" label="AI옥션" />
                 <Th k="ad_spend" label="광고비합계" />
                 <Th k="revenue" label="매출" />
+                <Th k="cost" label="구매가" />
                 <Th k="net_after_ad" label="순수익" />
                 <Th k="roas" label="ROAS" />
                 <Th k="margin" label="마진%" />
@@ -282,7 +284,7 @@ export default function GmarketDashboard() {
             </thead>
             <tbody className="divide-y divide-[#f0f0f0]">
               {rows.length === 0 ? (
-                <tr><td colSpan={17} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
+                <tr><td colSpan={18} className="px-3 py-8 text-center text-[#aaa]">데이터 없음</td></tr>
               ) : (<>
                 <tr className="bg-[#eef5ff] font-bold text-[#222] border-b-2 border-[#cfe0f5]">
                   <td className={cell}></td>
@@ -296,6 +298,7 @@ export default function GmarketDashboard() {
                   <td className={`${cell} text-right text-[#be185d]`}>{fmt(sums.auction_ai_spend)}</td>
                   <td className={`${cell} text-right`}>{fmt(sums.ad_spend)}</td>
                   <td className={`${cell} text-right text-[#1e6fd9]`}>{fmt(sums.revenue)}</td>
+                  <td className={`${cell} text-right text-[#c2410c]`}>{fmt(sums.cost)}</td>
                   <td className={`${cell} text-right text-[#7c3aed]`}>{fmt(sums.net_after_ad)}</td>
                   <td className={`${cell} text-right`}>{sums.ad_spend ? (sums.revenue / sums.ad_spend).toFixed(1) : '-'}</td>
                   <td className={`${cell} text-right`}>{sums.revenue ? (sums.net_after_ad * 100 / sums.revenue).toFixed(1) : '0'}%</td>
@@ -320,6 +323,7 @@ export default function GmarketDashboard() {
                   <td className={`${cell} text-right font-bold cursor-pointer hover:underline`}
                     onClick={() => setCostModal({ seller: r.login_id })}>{fmt(r.ad_spend)}</td>
                   <td className={`${cell} text-right text-[#1e6fd9]`}>{fmt(r.revenue)}</td>
+                  <td className={`${cell} text-right text-[#c2410c]`}>{fmt(r.cost)}</td>
                   <td className={`${cell} text-right font-semibold text-[#7c3aed]`}>{fmt(r.net_after_ad)}</td>
                   <td className={`${cell} text-right ${r.roas && r.roas < 100 ? 'text-red-500' : 'text-[#555]'}`}>{r.roas || '-'}</td>
                   <td className={`${cell} text-right ${r.margin && r.margin < 20 ? 'text-red-500 font-semibold' : 'text-[#555]'}`}>{r.margin}%</td>

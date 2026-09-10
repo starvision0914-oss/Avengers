@@ -238,8 +238,18 @@ def _logout(driver):
         pass
 
 
-def run_all_accounts(log_fn=None, account_filter=None):
+def run_all_accounts(log_fn=None, account_filter=None, scheduled=False):
     from apps.cpc.models import CrawlerAccount, St11AdofficeCampaign, CrawlerLog
+    from apps.cpc import eleven_block_guard as guard
+
+    # 사전점검: 차단/접속불가/다른 크롤 동시실행 금지 (11번가 전역 단일 크롤 — IP 차단 방지).
+    # 2026-09-10 추가 — 이 크롤러는 cron 미등록 상태로 방치돼 있어 락 획득이 아예 없었다
+    # (등록해 자동화하면서 다른 11번가 크롤과 겹칠 위험이 생겨 함께 추가).
+    ok, reason = guard.preflight('11번가AI캠페인', wait=scheduled)
+    if not ok:
+        msg = f'⏭️ AI 캠페인 수집 건너뜀 — {reason}'
+        if log_fn: log_fn(msg)
+        return {'collected': 0, 'failed': 0, 'skipped': reason}
 
     qs = CrawlerAccount.objects.filter(platform='11st', is_active=True)
     if account_filter:
@@ -248,6 +258,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
 
     if not qs.exists():
         if log_fn: log_fn('활성 11번가 계정 없음')
+        guard.release_global_lock()
         return {'collected': 0, 'failed': 0}
 
     all_results = []
@@ -255,7 +266,6 @@ def run_all_accounts(log_fn=None, account_filter=None):
     import random
     MAX_CONNECT_ATTEMPTS = 3  # 계정당 접속 최대 3회, 3회 실패 시 중지→다음 계정
     from .browser import _kill_stale_chrome, _ensure_display
-    from apps.cpc import eleven_block_guard as guard
     import subprocess as _sp
     CHROME_BIN = '/usr/bin/google-chrome'   # 시스템 크롬 (browser.py 리팩터로 상수 제거됨)
 
@@ -355,4 +365,5 @@ def run_all_accounts(log_fn=None, account_filter=None):
 
     CrawlerLog.objects.create(platform='11st', level='info', message=f'AI 캠페인 수집: {len(all_results)}건 / 실패 {failed}건')
     if log_fn: log_fn(f'11번가 AI 수집 완료: {len(all_results)}건 / 실패 {failed}건')
+    guard.release_global_lock()
     return {'collected': len(all_results), 'failed': failed}

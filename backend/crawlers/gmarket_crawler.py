@@ -170,6 +170,30 @@ def _save_cookies(driver, account):
         logger.warning(f'쿠키 저장 실패: {e}')
 
 
+def _blend_newad_cost(result):
+    """스냅샷 저장 직전, 신규광고센터(adcenter.esmplus.com) 당일 누적값을 구광고센터 값에 섞어
+    최종 ai_usage/gmarket_cpc를 만든다 — 대시보드 _row_for()와 동일한 블렌딩 규칙
+    (2026-09-09 신규광고센터 이관 반영, 2026-09-10 스냅샷 저장 단계로 이전해 시간별 가드가
+    증가분을 놓치지 않게 함): AI = 신규센터 '통합운영' 캠페인만(구장부 AI는 이관 후 항상 0이라 폐기),
+    CPC = 구장부 CPC + 신규센터 나머지 캠페인. 신규센터 데이터가 아직 없는 계정은 구장부 값 유지."""
+    from apps.cpc.models import GmarketNewAdCost
+    from django.utils import timezone as _tz
+    from django.db.models import Sum
+
+    login_id = result.get('gmarket_id')
+    today = _tz.localdate()
+    agg = (GmarketNewAdCost.objects.filter(login_id=login_id, use_date=today)
+           .values('is_ai').annotate(s=Sum('cost')))
+    nad = {row['is_ai']: row['s'] or 0 for row in agg}
+    if not nad:
+        return
+    nad_ai, nad_cpc = nad.get(True, 0), nad.get(False, 0)
+    result['ai_usage'] = nad_ai
+    result['gmarket_cpc'] = result.get('gmarket_cpc', 0) + nad_cpc
+    result['total_usage'] = (result['gmarket_cpc'] + result.get('auction_cpc', 0)
+                              + result['ai_usage'] + result.get('auction_ai_usage', 0))
+
+
 def collect_one_account(driver, account, log_fn=None):
     login_id = account.login_id
     password = account.password_enc
@@ -417,6 +441,7 @@ def run_all_accounts(log_fn=None, account_filter=None):
                 if _sig == _last_sig and any(v for v in _sig):
                     raise Exception('직전 계정과 동일 데이터 — 세션오염(로그인 실패) 판단, 저장 제외')
                 _last_sig = _sig
+                _blend_newad_cost(result)
                 GmarketDepositSnapshot.objects.create(**result)
                 # 누적 차단 정책: 성공해도 fail_count 리셋하지 않음 (관리자 수동해제로만 0)
                 account.crawling_status = '정상'

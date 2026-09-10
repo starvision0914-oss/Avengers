@@ -4731,6 +4731,7 @@ class GmarketDashboardView(views.APIView):
             pc = (prod_mkt.get((lid, 'gmarket'), 0) + prod_mkt.get((lid, 'auction'), 0)) if market == 'combined' else prod_mkt.get((lid, market), 0)
             sl = sales.get(lid) or {'revenue': 0, 'profit': 0, 'orders': 0}
             revenue = sl['revenue']; profit = sl['profit']
+            buy_cost = revenue - profit   # 구매가 = 매출 - 순수익(11번가 대시보드와 동일한 역산 방식)
             net_after_ad = profit - spend   # 실질순이익 = 순수익(매출-원가) - 광고비
             return {
                 'no': a.display_order, 'login_id': lid, 'seller_name': a.seller_name,
@@ -4744,7 +4745,7 @@ class GmarketDashboardView(views.APIView):
                 'gmarket_products': prod_mkt.get((lid, 'gmarket'), 0),
                 'auction_products': prod_mkt.get((lid, 'auction'), 0),
                 'max_item_count': max_items.get(lid),
-                'revenue': revenue, 'profit': profit, 'net_after_ad': net_after_ad,
+                'revenue': revenue, 'cost': buy_cost, 'profit': profit, 'net_after_ad': net_after_ad,
                 'orders': sl['orders'],
                 'margin': round(net_after_ad * 100.0 / revenue, 1) if revenue else 0,  # 순수익(광고비 차감 후) 마진
                 'roas': round(revenue / spend, 1) if spend else 0,
@@ -4756,7 +4757,7 @@ class GmarketDashboardView(views.APIView):
         tot = {'ad_spend': 0, 'cpc_spend': 0, 'ai_spend': 0, 'server_spend': 0,
                'auction_spend': 0, 'balance': 0, 'product_count': 0,
                'newad_ai_spend': 0, 'newad_cpc_spend': 0, 'auction_ai_spend': 0,
-               'revenue': 0, 'profit': 0, 'net_after_ad': 0, 'orders': 0, 'max_item_count': 0}
+               'revenue': 0, 'cost': 0, 'profit': 0, 'net_after_ad': 0, 'orders': 0, 'max_item_count': 0}
         for a in accts:
             r = _row_for(a)
             is_sub = r.pop('_is_sub')
@@ -4770,7 +4771,7 @@ class GmarketDashboardView(views.APIView):
                 tot['balance'] += r['balance']
             tot['product_count'] += r['product_count']
             tot['max_item_count'] += (r['max_item_count'] or 0)
-            tot['revenue'] += r['revenue']; tot['profit'] += r['profit']
+            tot['revenue'] += r['revenue']; tot['cost'] += r['cost']; tot['profit'] += r['profit']
             tot['net_after_ad'] += r['net_after_ad']; tot['orders'] += r['orders']
         tot['account_count'] = len(accts)
         # 테스트/타사 계정(sglobal2 등) — 대시보드에 데이터는 보여주되 위 합계(tot)에는 절대 포함하지 않음.

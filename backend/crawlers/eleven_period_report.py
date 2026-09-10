@@ -184,6 +184,42 @@ def _merge_fee_payment(filled, login_id, d0, d1, log):
     log(f'[{login_id}] 수수료결제 {total_fee:,}원 합산(총비용 열에 반영)')
 
 
+def _ai_campaign_rows(login_id):
+    """오늘 crawl_11st_ai가 수집해둔 St11AdofficeCampaign(AI+일반 캠페인)을 시트에 덧붙일
+    행으로 변환. 기간별 보고서(날짜별)와 별개로 캠페인 단위라 상품/날짜로는 못 쪼개서
+    이 시트 맨 아래에 별도 섹션으로 추가한다(2026-09-10, 사용자 지시 — CPC/AI 구분 누락 보완).
+    계정에 그날 수집분이 없으면(크론 미실행/실패) 빈 리스트."""
+    from apps.cpc.models import St11AdofficeCampaign
+    from django.utils import timezone
+
+    today = timezone.localdate()
+    latest = (St11AdofficeCampaign.objects
+              .filter(eleven_id=login_id, collected_at__date=today)
+              .order_by('campaign_name', '-collected_at'))
+    seen = set()
+    camps = []
+    for c in latest:
+        if c.campaign_name in seen:
+            continue
+        seen.add(c.campaign_name)
+        camps.append(c)
+    if not camps:
+        return []
+
+    out = [[], ['── AI/일반 캠페인 광고비(오늘자, adoffice) ──'],
+           ['캠페인명', '유형', '광고비', '매출액', 'ROAS(%)']]
+    t_cost = t_amt = 0
+    for c in camps:
+        cost = c.total_cost or 0
+        amt = c.total_conv_amount or 0
+        out.append([c.campaign_name, 'AI' if c.is_ai else 'CPC', cost, amt, str(c.total_roas_pct or 0)])
+        t_cost += cost
+        t_amt += amt
+    roas = round(t_amt * 100.0 / t_cost, 2) if t_cost else 0
+    out.append(['합계', '', t_cost, t_amt, str(roas)])
+    return out
+
+
 def collect_period_for_account(driver, account, period_text, d0, d1, sheet, log):
     """이미 만들어진(로그인된) driver로 기간별 보고서 다운로드+구글시트 업로드.
     _login 멱등(이미 로그인이면 세션 재사용) → 상품ROAS 크롤과 로그인 1회 공유 가능."""
@@ -195,6 +231,14 @@ def collect_period_for_account(driver, account, period_text, d0, d1, sheet, log)
     filled = fill_missing_dates(rows, d0, d1)
     filled = [[('' if str(c).strip() == '-' else c) for c in r] for r in filled]
     _merge_fee_payment(filled, login_id, d0, d1, log)
+    ai_rows = _ai_campaign_rows(login_id)
+    if ai_rows:
+        # 열 수를 날짜별 표(27컬럼)와 맞춰 뒤를 빈 칸으로 채움 — gsheet_upload가 행마다
+        # 길이가 달라도 그대로 쓰긴 하지만, 시트에서 어긋나 보이지 않게 정렬.
+        width = len(filled[0]) if filled else 5
+        ai_rows = [r + [''] * (width - len(r)) for r in ai_rows]
+        filled = filled + ai_rows
+        log(f'[{login_id}] AI/일반 캠페인 {len(ai_rows) - 4}건 하단에 추가')
     log(f'[{login_id}] 기간별 {len(filled)}행 (헤더+합계+{(d1 - d0).days + 1}일)')
     if sheet is not None:
         from .gsheet_upload import upload_rows
@@ -270,6 +314,10 @@ def run_all_accounts(log_fn=None, account_filter=None, gsheet=True, year_month=N
             # '-'(데이터 없음 표시) → 빈 칸으로
             filled = [[('' if str(c).strip() == '-' else c) for c in r] for r in filled]
             _merge_fee_payment(filled, a.login_id, d0, d1, log)
+            ai_rows = _ai_campaign_rows(a.login_id)
+            if ai_rows:
+                width = len(filled[0]) if filled else 5
+                filled = filled + [r + [''] * (width - len(r)) for r in ai_rows]
             log(f'[{a.login_id}] {len(filled)}행 (헤더+합계+{ (d1-d0).days+1 }일)')
             if sheet is not None:
                 from .gsheet_upload import upload_rows

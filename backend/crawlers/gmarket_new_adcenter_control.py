@@ -76,8 +76,10 @@ def _get_campaign_rows(driver, wait=10, _retried=False):
 def _get_campaign_cost_rows(driver, wait=10, _retried=False):
     """관리 페이지 '오늘' 탭(기본값) 캠페인별 광고비용 목록.
     2026-09-09 실측: 표 컬럼 순서 = 체크박스,ON/OFF,캠페인명,상태,캠페인유형,노출수,클릭수,클릭률,
-    평균클릭비용,전환수,전환율,전환금액,광고비용,광고수익율 — 12번째(0-index) td가 광고비용.
-    캠페인명에 '통합운영'이 들어가면 AI광고(사용자 확인, 2026-09-09), 나머지는 GM_CPC."""
+    평균클릭비용,전환수,전환율,전환금액,광고비용,광고수익율 — 0-index 11=전환금액(매출액),
+    12=광고비용, 13=광고수익율(%). 캠페인명에 '통합운영'이 들어가면 AI광고(사용자 확인,
+    2026-09-09), 나머지는 GM_CPC. 매출액/수익율은 2026-09-10 구글시트(상품별 CPC/AI 시트
+    재구성) 요구로 추가 수집."""
     driver.get(MGMT_URL)
     try:
         WebDriverWait(driver, wait).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input.form__toggle')))
@@ -97,11 +99,19 @@ def _get_campaign_cost_rows(driver, wait=10, _retried=False):
             campaign_type = tds[4].text.strip()
             cost_txt = tds[12].text.strip().replace(',', '')
             cost = int(cost_txt) if cost_txt.isdigit() else 0
+            conv_txt = tds[11].text.strip().replace(',', '')
+            conv_amount = int(conv_txt) if conv_txt.lstrip('-').isdigit() else 0
+            roas_txt = tds[13].text.strip().replace(',', '').replace('%', '')
+            try:
+                roas = float(roas_txt)
+            except ValueError:
+                roas = 0.0
         except Exception:
             continue
         if not name:
             continue
-        rows.append({'name': name, 'type': campaign_type, 'cost': cost, 'is_ai': '통합운영' in name})
+        rows.append({'name': name, 'type': campaign_type, 'cost': cost,
+                     'conv_amount': conv_amount, 'roas': roas, 'is_ai': '통합운영' in name})
     return rows
 
 
@@ -124,7 +134,8 @@ def collect_costs(driver, login_id, log_fn=None):
     for r in rows:
         GmarketNewAdCost.objects.update_or_create(
             login_id=login_id, use_date=today, campaign_name=r['name'],
-            defaults={'campaign_type': r['type'], 'is_ai': r['is_ai'], 'cost': r['cost']},
+            defaults={'campaign_type': r['type'], 'is_ai': r['is_ai'], 'cost': r['cost'],
+                      'conv_amount': r.get('conv_amount', 0), 'roas': r.get('roas', 0)},
         )
     ai_total = sum(r['cost'] for r in rows if r['is_ai'])
     cpc_total = sum(r['cost'] for r in rows if not r['is_ai'])

@@ -317,6 +317,29 @@ class OwnerclanLiveStatus(models.Model):
         return f'{self.product_code}:{self.status}'
 
 
+class OwnerclanOrderFile(models.Model):
+    """오너클랜 주문/배송조회(orderList.php) 화면의 엑셀다운로드(excel)/플레이오토 송장 정보(invoice)
+    다운로드 결과. 실물 파일은 media/ownerclan_order_files/에 저장, 여기엔 계정·구분·경로 메타만
+    보관(weekly_popular와 동일하게 FileField/BinaryField 대신 디스크+메타 방식)."""
+    FILE_TYPE_CHOICES = [('excel', '엑셀다운로드'), ('invoice', '플레이오토 송장 정보')]
+    login_id = models.CharField(max_length=100, db_index=True)
+    file_type = models.CharField(max_length=10, choices=FILE_TYPE_CHOICES)
+    filename = models.CharField(max_length=255)
+    file_path = models.CharField(max_length=500)
+    file_size = models.IntegerField(default=0)
+    downloaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'ownerclan_order_file'
+        indexes = [
+            models.Index(fields=['login_id', 'file_type']),
+            models.Index(fields=['downloaded_at']),
+        ]
+
+    def __str__(self):
+        return f'{self.login_id}/{self.file_type}/{self.filename}'
+
+
 class OwnerclanTask(models.Model):
     task_type = models.CharField(max_length=30)
     status = models.CharField(max_length=10, default='pending')

@@ -251,3 +251,151 @@ def crawl_weekly_popular(login_id, log_fn=None):
         return {'saved_path': dest_path}
     finally:
         driver.quit()
+
+
+# 주문/배송조회(orderList.php) — 엑셀다운로드/플레이오토 송장 정보 다운로드(2026-09-10 사용자 요청).
+# 두 다운로드 링크 모두 화면 스샷/xpath 기준으로 img가 a 안에 있어 클릭은 부모 a로 위임.
+ORDER_LIST_URL = 'https://ownerclan.com/V2/service/orderList.php'
+ORDER_DOWNLOAD_XPATH = {
+    'excel': '/html/body/div[12]/div[4]/div/form/div/div/div[10]/a[1]/img',      # 엑셀다운로드
+    'invoice': '/html/body/div[12]/div[4]/div/form/div/div/div[10]/a[2]/img',    # 플레이오토 송장 정보
+}
+ORDER_FILE_STORAGE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'media', 'ownerclan_order_files'
+)
+
+
+def crawl_order_download(login_id, file_type='invoice', log_fn=None):
+    """주문/배송조회 화면에서 엑셀다운로드(excel) 또는 플레이오토 송장 정보(invoice)를 받아
+    media/ownerclan_order_files/에 저장 + OwnerclanOrderFile 레코드 생성.
+    반환: {'ok':True,'file_id':...,'saved_path':...} 또는 {'error':...}."""
+    from selenium.webdriver.common.by import By
+    from selenium.common.exceptions import NoAlertPresentException, UnexpectedAlertPresentException
+    from crawlers.browser import create_driver
+    from apps.ownerclan.models import OwnerclanApiAccount, OwnerclanOrderFile
+
+    if file_type not in ORDER_DOWNLOAD_XPATH:
+        return {'error': f'알수없는 file_type: {file_type}'}
+
+    try:
+        account = OwnerclanApiAccount.objects.get(login_id=login_id)
+    except OwnerclanApiAccount.DoesNotExist:
+        return {'error': '계정없음'}
+
+    os.environ.setdefault('DISPLAY', ':99')
+    os.makedirs(ORDER_FILE_STORAGE_DIR, exist_ok=True)
+    dl_dir = f'/tmp/ownerclan_order_dl_{login_id}'
+    os.makedirs(dl_dir, exist_ok=True)
+    for f in os.listdir(dl_dir):
+        try:
+            os.remove(os.path.join(dl_dir, f))
+        except OSError:
+            pass
+
+    profile_dir = f'/tmp/ownerclan_web_profile_{login_id}'
+    os.makedirs(profile_dir, exist_ok=True)
+    driver = create_driver(user_data_dir=profile_dir, kill_existing=False, download_dir=dl_dir)
+    try:
+        try:
+            driver.get(LOGIN_URL)
+        except UnexpectedAlertPresentException:
+            pass
+        time.sleep(2)
+        try:
+            driver.switch_to.alert.accept()
+        except NoAlertPresentException:
+            pass
+        if 'loginform' in driver.current_url:
+            driver.find_element(By.ID, 'id').send_keys(account.login_id)
+            driver.find_element(By.ID, 'passwd').send_keys(account.login_pw)
+            driver.find_element(By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"]').click()
+            time.sleep(3)
+            try:
+                alert = driver.switch_to.alert
+                alert_text = alert.text
+                alert.accept()
+                if '로그인' in alert_text:
+                    _log(log_fn, f'[ownerclan-order:{login_id}] 로그인 실패: {alert_text}')
+                    return {'error': f'로그인 실패: {alert_text}'}
+            except NoAlertPresentException:
+                pass
+            if 'loginform' in driver.current_url:
+                _log(log_fn, f'[ownerclan-order:{login_id}] 로그인 실패')
+                return {'error': '로그인 실패'}
+        _log(log_fn, f'[ownerclan-order:{login_id}] 로그인 성공')
+
+        driver.get(ORDER_LIST_URL)
+        time.sleep(2)
+        try:
+            driver.switch_to.alert.accept()
+        except NoAlertPresentException:
+            pass
+
+        try:
+            el = driver.find_element(By.XPATH, ORDER_DOWNLOAD_XPATH[file_type])
+        except Exception:
+            _log(log_fn, f'[ownerclan-order:{login_id}] 다운로드 버튼을 못 찾음({file_type})')
+            return {'error': '다운로드 버튼 없음'}
+        driver.execute_script("(arguments[0].closest('a') || arguments[0]).click();", el)
+        _log(log_fn, f'[ownerclan-order:{login_id}] {file_type} 다운로드 클릭')
+
+        waited = 0
+        downloaded = None
+        while waited < 40:
+            time.sleep(2)
+            waited += 2
+            files = [f for f in os.listdir(dl_dir) if not f.endswith('.crdownload')]
+            if files:
+                downloaded = files[0]
+                break
+        if not downloaded:
+            _log(log_fn, f'[ownerclan-order:{login_id}] 다운로드 실패(타임아웃)')
+            return {'error': '다운로드 타임아웃'}
+
+        now = timezone.localtime(timezone.now())
+        ext = os.path.splitext(downloaded)[1] or '.xlsx'
+        saved_name = f'{login_id}_{file_type}_{now:%Y%m%d_%H%M%S}{ext}'
+        dest_path = os.path.join(ORDER_FILE_STORAGE_DIR, saved_name)
+        shutil.move(os.path.join(dl_dir, downloaded), dest_path)
+        size = os.path.getsize(dest_path)
+
+        rec = OwnerclanOrderFile.objects.create(
+            login_id=login_id, file_type=file_type, filename=saved_name,
+            file_path=dest_path, file_size=size)
+        _log(log_fn, f'[ownerclan-order:{login_id}] 저장 완료: {saved_name} ({size:,}bytes)')
+        return {'ok': True, 'file_id': rec.id, 'saved_path': dest_path}
+    finally:
+        driver.quit()
+
+
+def run_order_download_all(file_type='invoice', account_filter=None, log_fn=None):
+    """전 계정을 순서대로(display 정렬 없이 login_id 순) 순회하며 주문/배송조회 파일을 수집.
+    사람처럼 계정 사이 페이싱(5초) + 연속 3회 실패 시 중단([[feedback_crawling_rule]])."""
+    from apps.ownerclan.models import OwnerclanApiAccount
+
+    qs = OwnerclanApiAccount.objects.filter(is_active=True).order_by('login_id')
+    if account_filter:
+        qs = qs.filter(login_id__in=account_filter)
+    accounts = list(qs)
+    _log(log_fn, f'[ownerclan-order] {file_type} 대상 계정 {len(accounts)}개')
+
+    results = {}
+    consecutive_fail = 0
+    for a in accounts:
+        try:
+            res = crawl_order_download(a.login_id, file_type=file_type, log_fn=log_fn)
+        except Exception as e:
+            res = {'error': str(e)[:200]}
+        results[a.login_id] = res
+        if res.get('error'):
+            consecutive_fail += 1
+            _log(log_fn, f'[ownerclan-order:{a.login_id}] 실패: {res["error"]}')
+            if consecutive_fail >= 3:
+                _log(log_fn, '⛔ 연속 3회 실패 — 중단')
+                break
+        else:
+            consecutive_fail = 0
+        time.sleep(5)
+    ok_count = sum(1 for r in results.values() if r.get('ok'))
+    _log(log_fn, f'[ownerclan-order] 완료 {ok_count}/{len(results)}')
+    return results

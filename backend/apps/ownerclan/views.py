@@ -56,6 +56,33 @@ def _zip_to_single_xlsx(zip_path, zip_filename):
         return buf, f'{base_name}.xlsx'
 
 
+def _parse_weekly_period(zip_path):
+    """zip 안의 엑셀 파일명(best_prod_MMDD_MMDD(YYYY).xlsx)에서 실제 집계기간을 뽑는다.
+    2개(올해/작년) 있으면 최신연도 쪽 기준. 이름이 패턴과 안 맞으면 None(호출쪽에서 저장일로 폴백)."""
+    import re
+    import zipfile
+    from datetime import date
+
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            xlsx_members = sorted(
+                (n for n in zf.namelist() if n.lower().endswith('.xlsx')), reverse=True)
+    except Exception:
+        return None, None
+    for member in xlsx_members:
+        m = re.search(r'(\d{2})(\d{2})_(\d{2})(\d{2})\((\d{4})\)', os.path.basename(member))
+        if not m:
+            continue
+        sm, sd, em, ed, year = (int(g) for g in m.groups())
+        try:
+            start = date(year, sm, sd)
+            end = date(year, em, ed)
+        except ValueError:
+            continue
+        return start.isoformat(), end.isoformat()
+    return None, None
+
+
 def _pid_alive(pid):
     """pid 생존 확인. 종료됐지만 부모(Django)가 wait()하지 않아 좀비(Z)로 남은 경우는
     os.kill(pid, 0)이 예외 없이 성공해버리므로 반드시 죽은 것으로 취급해야 함."""
@@ -459,10 +486,15 @@ class OwnerclanWeeklyPopularView(APIView):
                 path = os.path.join(storage_dir, name)
                 if os.path.isfile(path):
                     stat = os.stat(path)
+                    period_start, period_end = (
+                        _parse_weekly_period(path) if name.lower().endswith('.zip') else (None, None))
                     files.append({
                         'filename': name,
                         'size': stat.st_size,
                         'saved_at': stat.st_mtime,
+                        # 실제 집계기간 — zip 내 엑셀명에서 파싱, 실패 시 None(프론트가 저장일로 표시)
+                        'period_start': period_start,
+                        'period_end': period_end,
                     })
         files.sort(key=lambda f: f['saved_at'], reverse=True)
 
@@ -585,6 +617,138 @@ class OwnerclanAccountInfoCrawlView(APIView):
         task.pid = proc.pid
         task.save(update_fields=['pid'])
         return Response({'status': 'started', 'task_id': task.id})
+
+
+class OwnerclanOrderFileCollectView(APIView):
+    """오너클랜 주문/배송조회(orderList.php) 엑셀다운로드/플레이오토 송장 정보 — 전 계정 순차 수집(백그라운드).
+    file_type('excel'/'invoice')을 골라서 시작. /owner 대시보드 버튼에서 사용."""
+    permission_classes = [IsAuthenticated]
+    LOG_FILE = '/tmp/ownerclan_order_collect.log'
+
+    def get(self, request):
+        task = OwnerclanTask.objects.filter(task_type='order_collect').order_by('-created_at').first()
+        busy = False
+        if task and task.status == 'running' and task.pid:
+            if _pid_alive(task.pid):
+                busy = True
+            else:
+                task.status = 'done'
+                task.save(update_fields=['status'])
+
+        log_tail = ''
+        try:
+            with open(self.LOG_FILE, encoding='utf-8', errors='ignore') as f:
+                log_tail = ''.join(f.readlines()[-60:])
+        except FileNotFoundError:
+            pass
+
+        return Response({'busy': busy, 'log': log_tail,
+                          'file_type': (task.input_data or {}).get('file_type') if task else None})
+
+    def post(self, request):
+        import subprocess
+        running = OwnerclanTask.objects.filter(task_type='order_collect', status='running').first()
+        if running and running.pid and _pid_alive(running.pid):
+            return Response({'error': '이미 수집 중입니다.'}, status=409)
+
+        file_type = request.data.get('file_type', 'invoice')
+        if file_type not in ('invoice', 'excel'):
+            return Response({'error': "file_type은 'invoice' 또는 'excel'이어야 합니다."}, status=400)
+
+        task = OwnerclanTask.objects.create(task_type='order_collect', status='running',
+                                             input_data={'file_type': file_type})
+        cmd = (f'cd /home/rejoice888/Avengers/backend && '
+               f'python3 manage.py crawl_ownerclan_orders --type {file_type} > {self.LOG_FILE} 2>&1; '
+               f'echo DONE >> {self.LOG_FILE}')
+        proc = subprocess.Popen(['bash', '-c', cmd], start_new_session=True)
+        task.pid = proc.pid
+        task.save(update_fields=['pid'])
+        return Response({'status': 'started', 'task_id': task.id})
+
+
+class OwnerclanOrderFileListView(APIView):
+    """저장된 주문/배송조회 파일 목록. ?file_type= 으로 필터 가능."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .models import OwnerclanOrderFile
+        qs = OwnerclanOrderFile.objects.all().order_by('-downloaded_at')
+        file_type = request.query_params.get('file_type')
+        if file_type:
+            qs = qs.filter(file_type=file_type)
+        files = [{'id': f.id, 'login_id': f.login_id, 'file_type': f.file_type,
+                  'filename': f.filename, 'file_size': f.file_size,
+                  'downloaded_at': f.downloaded_at} for f in qs]
+        return Response({'files': files})
+
+
+class OwnerclanOrderFileDownloadView(APIView):
+    """개별 주문파일 다운로드."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        from django.http import FileResponse, Http404
+        from .models import OwnerclanOrderFile
+        try:
+            rec = OwnerclanOrderFile.objects.get(pk=pk)
+        except OwnerclanOrderFile.DoesNotExist:
+            raise Http404()
+        if not os.path.isfile(rec.file_path):
+            raise Http404()
+        return FileResponse(open(rec.file_path, 'rb'), as_attachment=True, filename=rec.filename)
+
+
+class OwnerclanOrderFileDeleteView(APIView):
+    """개별 주문파일 삭제(디스크+DB 레코드 둘 다)."""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        from .models import OwnerclanOrderFile
+        try:
+            rec = OwnerclanOrderFile.objects.get(pk=pk)
+        except OwnerclanOrderFile.DoesNotExist:
+            return Response(status=204)
+        try:
+            if os.path.isfile(rec.file_path):
+                os.remove(rec.file_path)
+        except OSError:
+            pass
+        rec.delete()
+        return Response(status=204)
+
+
+class OwnerclanOrderFileDownloadAllView(APIView):
+    """저장된 주문파일 전체(또는 file_type/ids 필터)를 zip 하나로 묶어 다운로드."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        import io
+        import zipfile
+        from datetime import date
+        from django.http import FileResponse, Http404
+        from .models import OwnerclanOrderFile
+
+        file_type = request.query_params.get('file_type')
+        ids_param = request.query_params.get('ids')
+        qs = OwnerclanOrderFile.objects.all()
+        if file_type:
+            qs = qs.filter(file_type=file_type)
+        if ids_param:
+            ids = [int(i) for i in ids_param.split(',') if i.strip().isdigit()]
+            qs = qs.filter(id__in=ids)
+        recs = [r for r in qs if os.path.isfile(r.file_path)]
+        if not recs:
+            raise Http404()
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for r in recs:
+                zf.write(r.file_path, arcname=r.filename)
+        buf.seek(0)
+
+        label = {'invoice': '송장정보', 'excel': '엑셀다운로드'}.get(file_type, '전체')
+        bundle_name = f'오너클랜_주문{label}_{len(recs)}개_{date.today():%Y%m%d}.zip'
+        return FileResponse(buf, as_attachment=True, filename=bundle_name)
 
 
 class OwnerClanProductWCodesView(_WorkspaceMixin, APIView):

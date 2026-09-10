@@ -1,5 +1,10 @@
 #!/bin/bash
-# 지마켓 시간별 광고비(09~21시) 수집 + 계정별 증가분 텔레그램.
+# 지마켓 시간별 광고비(09~22시) 수집 + 계정별 증가분 텔레그램.
+# 신규광고센터(adcenter.esmplus.com)를 먼저 수집한 뒤 구광고센터를 수집 —
+# crawl_gmarket_cost가 스냅샷 저장 직전 _blend_newad_cost()로 두 값을 섞어 저장하므로
+# (2026-09-10) 순서가 바뀌면 이번 시간 신규광고센터 증가분이 블렌딩에서 누락된다.
+# 예전엔 신규광고센터가 별도 cron(0분, 같은 시각)으로 따로 돌아 광고비 수집과 락을 놓고
+# 서로 강제선점하며 죽고 죽이는 충돌이 있었음 — 이 스크립트 안으로 합쳐 순차실행으로 제거.
 # 직전 스냅샷 대비 CPC/AI 증가분 + 현재 누적을 텔레그램 발송.
 # 16~20시는 정시실행 최우선(2026-08-27 사용자 요청): 다른 지마켓 작업이 돌고 있으면
 # 강제종료 후 즉시 수집, 끝나면 강제종료됐던 작업 재개.
@@ -43,6 +48,8 @@ echo $$ > "$LOCKFILE"
 trap "rm -f $LOCKFILE" EXIT
 
 START=$(date '+%T')
+echo "$(date '+%F %T') 신규광고센터 수집 시작(구광고센터 스냅샷에 블렌딩되므로 먼저 실행)" >> "$LOG"
+/usr/bin/python3 manage.py crawl_gmarket_newad_cost --source schedule >> "$LOG" 2>&1
 echo "$(date '+%F %T') 시간별 광고비 수집 시작" >> "$LOG"
 /usr/bin/python3 manage.py crawl_gmarket_cost >> "$LOG" 2>&1
 echo "$(date '+%F %T') 증가분 텔레그램 발송" >> "$LOG"

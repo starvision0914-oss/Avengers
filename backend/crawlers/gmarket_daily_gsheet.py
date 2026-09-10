@@ -230,21 +230,70 @@ def _merge_auction(data, login_id, ad_type, year, month):
     return added
 
 
-def _merge_ai_product_ad_gap(data, login_id, year, month):
+def _merge_newadcenter(data, login_id, ad_type, year, month):
+    """신규 광고센터(adcenter.esmplus.com, 2026-09-04 오픈)는 구광고센터(ad.esmplus.com)와
+    완전히 별도 시스템이라 dailyReport/Remarketing 리포트 화면엔 이 캠페인들이 전혀 안 잡힘
+    (2026-09-09 크론 신설로 GmarketNewAdCost에 일자별 캠페인비용 수집 시작). 캠페인명에
+    '통합운영' 포함=AI(is_ai=True), 나머지(집중/직접운영)=CPC로 이미 분류돼 저장돼 있음
+    (대시보드 GmarketDashboardView와 동일 구분, [[project_gmarket_adcost_source]] 계열).
+    일자별 매트릭스 '총비용'에 날짜 매칭 합산. 반환: (추가된 총액, 신규광고센터 데이터가
+    있는 날짜 집합=구장부 AI Product AD 보정과 겹치지 않도록 그쪽에서 제외시킴)."""
+    import calendar
+    from datetime import date
+    from django.db.models import Sum
+    from apps.cpc.models import GmarketNewAdCost
+    me = calendar.monthrange(year, month)[1]
+    qs = GmarketNewAdCost.objects.filter(
+        login_id=login_id, is_ai=(ad_type == 'ai'),
+        use_date__gte=date(year, month, 1), use_date__lte=date(year, month, me))
+    covered_dates = set(qs.values_list('use_date', flat=True))
+    by_date = {}
+    for r in qs.values('use_date').annotate(s=Sum('cost')):
+        v = r['s'] or 0
+        if v:
+            by_date[str(r['use_date'])] = v
+    if not by_date:
+        return 0, covered_dates
+    hdr = data[0]
+    if '총비용' not in hdr:
+        return 0, covered_dates
+    ci = hdr.index('총비용')
+    added = 0
+    for row in data[1:]:
+        if not row or str(row[0]).strip() == '합계':
+            continue
+        dt = str(row[0])[:10]
+        if dt in by_date and ci < len(row):
+            cur = int(str(row[ci]).replace(',', '') or 0) if row[ci] else 0
+            row[ci] = str(cur + by_date[dt]); added += by_date[dt]
+    if added:
+        for row in data[1:]:
+            if row and str(row[0]).strip() == '합계' and ci < len(row):
+                cur = int(str(row[ci]).replace(',', '') or 0) if row[ci] else 0
+                row[ci] = str(cur + added)
+    return added, covered_dates
+
+
+def _merge_ai_product_ad_gap(data, login_id, year, month, exclude_dates=None):
     """2026-08-24부터 지마켓이 'AI매출업'을 'AI Product AD 광고구매'로 개명한 뒤,
     지마켓 자체 AI 리포트 화면(일자별·상품별 전부)이 이 신규명칭분을 아예 집계 안 해주는
     것을 실측 확인(2026-09-02, rejoice911 등 — 거래원장상 75,460원인데 리포트엔 0원).
     상품별로는 지마켓이 데이터 자체를 안 주므로 배분 불가 — 계정 합계에만 보정.
+    2026-09-09부터는 신규광고센터(GmarketNewAdCost)가 이 AI분을 날짜별로 직접 주므로
+    그쪽이 이미 커버한 날짜(exclude_dates)는 여기서 제외 — 안 그러면 이중합산됨(같은
+    실제 지출이 거래원장 comment와 신규광고센터 캠페인비용 양쪽에 다 잡힘).
     반환: 추가된 금액(0이면 해당 없음)."""
     from datetime import date
     import calendar
     from django.db.models import Sum
     from apps.cpc.models import GmarketCostHistory
     me = calendar.monthrange(year, month)[1]
-    gap = abs(GmarketCostHistory.objects.filter(
+    qs = GmarketCostHistory.objects.filter(
         seller_id=login_id, comment__icontains='AI Product AD',
-        use_date__gte=date(year, month, 1), use_date__lte=date(year, month, me)
-    ).aggregate(s=Sum('amount'))['s'] or 0)
+        use_date__gte=date(year, month, 1), use_date__lte=date(year, month, me))
+    if exclude_dates:
+        qs = qs.exclude(use_date__in=exclude_dates)
+    gap = abs(qs.aggregate(s=Sum('amount'))['s'] or 0)
     if not gap:
         return 0
     hdr = data[0]
@@ -313,10 +362,20 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                         _log(log_fn, f'  [{login_id}/{ad_type}] 옥션 +{_add:,}원 합산')
                 except Exception as _e:
                     _log(log_fn, f'  [{login_id}/{ad_type}] 옥션합산 오류 {str(_e)[:80]}')
+                # 신규광고센터(adcenter.esmplus.com, 2026-09-04~)는 구리포트 화면에 안 잡히는
+                # 별도 시스템 — 날짜 매칭해 총비용에 합산(AI/CPC 둘 다)
+                _newad_dates = set()
+                try:
+                    _newad_add, _newad_dates = _merge_newadcenter(data, login_id, ad_type, year, month)
+                    if _newad_add:
+                        _log(log_fn, f'  [{login_id}/{ad_type}] 신규광고센터 +{_newad_add:,}원 합산')
+                except Exception as _e:
+                    _log(log_fn, f'  [{login_id}/{ad_type}] 신규광고센터 합산 오류 {str(_e)[:80]}')
                 # AI매출업→AI Product AD 개명 이후 지마켓 리포트 자체가 안 주는 분 — 합계에 보정
+                # (신규광고센터가 이미 커버한 날짜는 제외 — 이중합산 방지)
                 if ad_type == 'ai':
                     try:
-                        _gap = _merge_ai_product_ad_gap(data, login_id, year, month)
+                        _gap = _merge_ai_product_ad_gap(data, login_id, year, month, exclude_dates=_newad_dates)
                         if _gap:
                             _log(log_fn, f'  [{login_id}/{ad_type}] AI Product AD 미배분 +{_gap:,}원 보정')
                     except Exception as _e:

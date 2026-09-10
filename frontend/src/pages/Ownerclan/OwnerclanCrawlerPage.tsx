@@ -1,11 +1,30 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
-import { PlayCircle, Package, BarChart3, RefreshCw, Download, TrendingUp } from 'lucide-react';
+import { PlayCircle, Package, BarChart3, RefreshCw, Download, TrendingUp, FileSpreadsheet, Trash2 } from 'lucide-react';
 import api from '../../api/client';
+
+interface OrderFile {
+  id: number;
+  login_id: string;
+  file_type: 'excel' | 'invoice';
+  filename: string;
+  file_size: number;
+  downloaded_at: string;
+}
+
+const ORDER_FILE_TYPE_LABEL: Record<string, string> = { excel: '엑셀다운로드', invoice: '플레이오토 송장 정보' };
 
 interface WeeklyPopularFile {
   filename: string;
   size: number;
   saved_at: number;
+  period_start: string | null;
+  period_end: string | null;
+}
+
+function weeklyPeriodLabel(f: WeeklyPopularFile): string {
+  if (f.period_start && f.period_end) return `${f.period_start} ~ ${f.period_end}`;
+  // zip 안 엑셀명에서 기간을 못 뽑은 파일 — DB(디스크)에 저장된 날짜로 표시
+  return `저장일 ${new Date(f.saved_at * 1000).toLocaleDateString('ko-KR')} 기준`;
 }
 
 function formatBytes(n: number): string {
@@ -253,6 +272,93 @@ export default function OwnerclanCrawlerPage() {
     }
   };
 
+  // ── 주문/배송조회(orderList.php) 엑셀다운로드/플레이오토 송장 정보 ──
+  const [orderFiles, setOrderFiles] = useState<OrderFile[]>([]);
+  const [orderBusy, setOrderBusy] = useState(false);
+  const [orderMsg, setOrderMsg] = useState('');
+  const [orderFileType, setOrderFileType] = useState<'invoice' | 'excel'>('invoice');
+  const [orderLog, setOrderLog] = useState('');
+  const [orderBulkBusy, setOrderBulkBusy] = useState(false);
+
+  const loadOrderFiles = useCallback(() => {
+    api.get('/ownerclan/order-files/').then(r => setOrderFiles(r.data.files || [])).catch(() => {});
+  }, []);
+
+  const loadOrderStatus = useCallback(() => {
+    api.get('/ownerclan/order-files/collect/').then(r => {
+      setOrderBusy(r.data.busy);
+      setOrderLog(r.data.log || '');
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadOrderFiles();
+    loadOrderStatus();
+    const t = setInterval(() => { loadOrderFiles(); loadOrderStatus(); }, 8000);
+    return () => clearInterval(t);
+  }, [loadOrderFiles, loadOrderStatus]);
+
+  const handleOrderCollect = async () => {
+    setOrderMsg('');
+    try {
+      await api.post('/ownerclan/order-files/collect/', { file_type: orderFileType });
+      setOrderBusy(true);
+      setOrderMsg(`${ORDER_FILE_TYPE_LABEL[orderFileType]} 수집 시작됨 — 계정별로 순차 진행됩니다(8초마다 자동 갱신).`);
+    } catch (e: any) {
+      setOrderMsg(e?.response?.data?.error || '시작 실패');
+    }
+  };
+
+  const handleOrderFileDownload = async (f: OrderFile) => {
+    try {
+      const res = await api.get(`/ownerclan/order-files/${f.id}/download/`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = f.filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('다운로드 실패');
+    }
+  };
+
+  const handleOrderFileDelete = async (f: OrderFile) => {
+    if (!confirm(`삭제할까요?\n${f.login_id} / ${ORDER_FILE_TYPE_LABEL[f.file_type]} / ${f.filename}`)) return;
+    try {
+      await api.delete(`/ownerclan/order-files/${f.id}/`);
+      setOrderFiles(prev => prev.filter(x => x.id !== f.id));
+    } catch {
+      alert('삭제 실패');
+    }
+  };
+
+  const handleOrderDownloadAll = async () => {
+    const target = orderFiles.filter(f => f.file_type === orderFileType);
+    if (target.length === 0) {
+      alert(`저장된 ${ORDER_FILE_TYPE_LABEL[orderFileType]} 파일이 없습니다. 먼저 "수집 시작"으로 자료를 모아주세요.`);
+      return;
+    }
+    setOrderBulkBusy(true);
+    try {
+      const res = await api.get('/ownerclan/order-files/download-all/', {
+        params: { file_type: orderFileType },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `오너클랜_주문${ORDER_FILE_TYPE_LABEL[orderFileType]}_${target.length}개.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+      setOrderMsg(`${ORDER_FILE_TYPE_LABEL[orderFileType]} ${target.length}개를 zip 1개로 다운로드했습니다.`);
+    } catch {
+      alert('전체 다운로드 실패');
+    } finally {
+      setOrderBulkBusy(false);
+    }
+  };
+
   const [infoMsg, setInfoMsg] = useState('');
   const handleInfoRefresh = async () => {
     setInfoMsg('');
@@ -389,7 +495,7 @@ export default function OwnerclanCrawlerPage() {
             <span className="text-[15px] font-bold text-[#222]">주간 인기 상품 (db저장창고)</span>
             <span className="text-[13px] text-[#999]">
               매일 09:00 자동 저장 · 계정 무관 사이트 전체 랭킹
-              {weeklyFiles[0] && <> · 최종 다운로드: <span className="font-semibold text-[#333]">{new Date(weeklyFiles[0].saved_at * 1000).toLocaleString('ko-KR')}</span></>}
+              {weeklyFiles[0] && <> · 최신 집계기간: <span className="font-semibold text-[#333]">{weeklyPeriodLabel(weeklyFiles[0])}</span></>}
             </span>
             <span className="ml-auto flex items-center gap-2">
               {weeklyMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{weeklyMsg}</span>}
@@ -417,6 +523,7 @@ export default function OwnerclanCrawlerPage() {
             <table className="w-full border-collapse text-[15px]">
               <thead>
                 <tr>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-52">집계 기간</th>
                   <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555]">파일명</th>
                   <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-right font-semibold text-[#555] w-28">크기</th>
                   <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-48">저장 시각</th>
@@ -426,14 +533,15 @@ export default function OwnerclanCrawlerPage() {
               <tbody>
                 {weeklyFiles.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
+                    <td colSpan={5} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
                       아직 저장된 파일이 없습니다
                     </td>
                   </tr>
                 ) : (
                   weeklyFiles.map((f, idx) => (
                     <tr key={f.filename} className={idx % 2 === 1 ? 'bg-[#fafbfc]' : 'bg-white'}>
-                      <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#333]">{f.filename}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#dc2626]">{weeklyPeriodLabel(f)}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#333]">{f.filename}</td>
                       <td className="border border-[#e5e7eb] px-3 py-2 text-right tabular-nums text-[#555]">{formatBytes(f.size)}</td>
                       <td className="border border-[#e5e7eb] px-3 py-2 text-[#555]">{new Date(f.saved_at * 1000).toLocaleString('ko-KR')}</td>
                       <td className="border border-[#e5e7eb] px-3 py-2 text-center">
@@ -448,6 +556,93 @@ export default function OwnerclanCrawlerPage() {
               </tbody>
             </table>
           </div>
+          )}
+        </div>
+
+        {/* ── 주문/배송조회(orderList.php) 엑셀다운로드/플레이오토 송장 정보 ── */}
+        <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-[#f0f0f0] flex flex-wrap items-center gap-2">
+            <FileSpreadsheet size={15} className="text-[#7c3aed]" />
+            <span className="text-[15px] font-bold text-[#222]">주문/배송조회 — 엑셀·송장 다운로드</span>
+            <span className="text-[13px] text-[#999]">전체계정 순차 수집(orderList.php) · 저장 {orderFiles.length}개</span>
+            <span className="ml-auto flex flex-wrap items-center gap-2">
+              {orderMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{orderMsg}</span>}
+              <select value={orderFileType} onChange={e => setOrderFileType(e.target.value as 'invoice' | 'excel')}
+                disabled={orderBusy}
+                className="px-2 py-1 text-[14px] font-semibold border border-[#ddd] rounded text-[#333] disabled:opacity-50">
+                <option value="invoice">플레이오토 송장 정보</option>
+                <option value="excel">엑셀다운로드</option>
+              </select>
+              <button onClick={handleOrderCollect} disabled={orderBusy}
+                className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
+                style={{ background: orderBusy ? '#aaa' : '#7c3aed' }}>
+                <PlayCircle size={13} className={orderBusy ? 'animate-spin' : ''} />
+                {orderBusy ? '수집 중…' : '전체계정 수집 시작'}
+              </button>
+              <button onClick={handleOrderDownloadAll} disabled={orderBulkBusy}
+                title="선택된 구분(플레이오토 송장/엑셀) 저장 파일을 전부 zip 하나로 묶어 받습니다"
+                className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
+                style={{ background: '#059669' }}>
+                <Download size={13} />
+                {orderBulkBusy ? '묶는 중…' : `전체 다운로드 (${orderFiles.filter(f => f.file_type === orderFileType).length})`}
+              </button>
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[15px]">
+              <thead>
+                <tr>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-32">계정</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-40">구분</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555]">파일명</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-right font-semibold text-[#555] w-24">크기</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-44">저장 시각</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-center font-semibold text-[#555] w-36">관리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orderFiles.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
+                      아직 저장된 파일이 없습니다 — 위에서 구분을 고르고 "전체계정 수집 시작"을 눌러주세요
+                    </td>
+                  </tr>
+                ) : (
+                  orderFiles.map((f, idx) => (
+                    <tr key={f.id} className={idx % 2 === 1 ? 'bg-[#fafbfc]' : 'bg-white'}>
+                      <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#333]">{f.login_id}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2">
+                        <span className="text-[13px] font-semibold px-1.5 py-0.5 rounded"
+                          style={{ color: f.file_type === 'invoice' ? '#7c3aed' : '#2563eb',
+                                   background: f.file_type === 'invoice' ? '#f3e8ff' : '#eff6ff' }}>
+                          {ORDER_FILE_TYPE_LABEL[f.file_type]}
+                        </span>
+                      </td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#333]">{f.filename}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-right tabular-nums text-[#555]">{formatBytes(f.file_size)}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#555]">{new Date(f.downloaded_at).toLocaleString('ko-KR')}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button onClick={() => handleOrderFileDownload(f)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#2563eb] rounded hover:bg-[#1d4ed8]">
+                            <Download size={11} /> 다운로드
+                          </button>
+                          <button onClick={() => handleOrderFileDelete(f)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#dc2626] rounded hover:bg-[#b91c1c]">
+                            <Trash2 size={11} /> 삭제
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {orderLog && (
+            <pre className="text-[12px] text-[#444] bg-[#f8fafc] p-3 overflow-auto max-h-[200px] whitespace-pre-wrap border-t border-[#f0f0f0]">
+              {orderLog}
+            </pre>
           )}
         </div>
 

@@ -335,7 +335,9 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
     daily_gsheet = gtarget = None
     if with_gsheet:
         try:
-            from crawlers.gmarket_daily_gsheet import (
+            # 2026-09-10 재구성: 예전 '일자별 계정합계' 시트(gmarket_daily_gsheet) 대신
+            # CPC_KEY=지마켓 신규광고센터 캠페인별, AI_KEY=옥션 AI+CPC 상품별로 용도 변경.
+            from crawlers.gmarket_adcost_gsheet import (
                 run_for_account as daily_gsheet, target_period as gtarget, CPC_KEY, AI_KEY)
             from crawlers import gsheet_upload
             ss_cpc = gsheet_upload.open_spreadsheet(CPC_KEY)
