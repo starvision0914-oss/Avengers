@@ -19,6 +19,14 @@ interface WeeklyPopularFile {
   saved_at: number;
   period_start: string | null;
   period_end: string | null;
+  years: string[];
+}
+
+interface DomemartAccount {
+  login_id: string;
+  balance: number;
+  order_stats: Record<string, string>;
+  info_synced_at: string | null;
 }
 
 function weeklyPeriodLabel(f: WeeklyPopularFile): string {
@@ -153,7 +161,7 @@ export default function OwnerclanCrawlerPage() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 5000);
+    const t = setInterval(load, 15000);   // 2026-09-11 서버부하 완화(5s→15s)
     return () => clearInterval(t);
   }, [load]);
 
@@ -171,7 +179,7 @@ export default function OwnerclanCrawlerPage() {
   const [weeklyFiles, setWeeklyFiles] = useState<WeeklyPopularFile[]>([]);
   const [weeklyBusy, setWeeklyBusy] = useState(false);
   const [weeklyMsg, setWeeklyMsg] = useState('');
-  const [weeklyHistoryOpen, setWeeklyHistoryOpen] = useState(false);   // 이력은 기본 접힘, 최종 다운로드 시각만 메인에 표시
+  const [weeklyHistoryOpen, setWeeklyHistoryOpen] = useState(false);   // 2026-09-11 사용자 요청 — 새로고침 시 기본 접힘
 
   const loadWeekly = useCallback(() => {
     api.get('/ownerclan/weekly-popular/').then(r => {
@@ -181,9 +189,9 @@ export default function OwnerclanCrawlerPage() {
   }, []);
 
   useEffect(() => {
-    loadWeekly();
-    const t = setInterval(loadWeekly, 10000);
-    return () => clearInterval(t);
+    const initial = setTimeout(loadWeekly, 300);   // 2026-09-11 마운트시 동시요청 분산
+    const t = setInterval(loadWeekly, 25000);   // 서버부하 완화(10s→25s)
+    return () => { clearTimeout(initial); clearInterval(t); };
   }, [loadWeekly]);
 
   const autoDownloadArmedRef = useRef(false);   // 이번 수집이 끝나면 자동 다운로드할지
@@ -247,8 +255,43 @@ export default function OwnerclanCrawlerPage() {
     }
   };
 
+  // 연도별(2025/2026 등) 따로 받기 — zip 안 파일명의 (YYYY) 표기 기준, 병합 안 함(2026-09-11 사용자 요청)
+  const handleWeeklyDownloadYear = async (filename: string, year: string) => {
+    try {
+      const res = await api.get('/ownerclan/weekly-popular/download/', {
+        params: { filename, year },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename.replace(/\.zip$/i, `_${year}.xlsx`);
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('다운로드 실패');
+    }
+  };
+
+  // 기간별조회 — 시작일/종료일을 지정해 그 범위와 겹치는 집계기간만 이력 목록에서 골라 보기(2026-09-11)
+  const [weeklyRangeFrom, setWeeklyRangeFrom] = useState('');
+  const [weeklyRangeTo, setWeeklyRangeTo] = useState('');
+  const weeklyRangeActive = !!(weeklyRangeFrom || weeklyRangeTo);
+  const weeklyFilesFiltered = (() => {
+    if (!weeklyRangeActive) return weeklyFiles.slice(0, 5);   // 2026-09-11 기본 5개만, 나머진 기간조회로
+    return weeklyFiles.filter(f => {
+      if (!f.period_start || !f.period_end) return false;   // 기간 파싱 안 된 파일은 필터 켜져 있으면 제외
+      if (weeklyRangeFrom && f.period_end < weeklyRangeFrom) return false;
+      if (weeklyRangeTo && f.period_start > weeklyRangeTo) return false;
+      return true;
+    });
+  })();
+
+  // 전체 합쳐받기: 연도를 골라서 그 연도 기준으로 모든 주차를 중복제거 후 엑셀 1개로(2026-09-11
+  // 사용자 요청 — "알집으로 다운되지 않고 중복제거해서 엑셀로 한번에 받을수있도록").
+  const weeklyAllYears = Array.from(new Set(weeklyFiles.flatMap(f => f.years))).sort().reverse();
   const [weeklyBulkBusy, setWeeklyBulkBusy] = useState(false);
-  const handleWeeklyDownloadAll = async () => {
+  const handleWeeklyDownloadAll = async (year: string) => {
     if (weeklyFiles.length === 0) {
       alert('저장된 날짜별 자료가 없습니다. 먼저 "수집하기"로 자료를 모아주세요.');
       return;
@@ -256,15 +299,16 @@ export default function OwnerclanCrawlerPage() {
     setWeeklyBulkBusy(true);
     try {
       const res = await api.get('/ownerclan/weekly-popular/download-all/', {
+        params: { year },
         responseType: 'blob',
       });
       const url = URL.createObjectURL(res.data);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `오너클랜_주간인기상품_${weeklyFiles.length}개.zip`;
+      link.download = `오너클랜_주간인기상품_${year}년_중복제거.xlsx`;
       link.click();
       URL.revokeObjectURL(url);
-      setWeeklyMsg(`날짜별 자료 ${weeklyFiles.length}개를 zip 1개로 다운로드했습니다.`);
+      setWeeklyMsg(`${year}년 전체 주차를 중복제거해서 엑셀 1개로 다운로드했습니다.`);
     } catch {
       alert('전체 다운로드 실패');
     } finally {
@@ -273,16 +317,106 @@ export default function OwnerclanCrawlerPage() {
   };
 
   // ── 주문/배송조회(orderList.php) 엑셀다운로드/플레이오토 송장 정보 ──
+  // 자동수집은 매일 09/11/15/16/18시 5회(송장 정보 전용, cron_ownerclan_invoice.sh) — 회차별로
+  // 골라서 조회/다운로드할 수 있도록 orderBatchKey('latest' 또는 'YYYY-MM-DD|시')로 필터한다.
   const [orderFiles, setOrderFiles] = useState<OrderFile[]>([]);
+  const [orderBatches, setOrderBatches] = useState<{ date: string; hour: number }[]>([]);
   const [orderBusy, setOrderBusy] = useState(false);
   const [orderMsg, setOrderMsg] = useState('');
   const [orderFileType, setOrderFileType] = useState<'invoice' | 'excel'>('invoice');
+  const [orderBatchKey, setOrderBatchKey] = useState('latest');
   const [orderLog, setOrderLog] = useState('');
   const [orderBulkBusy, setOrderBulkBusy] = useState(false);
+  const [orderHistoryOpen, setOrderHistoryOpen] = useState(false);   // 2026-09-11 사용자 요청 — 새로고침 시 기본 접힘
+
+  // ── 도매마트(2026-09-11) — 계정 1개(rejoice888)뿐이라 오너클랜과 별도 경량 섹션 ──
+  const [domemartInfo, setDomemartInfo] = useState<DomemartAccount | null>(null);
+  const [domemartBusy, setDomemartBusy] = useState(false);
+  const [domemartMsg, setDomemartMsg] = useState('');
+
+  const loadDomemart = useCallback(() => {
+    api.get('/cpc/domemart/account-info/').then(r => {
+      setDomemartBusy(r.data.busy);
+      setDomemartInfo((r.data.accounts && r.data.accounts[0]) || null);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const initial = setTimeout(loadDomemart, 600);   // 2026-09-11 마운트시 동시요청 분산
+    const t = setInterval(loadDomemart, 20000);   // 서버부하 완화(8s→20s)
+    return () => { clearTimeout(initial); clearInterval(t); };
+  }, [loadDomemart]);
+
+  const handleDomemartRefresh = async () => {
+    setDomemartMsg('');
+    try {
+      await api.post('/cpc/domemart/account-info/');
+      setDomemartBusy(true);
+      setDomemartMsg('수집 시작됨 — 8초마다 자동 갱신됩니다.');
+    } catch (e: any) {
+      setDomemartMsg(e?.response?.data?.message || '시작 실패');
+    }
+  };
+
+  // 도매마트 송장정보(받는분휴대폰/배송사/송장번호, 최근 1개월) — 하루 5회 자동수집(09/11/15/16/18시)
+  interface DomemartInvoiceFile { id: number; login_id: string; filename: string; file_size: number; row_count: number; downloaded_at: string; }
+  const [domemartInvoiceFiles, setDomemartInvoiceFiles] = useState<DomemartInvoiceFile[]>([]);
+  const [domemartInvoiceBusy, setDomemartInvoiceBusy] = useState(false);
+  const [domemartInvoiceMsg, setDomemartInvoiceMsg] = useState('');
+  const [domemartInvoiceOpen, setDomemartInvoiceOpen] = useState(false);   // 2026-09-11 사용자 요청 — 새로고침 시 기본 접힘
+
+  const loadDomemartInvoice = useCallback(() => {
+    api.get('/cpc/domemart/invoice/').then(r => setDomemartInvoiceFiles(r.data.files || [])).catch(() => {});
+    api.get('/cpc/domemart/invoice/collect/').then(r => setDomemartInvoiceBusy(r.data.busy)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const initial = setTimeout(loadDomemartInvoice, 900);   // 2026-09-11 마운트시 동시요청 분산
+    const t = setInterval(loadDomemartInvoice, 20000);   // 서버부하 완화(8s→20s)
+    return () => { clearTimeout(initial); clearInterval(t); };
+  }, [loadDomemartInvoice]);
+
+  const handleDomemartInvoiceRun = async () => {
+    setDomemartInvoiceMsg('');
+    try {
+      await api.post('/cpc/domemart/invoice/collect/');
+      setDomemartInvoiceBusy(true);
+      setDomemartInvoiceMsg('수집 시작됨(최근 1개월, 받는분휴대폰/배송사/송장번호) — 8초마다 자동 갱신됩니다.');
+    } catch (e: any) {
+      setDomemartInvoiceMsg(e?.response?.data?.message || '시작 실패');
+    }
+  };
+
+  const handleDomemartInvoiceDownload = async (f: DomemartInvoiceFile) => {
+    try {
+      const res = await api.get(`/cpc/domemart/invoice/${f.id}/download/`, { responseType: 'blob' });
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = f.filename;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('다운로드 실패');
+    }
+  };
+
+  const orderBatchParams = useCallback((): Record<string, string> => {
+    const params: Record<string, string> = { file_type: orderFileType };
+    if (orderBatchKey !== 'latest') {
+      const [d, h] = orderBatchKey.split('|');
+      params.date = d;
+      params.hour = h;
+    }
+    return params;
+  }, [orderFileType, orderBatchKey]);
 
   const loadOrderFiles = useCallback(() => {
-    api.get('/ownerclan/order-files/').then(r => setOrderFiles(r.data.files || [])).catch(() => {});
-  }, []);
+    api.get('/ownerclan/order-files/', { params: orderBatchParams() }).then(r => {
+      setOrderFiles(r.data.files || []);
+      setOrderBatches(r.data.batches || []);
+    }).catch(() => {});
+  }, [orderBatchParams]);
 
   const loadOrderStatus = useCallback(() => {
     api.get('/ownerclan/order-files/collect/').then(r => {
@@ -292,10 +426,9 @@ export default function OwnerclanCrawlerPage() {
   }, []);
 
   useEffect(() => {
-    loadOrderFiles();
-    loadOrderStatus();
-    const t = setInterval(() => { loadOrderFiles(); loadOrderStatus(); }, 8000);
-    return () => clearInterval(t);
+    const initial = setTimeout(() => { loadOrderFiles(); loadOrderStatus(); }, 1200);   // 2026-09-11 마운트시 동시요청 분산
+    const t = setInterval(() => { loadOrderFiles(); loadOrderStatus(); }, 20000);   // 서버부하 완화(8s→20s)
+    return () => { clearTimeout(initial); clearInterval(t); };
   }, [loadOrderFiles, loadOrderStatus]);
 
   const handleOrderCollect = async () => {
@@ -334,24 +467,23 @@ export default function OwnerclanCrawlerPage() {
   };
 
   const handleOrderDownloadAll = async () => {
-    const target = orderFiles.filter(f => f.file_type === orderFileType);
-    if (target.length === 0) {
-      alert(`저장된 ${ORDER_FILE_TYPE_LABEL[orderFileType]} 파일이 없습니다. 먼저 "수집 시작"으로 자료를 모아주세요.`);
+    if (orderFiles.length === 0) {
+      alert(`저장된 ${ORDER_FILE_TYPE_LABEL[orderFileType]} 파일이 없습니다. 먼저 "전체계정 수집 시작"으로 자료를 모아주세요.`);
       return;
     }
     setOrderBulkBusy(true);
     try {
       const res = await api.get('/ownerclan/order-files/download-all/', {
-        params: { file_type: orderFileType },
+        params: orderBatchParams(),
         responseType: 'blob',
       });
       const url = URL.createObjectURL(res.data);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `오너클랜_주문${ORDER_FILE_TYPE_LABEL[orderFileType]}_${target.length}개.zip`;
+      link.download = `오너클랜_주문${ORDER_FILE_TYPE_LABEL[orderFileType]}_${orderFiles.length}계정.xlsx`;
       link.click();
       URL.revokeObjectURL(url);
-      setOrderMsg(`${ORDER_FILE_TYPE_LABEL[orderFileType]} ${target.length}개를 zip 1개로 다운로드했습니다.`);
+      setOrderMsg(`${ORDER_FILE_TYPE_LABEL[orderFileType]} ${orderFiles.length}개 계정을 엑셀 1개로 합쳐 다운로드했습니다.`);
     } catch {
       alert('전체 다운로드 실패');
     } finally {
@@ -464,114 +596,99 @@ export default function OwnerclanCrawlerPage() {
           </div>
         )}
 
-        {/* ── KPI 요약 바 ── */}
-        <div className="bg-white border border-[#e0e0e0] rounded">
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 md:px-5 py-2.5 text-[15px]">
-            <span>
-              <span className="text-[#888] mr-1">오너클랜머니 합계:</span>
-              <span className="font-bold text-[#d97706]">{totalBalance.toLocaleString()}원</span>
-            </span>
-            <Sep />
-            {ORDER_STATS_KEYS.map(k => (
-              <span key={k}>
-                <span className="text-[#888] mr-1">{k}:</span>
-                <span className="font-bold text-[#2563eb]">{orderTotals[k] ?? 0}</span>
-              </span>
-            ))}
-            <Sep />
-            {LOWEST_PRICE_COLUMNS.map(c => (
-              <span key={c.key}>
-                <span className="text-[#888] mr-1">{c.label}:</span>
-                <span className="font-bold text-[#dc2626]">{lowestTotals[c.key] ?? 0}개</span>
-              </span>
-            ))}
-          </div>
-        </div>
-
-        {/* ── 주간 인기 상품(db저장창고) ── */}
+        {/* ── 도매마트 송장정보 (2026-09-11) — 계정정보 헤더는 계정별 현황표 안 "도매마트" 버튼으로 통합돼 제거 ── */}
         <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
-          <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
-            <TrendingUp size={15} className="text-[#dc2626]" />
-            <span className="text-[15px] font-bold text-[#222]">주간 인기 상품 (db저장창고)</span>
-            <span className="text-[13px] text-[#999]">
-              매일 09:00 자동 저장 · 계정 무관 사이트 전체 랭킹
-              {weeklyFiles[0] && <> · 최신 집계기간: <span className="font-semibold text-[#333]">{weeklyPeriodLabel(weeklyFiles[0])}</span></>}
-            </span>
-            <span className="ml-auto flex items-center gap-2">
-              {weeklyMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{weeklyMsg}</span>}
-              <button onClick={() => setWeeklyHistoryOpen(o => !o)}
+          <div className="px-5 py-2 border-b border-[#f0f0f0] flex items-center gap-2 overflow-x-auto whitespace-nowrap bg-[#fafafa]">
+            <Package size={14} className="text-[#7c3aed] shrink-0" />
+            <span className="text-[14px] font-bold text-[#7c3aed] shrink-0">도매마트</span>
+            <FileSpreadsheet size={14} className="text-[#059669] shrink-0" />
+            <span className="text-[14px] font-bold text-[#333] shrink-0">송장정보</span>
+            <span className="text-[12px] text-[#999] shrink-0">휴대폰·배송사·송장번호 · 1개월 · 09/11/15/16/18시 자동</span>
+            <span className="ml-auto flex items-center gap-2 shrink-0">
+              {domemartInvoiceMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{domemartInvoiceMsg}</span>}
+              <button onClick={() => setDomemartInvoiceOpen(o => !o)}
                 className="flex items-center gap-1 px-3 py-1 text-[13px] font-semibold text-[#555] bg-[#f3f4f6] rounded hover:bg-[#e5e7eb]">
-                {weeklyHistoryOpen ? '이력 접기' : `이력 보기 (${weeklyFiles.length})`}
+                {domemartInvoiceOpen ? '이력 접기' : `이력 보기 (${domemartInvoiceFiles.length})`}
               </button>
-              <button onClick={handleWeeklyRun} disabled={weeklyBusy}
-                className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
-                style={{ background: weeklyBusy ? '#aaa' : '#dc2626' }}>
-                <PlayCircle size={13} className={weeklyBusy ? 'animate-spin' : ''} />
-                {weeklyBusy ? '수집 중…' : '수집하기'}
+              <button onClick={handleDomemartInvoiceRun} disabled={domemartInvoiceBusy}
+                className="flex items-center gap-1.5 px-3 py-1 text-[13px] font-semibold text-white rounded disabled:opacity-50"
+                style={{ background: domemartInvoiceBusy ? '#aaa' : '#059669' }}>
+                <PlayCircle size={13} className={domemartInvoiceBusy ? 'animate-spin' : ''} />
+                {domemartInvoiceBusy ? '수집 중…' : '지금 수집'}
               </button>
-              <button onClick={handleWeeklyDownloadAll} disabled={weeklyBulkBusy || weeklyFiles.length === 0}
-                title="지금까지 모인 날짜별 자료를 전부 zip 파일 하나로 묶어 한번에 받습니다"
-                className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
-                style={{ background: '#059669' }}>
+              <button onClick={() => domemartInvoiceFiles[0] && handleDomemartInvoiceDownload(domemartInvoiceFiles[0])}
+                disabled={domemartInvoiceFiles.length === 0}
+                title="가장 최근에 수집된 송장정보 파일을 바로 받습니다"
+                className="flex items-center gap-1.5 px-3 py-1 text-[13px] font-semibold text-white rounded disabled:opacity-50"
+                style={{ background: '#2563eb' }}>
                 <Download size={13} />
-                {weeklyBulkBusy ? '묶는 중…' : `날짜 전체 한번에 받기 (${weeklyFiles.length})`}
+                송장다운로드
               </button>
             </span>
           </div>
-          {weeklyHistoryOpen && (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-[15px]">
-              <thead>
-                <tr>
-                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-52">집계 기간</th>
-                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555]">파일명</th>
-                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-right font-semibold text-[#555] w-28">크기</th>
-                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-48">저장 시각</th>
-                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-center font-semibold text-[#555] w-24">다운로드</th>
-                </tr>
-              </thead>
-              <tbody>
-                {weeklyFiles.length === 0 ? (
+          {domemartInvoiceOpen && (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-[14px]">
+                <thead>
                   <tr>
-                    <td colSpan={5} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
-                      아직 저장된 파일이 없습니다
-                    </td>
+                    <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555]">파일명</th>
+                    <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-right font-semibold text-[#555] w-24">건수</th>
+                    <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-right font-semibold text-[#555] w-24">크기</th>
+                    <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-44">수집 시각</th>
+                    <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-center font-semibold text-[#555] w-24">다운로드</th>
                   </tr>
-                ) : (
-                  weeklyFiles.map((f, idx) => (
-                    <tr key={f.filename} className={idx % 2 === 1 ? 'bg-[#fafbfc]' : 'bg-white'}>
-                      <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#dc2626]">{weeklyPeriodLabel(f)}</td>
-                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#333]">{f.filename}</td>
-                      <td className="border border-[#e5e7eb] px-3 py-2 text-right tabular-nums text-[#555]">{formatBytes(f.size)}</td>
-                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#555]">{new Date(f.saved_at * 1000).toLocaleString('ko-KR')}</td>
-                      <td className="border border-[#e5e7eb] px-3 py-2 text-center">
-                        <button onClick={() => handleWeeklyDownload(f.filename)}
-                          className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#2563eb] rounded hover:bg-[#1d4ed8]">
-                          <Download size={11} /> 지금다운로드
-                        </button>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {domemartInvoiceFiles.length === 0 ? (
+                    <tr><td colSpan={5} className="border border-[#e5e7eb] px-4 py-6 text-center text-[#aaa]">아직 수집된 파일이 없습니다</td></tr>
+                  ) : (
+                    domemartInvoiceFiles.map((f, idx) => (
+                      <tr key={f.id} className={idx % 2 === 1 ? 'bg-[#fafbfc]' : 'bg-white'}>
+                        <td className="border border-[#e5e7eb] px-3 py-1.5 text-[#333]">{f.filename}</td>
+                        <td className="border border-[#e5e7eb] px-3 py-1.5 text-right tabular-nums text-[#555]">{f.row_count}</td>
+                        <td className="border border-[#e5e7eb] px-3 py-1.5 text-right tabular-nums text-[#555]">{formatBytes(f.file_size)}</td>
+                        <td className="border border-[#e5e7eb] px-3 py-1.5 text-[#555]">{new Date(f.downloaded_at).toLocaleString('ko-KR')}</td>
+                        <td className="border border-[#e5e7eb] px-3 py-1.5 text-center">
+                          <button onClick={() => handleDomemartInvoiceDownload(f)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#2563eb] rounded hover:bg-[#1d4ed8]">
+                            <Download size={11} /> 다운로드
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
-        {/* ── 주문/배송조회(orderList.php) 엑셀다운로드/플레이오토 송장 정보 ── */}
+        {/* ── 계정별 현황 통합 카드 — 주문/배송조회·주간인기상품·계정별현황표 순(2026-09-11 사용자 요청으로 재배치) ── */}
         <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
+        {/* ── 주문/배송조회(orderList.php) 엑셀다운로드/플레이오토 송장 정보 ── */}
           <div className="px-5 py-3 border-b border-[#f0f0f0] flex flex-wrap items-center gap-2">
             <FileSpreadsheet size={15} className="text-[#7c3aed]" />
-            <span className="text-[15px] font-bold text-[#222]">주문/배송조회 — 엑셀·송장 다운로드</span>
-            <span className="text-[13px] text-[#999]">전체계정 순차 수집(orderList.php) · 저장 {orderFiles.length}개</span>
+            <span className="text-[15px] font-bold text-[#222]">오너클랜 주문/배송조회 — 엑셀·송장 다운로드</span>
+            <span className="text-[13px] text-[#999]">
+              자동수집 매일 09/11/15/16/18시(송장) · 전체계정 순차 · 저장 {orderFiles.length}개
+            </span>
             <span className="ml-auto flex flex-wrap items-center gap-2">
               {orderMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{orderMsg}</span>}
-              <select value={orderFileType} onChange={e => setOrderFileType(e.target.value as 'invoice' | 'excel')}
+              <select value={orderFileType} onChange={e => { setOrderFileType(e.target.value as 'invoice' | 'excel'); setOrderBatchKey('latest'); }}
                 disabled={orderBusy}
                 className="px-2 py-1 text-[14px] font-semibold border border-[#ddd] rounded text-[#333] disabled:opacity-50">
                 <option value="invoice">플레이오토 송장 정보</option>
                 <option value="excel">엑셀다운로드</option>
+              </select>
+              <select value={orderBatchKey} onChange={e => setOrderBatchKey(e.target.value)}
+                title="자동수집 회차(하루 5번) 중 하나를 골라 그 시점 자료만 조회/다운로드"
+                className="px-2 py-1 text-[14px] font-semibold border border-[#ddd] rounded text-[#333]">
+                <option value="latest">최신(계정별 최근 1건)</option>
+                {orderBatches.map(b => (
+                  <option key={`${b.date}|${b.hour}`} value={`${b.date}|${b.hour}`}>
+                    {b.date.slice(5).replace('-', '/')} {b.hour}시 회차
+                  </option>
+                ))}
               </select>
               <button onClick={handleOrderCollect} disabled={orderBusy}
                 className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
@@ -579,15 +696,21 @@ export default function OwnerclanCrawlerPage() {
                 <PlayCircle size={13} className={orderBusy ? 'animate-spin' : ''} />
                 {orderBusy ? '수집 중…' : '전체계정 수집 시작'}
               </button>
-              <button onClick={handleOrderDownloadAll} disabled={orderBulkBusy}
-                title="선택된 구분(플레이오토 송장/엑셀) 저장 파일을 전부 zip 하나로 묶어 받습니다"
+              <button onClick={handleOrderDownloadAll} disabled={orderBulkBusy || orderFiles.length === 0}
+                title="현재 선택된 구분·회차의 저장 파일 전부를 계정별로 이어붙여 엑셀 1개로 받습니다"
                 className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
                 style={{ background: '#059669' }}>
                 <Download size={13} />
-                {orderBulkBusy ? '묶는 중…' : `전체 다운로드 (${orderFiles.filter(f => f.file_type === orderFileType).length})`}
+                {orderBulkBusy ? '합치는 중…' : `전체 다운로드 (${orderFiles.length})`}
+              </button>
+              <button onClick={() => setOrderHistoryOpen(o => !o)}
+                className="flex items-center gap-1 px-3 py-1 text-[13px] font-semibold text-[#555] bg-[#f3f4f6] rounded hover:bg-[#e5e7eb]">
+                {orderHistoryOpen ? '목록 접기' : `목록 보기 (${orderFiles.length})`}
               </button>
             </span>
           </div>
+          {orderHistoryOpen && (
+          <>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-[15px]">
               <thead>
@@ -644,16 +767,137 @@ export default function OwnerclanCrawlerPage() {
               {orderLog}
             </pre>
           )}
-        </div>
+          </>
+          )}
 
-        {/* ── 계정별 현황 테이블 ── */}
-        <div className="bg-white border border-[#e0e0e0] rounded-xl overflow-hidden">
-          <div className="px-5 py-3 border-b border-[#f0f0f0] flex items-center gap-2">
-            <BarChart3 size={15} className="text-[#2563eb]" />
-            <span className="text-[15px] font-bold text-[#222]">계정별 현황</span>
+
+        {/* ── 주간 인기 상품(db저장창고) — 계정별 현황과 한 카드로 통합(2026-09-11) ── */}
+          <div className="px-5 py-3 border-b border-t border-[#f0f0f0] flex items-center gap-2">
+            <TrendingUp size={15} className="text-[#dc2626]" />
+            <span className="text-[15px] font-bold text-[#222]">오너클랜 주간인기상품 (db저장창고)</span>
+            <span className="text-[13px] text-[#999]">
+              매일 09:00 자동 저장 · 계정 무관 사이트 전체 랭킹
+              {weeklyFiles[0] && <> · 최신 집계기간: <span className="font-semibold text-[#333]">{weeklyPeriodLabel(weeklyFiles[0])}</span></>}
+            </span>
+            <span className="ml-auto flex items-center gap-2">
+              {weeklyMsg && <span className="text-[13px] font-semibold text-[#2563eb]">{weeklyMsg}</span>}
+              <button onClick={() => setWeeklyHistoryOpen(o => !o)}
+                className="flex items-center gap-1 px-3 py-1 text-[13px] font-semibold text-[#555] bg-[#f3f4f6] rounded hover:bg-[#e5e7eb]">
+                {weeklyHistoryOpen ? '이력 접기' : `이력 보기 (${weeklyFiles.length})`}
+              </button>
+              <button onClick={handleWeeklyRun} disabled={weeklyBusy}
+                className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
+                style={{ background: weeklyBusy ? '#aaa' : '#dc2626' }}>
+                <PlayCircle size={13} className={weeklyBusy ? 'animate-spin' : ''} />
+                {weeklyBusy ? '수집 중…' : '수집하기'}
+              </button>
+              {weeklyAllYears.map(y => (
+                <button key={y} onClick={() => handleWeeklyDownloadAll(y)} disabled={weeklyBulkBusy || weeklyFiles.length === 0}
+                  title={`${y}년 전체 주차를 중복(전략상품코드) 제거해서 엑셀 1개로 받습니다`}
+                  className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
+                  style={{ background: '#059669' }}>
+                  <Download size={13} />
+                  {weeklyBulkBusy ? '합치는 중…' : `${y}년 전체 합쳐받기(중복제거)`}
+                </button>
+              ))}
+            </span>
+          </div>
+          {weeklyHistoryOpen && (
+          <>
+          <div className="px-5 py-2.5 border-b border-[#f0f0f0] bg-[#fafafa] flex items-center gap-2 flex-wrap text-[13px]">
+            <span className="font-semibold text-[#555]">기간별조회</span>
+            <input type="date" value={weeklyRangeFrom} onChange={e => setWeeklyRangeFrom(e.target.value)}
+              className="border border-[#ddd] rounded px-2 py-1" />
+            <span className="text-[#999]">~</span>
+            <input type="date" value={weeklyRangeTo} onChange={e => setWeeklyRangeTo(e.target.value)}
+              className="border border-[#ddd] rounded px-2 py-1" />
+            {(weeklyRangeFrom || weeklyRangeTo) && (
+              <button onClick={() => { setWeeklyRangeFrom(''); setWeeklyRangeTo(''); }}
+                className="text-[#2563eb] font-semibold hover:underline">초기화</button>
+            )}
+            <span className="text-[#999]">
+              {weeklyRangeActive
+                ? `— 선택한 범위와 집계기간이 겹치는 자료만 아래 표시 (${weeklyFilesFiltered.length}/${weeklyFiles.length})`
+                : `— 최근 5개만 표시 중 (전체 ${weeklyFiles.length}개) — 이전 자료는 위 날짜 범위로 조회`}
+            </span>
           </div>
           <div className="overflow-x-auto">
-            <table className="border-collapse text-[15px]" style={{ tableLayout: 'fixed', width: colWidths.reduce((a, b) => a + b, 0) }}>
+            <table className="w-full border-collapse text-[15px]">
+              <thead>
+                <tr>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-52">집계 기간</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555]">파일명</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-right font-semibold text-[#555] w-28">크기</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-left font-semibold text-[#555] w-48">저장 시각</th>
+                  <th className="border border-[#dde1e6] bg-[#f3f4f6] px-3 py-2 text-center font-semibold text-[#555] w-52">다운로드</th>
+                </tr>
+              </thead>
+              <tbody>
+                {weeklyFilesFiltered.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">
+                      {weeklyFiles.length === 0 ? '아직 저장된 파일이 없습니다' : '선택한 기간에 해당하는 자료가 없습니다'}
+                    </td>
+                  </tr>
+                ) : (
+                  weeklyFilesFiltered.map((f, idx) => (
+                    <tr key={f.filename} className={idx % 2 === 1 ? 'bg-[#fafbfc]' : 'bg-white'}>
+                      <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#dc2626]">{weeklyPeriodLabel(f)}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#333]">{f.filename}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-right tabular-nums text-[#555]">{formatBytes(f.size)}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-[#555]">{new Date(f.saved_at * 1000).toLocaleString('ko-KR')}</td>
+                      <td className="border border-[#e5e7eb] px-3 py-2 text-center">
+                        <div className="flex items-center justify-center gap-1 flex-wrap">
+                          <button onClick={() => handleWeeklyDownload(f.filename)}
+                            title="올해/작년 자료를 시트 2장으로 합쳐서 받기"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#2563eb] rounded hover:bg-[#1d4ed8]">
+                            <Download size={11} /> 합쳐받기
+                          </button>
+                          {f.years.map(y => (
+                            <button key={y} onClick={() => handleWeeklyDownloadYear(f.filename, y)}
+                              title={`${y}년 자료만 따로 받기`}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[13px] font-semibold text-white bg-[#7c3aed] rounded hover:bg-[#6d28d9]">
+                              {y}만
+                            </button>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          </>
+          )}
+
+          <div className="px-5 py-2.5 border-b border-t border-[#f0f0f0] flex flex-wrap items-center gap-x-4 gap-y-1 text-[14px]">
+            <span className="flex items-center gap-2 shrink-0">
+              <BarChart3 size={15} className="text-[#2563eb]" />
+              <span className="text-[15px] font-bold text-[#222]">계정별 현황</span>
+            </span>
+            <Sep />
+            <span>
+              <span className="text-[#888] mr-1">오너클랜머니 합계:</span>
+              <span className="font-bold text-[#d97706]">{totalBalance.toLocaleString()}원</span>
+            </span>
+            <Sep />
+            {ORDER_STATS_KEYS.map(k => (
+              <span key={k}>
+                <span className="text-[#888] mr-1">{k}:</span>
+                <span className="font-bold text-[#2563eb]">{orderTotals[k] ?? 0}</span>
+              </span>
+            ))}
+            <Sep />
+            {LOWEST_PRICE_COLUMNS.map(c => (
+              <span key={c.key}>
+                <span className="text-[#888] mr-1">{c.label}:</span>
+                <span className="font-bold text-[#dc2626]">{lowestTotals[c.key] ?? 0}개</span>
+              </span>
+            ))}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="border-collapse text-[15px] w-full" style={{ tableLayout: 'fixed', minWidth: colWidths.reduce((a, b) => a + b, 0) }}>
               <colgroup>
                 {colWidths.map((w, i) => <col key={COLUMNS[i].key} style={{ width: w }} />)}
               </colgroup>
@@ -668,6 +912,46 @@ export default function OwnerclanCrawlerPage() {
                 </tr>
               </thead>
               <tbody>
+                {/* 도매마트(rejoice888/로하스) — 오너클랜과 별도 플랫폼이라 잔액합계엔 안 넣고,
+                    잔액순 정렬에도 안 섞이게 맨 위에 고정(2026-09-11 사용자 요청) */}
+                {domemartInfo && (
+                  <tr className="bg-[#f5f3ff]">
+                    <td className="border border-[#e5e7eb] px-3 py-2 text-center text-[#7c3aed] font-bold align-top">📌</td>
+                    <td className="border border-[#e5e7eb] px-3 py-2 font-semibold text-[#7c3aed] align-top truncate">
+                      {domemartInfo.login_id}(로하스)<br /><span className="text-[11px] text-[#999] font-normal">도매마트</span>
+                    </td>
+                    <td className="border border-[#e5e7eb] px-3 py-2 text-right font-bold text-[#222] align-top tabular-nums">
+                      {domemartInfo.balance.toLocaleString('ko-KR')}
+                    </td>
+                    {ORDER_STATS_KEYS.map(k => (
+                      <td key={k} className="border border-[#e5e7eb] px-3 py-2 text-right align-top tabular-nums text-[#333]">
+                        {domemartInfo.order_stats?.[k] ?? <span className="text-[#ccc]">-</span>}
+                      </td>
+                    ))}
+                    {LOWEST_PRICE_COLUMNS.map(c => (
+                      <td key={c.key} className="border border-[#e5e7eb] px-3 py-2 text-right align-top text-[#ccc]">-</td>
+                    ))}
+                    <td className="border border-[#e5e7eb] px-3 py-2 align-top">
+                      <div className="flex flex-col gap-1">
+                        <button onClick={handleDomemartRefresh} disabled={domemartBusy}
+                          title="예치금·주문현황(8개 항목)만 새로고침합니다 — 엑셀 파일은 만들지 않습니다"
+                          className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-bold text-white rounded disabled:opacity-50"
+                          style={{ background: domemartBusy ? '#aaa' : '#7c3aed' }}>
+                          <RefreshCw size={13} className={domemartBusy ? 'animate-spin' : ''} />
+                          {domemartBusy ? '수집 중…' : '정보 새로고침'}
+                        </button>
+                        <button onClick={() => domemartInvoiceFiles[0] && handleDomemartInvoiceDownload(domemartInvoiceFiles[0])}
+                          disabled={domemartInvoiceFiles.length === 0}
+                          title="송장정보(받는분휴대폰/배송사/송장번호) 엑셀 파일을 바로 받습니다"
+                          className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-[13px] font-bold text-white rounded disabled:opacity-50"
+                          style={{ background: '#2563eb' }}>
+                          <FileSpreadsheet size={13} />
+                          송장다운로드
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
                 {sortedAccounts.length === 0 ? (
                   <tr>
                     <td colSpan={COLUMNS.length} className="border border-[#e5e7eb] px-4 py-10 text-center text-[#aaa]">

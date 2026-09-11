@@ -25,4 +25,8 @@ fi
 # 동시실행 방지(락)는 Python preflight(eleven_block_guard, 통합 락)가 관리.
 # --scheduled: 다른 크롤 실행 중이면 건너뛰지 않고 락이 풀릴 때까지 대기 후 반드시 실행, 문제 시 텔레그램 알림.
 cd /home/rejoice888/Avengers/backend
+# 정규크론 우선선점(2026-09-11 사용자 요청): 전략설정가드 등 부가작업이 락을 쥐고 있으면
+# 강제종료 후 먼저 실행 — --scheduled의 대기도 안전망으로 남겨둠(선점 실패해도 결국 실행됨).
+/usr/bin/python3 manage.py st11_priority_preempt >> /tmp/cron_11st_cost.log 2>&1
 /usr/bin/python3 manage.py crawl_11st_cost --scheduled --focused >> /tmp/cron_11st_cost.log 2>&1
+/usr/bin/python3 manage.py st11_resume_preempted >> /tmp/cron_11st_cost.log 2>&1

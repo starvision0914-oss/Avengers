@@ -90,6 +90,17 @@ def set_ad_lock(customer_id: str, access_license: str, secret_key: str, ncc_ad_i
     return r.ok
 
 
+def set_adgroup_bid(customer_id: str, access_license: str, secret_key: str,
+                     ncc_adgroup_id: str, bid_amt: int) -> bool:
+    """광고그룹(adgroup) 단위 입찰가(bidAmt) 변경. 네이버 쇼핑검색광고는 키워드가 아니라
+    광고그룹 단위로 입찰가가 매겨진다(소재는 그룹 bidAmt를 그대로 따름, 2026-09-11 실측
+    확인). set_ad_lock과 동일하게 부분수정 시 fields 쿼리파라미터 필수(안 붙이면 400)."""
+    path = f"/ncc/adgroups/{ncc_adgroup_id}"
+    r = _put(customer_id, access_license, secret_key, path,
+             {"nccAdgroupId": ncc_adgroup_id, "bidAmt": bid_amt}, params={"fields": "bidAmt"})
+    return r.ok
+
+
 def fetch_campaigns(customer_id: str, access_license: str, secret_key: str) -> list:
     r = _get(customer_id, access_license, secret_key, "/ncc/campaigns")
     return r.json() or [] if r.ok else []

@@ -5154,6 +5154,102 @@ class LCodeStatusView(views.APIView):
         })
 
 
+DOMEMART_INFO_LOCKFILE = '/tmp/avengers_domemart_info.lock'
+
+
+class DomemartAccountInfoView(views.APIView):
+    """도매마트 예치금+주문상태 현황 — 오너클랜 OwnerclanApiCrawlView와 동일 패턴(2026-09-11).
+    계정이 rejoice888 1개뿐이라 목록도 항상 0~1건."""
+    def get(self, request):
+        from apps.cpc.models import DomemartAccountInfo
+        pid, busy = _crawl_lock_busy(DOMEMART_INFO_LOCKFILE)
+        log_tail = ''
+        try:
+            with open('/tmp/cron_domemart_info.log') as f:
+                log_tail = ''.join(f.readlines()[-60:])
+        except FileNotFoundError:
+            pass
+        accounts = list(DomemartAccountInfo.objects.values(
+            'login_id', 'balance', 'order_stats', 'info_synced_at'))
+        return Response({'busy': busy, 'log': log_tail, 'accounts': accounts})
+
+    def post(self, request):
+        import subprocess
+        pid, busy = _crawl_lock_busy(DOMEMART_INFO_LOCKFILE)
+        if busy:
+            return Response({'status': 'busy', 'message': f'이미 조회 중입니다 (PID={pid}).'}, status=409)
+        script = ('cd /home/rejoice888/Avengers/backend && '
+                   'echo $$ > ' + DOMEMART_INFO_LOCKFILE + ' && '
+                   '/usr/bin/python3 -u manage.py crawl_domemart_account_info '
+                   '>> /tmp/cron_domemart_info.log 2>&1; rm -f ' + DOMEMART_INFO_LOCKFILE)
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+        return Response({'status': 'started'})
+
+
+DOMEMART_INVOICE_LOCKFILE = '/tmp/avengers_domemart_invoice.lock'
+
+
+class DomemartInvoiceCollectView(views.APIView):
+    """도매마트 송장정보(받는분휴대폰/배송사/송장번호, 최근 1개월) 다운로드 — 백그라운드 실행.
+    /owner 대시보드 도매마트 섹션에서 사용(오너클랜 OwnerclanOrderFileCollectView와 동일 패턴)."""
+    LOG_FILE = '/tmp/cron_domemart_invoice.log'
+
+    def get(self, request):
+        pid, busy = _crawl_lock_busy(DOMEMART_INVOICE_LOCKFILE)
+        log_tail = ''
+        try:
+            with open(self.LOG_FILE, encoding='utf-8', errors='ignore') as f:
+                log_tail = ''.join(f.readlines()[-60:])
+        except FileNotFoundError:
+            pass
+        return Response({'busy': busy, 'log': log_tail})
+
+    def post(self, request):
+        import subprocess
+        pid, busy = _crawl_lock_busy(DOMEMART_INVOICE_LOCKFILE)
+        if busy:
+            return Response({'status': 'busy', 'message': f'이미 수집 중입니다 (PID={pid}).'}, status=409)
+        script = ('cd /home/rejoice888/Avengers/backend && '
+                   'echo $$ > ' + DOMEMART_INVOICE_LOCKFILE + ' && '
+                   '/usr/bin/python3 -u manage.py crawl_domemart_invoice '
+                   f'>> {self.LOG_FILE} 2>&1; rm -f ' + DOMEMART_INVOICE_LOCKFILE)
+        try:
+            subprocess.Popen(['bash', '-c', script], start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            return Response({'status': 'error', 'error': str(e)}, status=500)
+        return Response({'status': 'started'})
+
+
+class DomemartInvoiceListView(views.APIView):
+    """저장된 도매마트 송장파일 목록."""
+    def get(self, request):
+        from apps.cpc.models import DomemartOrderFile
+        files = [{'id': f.id, 'login_id': f.login_id, 'filename': f.filename,
+                  'file_size': f.file_size, 'row_count': f.row_count,
+                  'downloaded_at': f.downloaded_at} for f in DomemartOrderFile.objects.all()[:30]]
+        return Response({'files': files})
+
+
+class DomemartInvoiceDownloadView(views.APIView):
+    """도매마트 송장파일 개별 다운로드."""
+    def get(self, request, pk):
+        import os as _os
+        from django.http import FileResponse, Http404
+        from apps.cpc.models import DomemartOrderFile
+        try:
+            rec = DomemartOrderFile.objects.get(pk=pk)
+        except DomemartOrderFile.DoesNotExist:
+            raise Http404()
+        if not _os.path.isfile(rec.file_path):
+            raise Http404()
+        return FileResponse(open(rec.file_path, 'rb'), as_attachment=True, filename=rec.filename)
+
+
 class MyProductsAllView(views.APIView):
     """11번가+지마켓/옥션+쿠팡+스마트스토어 나의 상품 통합 조회 — 플랫폼 구분 없이 하나의 그리드로 병합.
     스키마가 다른 여러 테이블 사이의 진짜 SQL UNION은 불가하므로, 각 소스에서 정렬된 상위

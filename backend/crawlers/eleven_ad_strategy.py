@@ -578,35 +578,62 @@ def run_account(driver, run_id, eid, campaigns, on_start, on_end, weekdays, exec
                            on_start, on_end, weekdays, execute)
 
 
+def _read_campaign_rows(driver):
+    """캠페인 목록 테이블에서 (이름, 총비용) 쌍을 행 단위로 읽는다.
+    테이블 컬럼(2026-09-11 실측, MUI): td[2]=캠페인명, td[9]=총 비용(콤마 포맷, 누적).
+    이름만 있고 비용 파싱이 실패한 행은 비용 None으로 채워 최소한 이름 목록은 보존."""
+    rows = driver.find_elements(By.XPATH, "//*[@id='root']//table/tbody/tr")
+    out = []
+    for r in rows:
+        try:
+            name_el = r.find_elements(By.XPATH, './td[2]//a')
+            nm = (name_el[0].text.strip() if name_el else r.find_elements(By.XPATH, './td[2]')[0].text.strip())
+        except Exception:
+            continue
+        if not nm:
+            continue
+        cost = None
+        try:
+            cost_txt = r.find_elements(By.XPATH, './td[9]')[0].text.strip().replace(',', '')
+            cost = int(cost_txt) if cost_txt.lstrip('-').isdigit() else None
+        except Exception:
+            cost = None
+        out.append((nm, cost))
+    return out
+
+
 def list_campaigns(eid, run_id=None):
-    """대표 계정 1개로 로그인 → 광고관리 → 캠페인 이름(최대100) 읽어 로그(status='CAMP')로 적재.
-    동시 로그인 금지(IP차단 방지) — 단일 계정만. 결과는 St11AdofficeCampaign에도 최소 upsert."""
+    """대표 계정 1개로 로그인 → 광고관리 → 캠페인 이름(최대100)+총비용 읽어 로그(status='CAMP')로 적재.
+    동시 로그인 금지(IP차단 방지) — 단일 계정만. St11AdofficeCampaign에 total_cost까지 upsert하고,
+    직전 저장값 대비 증가한 캠페인만 담은 spiked_campaigns를 반환한다(2026-09-11: 계정 전체가 아니라
+    실제로 비용이 늘어난 캠페인만 전략설정 대상으로 좁히기 위함 — 사용자 요청, rejoice666 사고 계기)."""
     import time as _t
     if not run_id:
         run_id = _t.strftime('%Y%m%d%H%M%S')
     _log(run_id, 'START', f'캠페인 목록 조회 — {eid}')
     ok, reason = guard.preflight('11번가캠페인조회', wait=True, wait_timeout=300, platform='11st')
+    spiked_campaigns = []
     if not ok:
         _log(run_id, 'ERROR', f'전역락/접속 불가 — {reason}', eid)
-        _log(run_id, 'DONE', '중단'); return run_id
+        _log(run_id, 'DONE', '중단'); return run_id, spiked_campaigns
     account = CrawlerAccount.objects.filter(platform='11st', login_id=eid).first()
     driver = None
     try:
         driver = create_driver(kill_existing=False)
         sn = _login(driver, account) if account else False
         if not sn:
-            _log(run_id, 'ERROR', '로그인 실패', eid); _log(run_id, 'DONE', '중단'); return run_id
+            _log(run_id, 'ERROR', '로그인 실패', eid); _log(run_id, 'DONE', '중단'); return run_id, spiked_campaigns
         driver.implicitly_wait(0); driver.set_page_load_timeout(40)
         _drain_alerts(driver, login_id=eid)
         driver.get(ADOFFICE); time.sleep(6); close_all_popups(driver)
         click_focus_menu(driver)
         if not open_ad_management(driver):
-            _log(run_id, 'ERROR', '광고관리 진입 실패', eid); _log(run_id, 'DONE', '중단'); return run_id
+            _log(run_id, 'ERROR', '광고관리 진입 실패', eid); _log(run_id, 'DONE', '중단'); return run_id, spiked_campaigns
         set_page_size_100(driver, run_id, eid)
-        links = find_campaign_links(driver)
+        rows = _read_campaign_rows(driver)
         # 0개면 곧바로 포기하지 않고 재조회(신규 캠페인 생성 직후 11번가 서버 반영 지연 대응 — 2026-08-12 실측).
         retry = 0
-        while not links and retry < 2:
+        while not rows and retry < 2:
             retry += 1
             _log(run_id, 'INFO', f'캠페인 0개 — 반영 지연 의심, {8}초 후 재조회({retry}/2)', eid)
             time.sleep(8)
@@ -615,23 +642,36 @@ def list_campaigns(eid, run_id=None):
             if not open_ad_management(driver):
                 continue
             set_page_size_100(driver, run_id, eid)
-            links = find_campaign_links(driver)
-        names = []
-        for nm, _el in links:
-            if nm and nm not in names:
-                names.append(nm)
-        names = names[:100]
+            rows = _read_campaign_rows(driver)
+        seen = set()
+        dedup = []
+        for nm, cost in rows:
+            if nm in seen:
+                continue
+            seen.add(nm); dedup.append((nm, cost))
+        dedup = dedup[:100]
+        names = [nm for nm, _c in dedup]
         _log(run_id, 'INFO', f'캠페인 {len(names)}개', eid)
         from apps.cpc.models import St11AdofficeCampaign
         from django.utils import timezone as _tz
-        for nm in names:
+        for nm, cost in dedup:
             _log(run_id, 'CAMP', nm, eid)
-            if not St11AdofficeCampaign.objects.filter(eleven_id=eid, campaign_name=nm).exists():
-                try:
+            rec = St11AdofficeCampaign.objects.filter(eleven_id=eid, campaign_name=nm).first()
+            prev_cost = rec.total_cost if rec else None
+            if cost is not None and prev_cost is not None and cost > prev_cost:
+                spiked_campaigns.append(nm)
+                _log(run_id, 'INFO', f"'{nm}' 총비용 {prev_cost:,}→{cost:,} (+{cost - prev_cost:,}) — 캠페인 단위 증가", eid, nm)
+            try:
+                if rec:
+                    if cost is not None:
+                        rec.total_cost = cost
+                        rec.collected_at = _tz.now()
+                        rec.save(update_fields=['total_cost', 'collected_at'])
+                else:
                     St11AdofficeCampaign.objects.create(
-                        eleven_id=eid, campaign_name=nm, collected_at=_tz.now())
-                except Exception:
-                    pass
+                        eleven_id=eid, campaign_name=nm, total_cost=cost, collected_at=_tz.now())
+            except Exception:
+                pass
     except Exception as e:
         _log(run_id, 'ERROR', f'조회 오류: {e}', eid)
     finally:
@@ -642,7 +682,7 @@ def list_campaigns(eid, run_id=None):
         try: stop_display()
         except Exception: pass
     _log(run_id, 'DONE', '캠페인 조회 완료')
-    return run_id
+    return run_id, spiked_campaigns
 
 
 def order_accounts(accounts):

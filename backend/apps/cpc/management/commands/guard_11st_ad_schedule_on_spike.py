@@ -28,6 +28,11 @@ class Command(BaseCommand):
         parser.add_argument('--on-end', type=int, default=16)
         parser.add_argument('--dry-run', action='store_true', help='대상 계정/캠페인만 찾고 실제 적용 없음')
         parser.add_argument('--accounts', nargs='*', help='자동감지 대신 특정 계정만 지정(테스트용)')
+        parser.add_argument('--cooldown-hours', type=int, default=6,
+                             help='이미 적용된(sched.accounts 포함) 계정은 마지막 적용 후 이 시간(기본 6h) '
+                                  '이내면 재적용을 건너뜀 — CPC가 늘어도 이미 스케줄이 걸려있으면 정상 동작이므로 '
+                                  '매시간 같은 계정을 처음부터 전부(수백개 그룹) 재적용하는 낭비를 막는다 '
+                                  '(2026-09-11: rejoice666 1건이 3시간36분째 안 끝나 다른 11번가 크롤을 막은 사고 이후 도입).')
 
     def handle(self, *args, **o):
         from datetime import timedelta
@@ -59,18 +64,36 @@ class Command(BaseCommand):
         if not spiking:
             self.stdout.write('증가 감지된 계정 없음 — 종료')
             return
-        self.stdout.write(f'대상 계정({len(spiking)}): {", ".join(spiking)}')
-        if o['dry_run']:
-            return
 
         sched = St11AdStrategySchedule.objects.order_by('id').first()
         if not sched:
             sched = St11AdStrategySchedule(name='스파이크 가드(자동)', accounts=[], campaigns=[],
                                            on_start=on_start, on_end=on_end, weekdays=weekdays, enabled=False)
 
+        # 쿨다운(2026-09-11 도입): 이미 스케줄이 걸려있는 계정(sched.accounts)은 최근에 적용된 지
+        # cooldown_hours 이내면 건너뛴다. CPC가 계속 늘어도 이미 8~16시 전략이 걸려있으면 정상 동작이라
+        # 매시간 처음부터 재적용(계정당 수백 개 그룹, 각 15~20초)할 필요가 없다 — rejoice666 1건이
+        # 3시간36분째 안 끝나 다른 11번가 크롤(광고비 수집 포함)까지 락으로 막은 사고 이후 추가.
+        if not o.get('accounts'):
+            cooldown = timedelta(hours=o['cooldown_hours'])
+            already = set(sched.accounts or [])
+            if sched.last_applied_at and (timezone.localtime() - sched.last_applied_at) < cooldown:
+                skipped = [e for e in spiking if e in already]
+                if skipped:
+                    self.stdout.write(
+                        f'쿨다운 스킵({o["cooldown_hours"]}h 이내 이미 적용됨): {", ".join(skipped)}')
+                spiking = [e for e in spiking if e not in already]
+
+        if not spiking:
+            self.stdout.write('쿨다운으로 전부 스킵 — 종료')
+            return
+        self.stdout.write(f'대상 계정({len(spiking)}): {", ".join(spiking)}')
+        if o['dry_run']:
+            return
+
         applied, results = [], []
         for eid in spiking:
-            run_id = list_campaigns(eid)
+            run_id, spiked_campaigns = list_campaigns(eid)
             # St11AdofficeCampaign은 upsert 전용(이미 있는 이름은 collected_at을 안 건드림)이라
             # collected_at으로 "이번 조회분만" 걸러내면 재실행시 0건이 되는 버그가 있었다(2026-09-07).
             # 대신 이번 run_id의 St11AdStrategyLog(status='CAMP') 기록에서 이름을 직접 뽑는다 —
@@ -83,10 +106,19 @@ class Command(BaseCommand):
                 self.stdout.write(f'[{eid}] 캠페인 조회 실패/없음 — 건너뜀 (run_id={run_id})')
                 results.append(f'{eid}: 캠페인 없음')
                 continue
-            self.stdout.write(f'[{eid}] 캠페인 {len(names)}개 → {on_start}~{on_end}시 전략 적용')
-            run_strategy([eid], names, on_start=on_start, on_end=on_end, weekdays=weekdays,
+            # 2026-09-11(사용자 요청): 계정 전체가 아니라 실제로 총비용이 늘어난 캠페인만 좁혀서 적용
+            # — list_campaigns()가 St11AdofficeCampaign의 직전 저장값과 비교해 찾아준다.
+            # 처음 보는 캠페인(직전값 없음)이라 비교 불가한 경우는 안전하게 전체 캠페인으로 폴백.
+            targets = [n for n in names if n in spiked_campaigns] or names
+            narrowed = len(targets) < len(names)
+            self.stdout.write(
+                f'[{eid}] 캠페인 {len(names)}개 중 {len(targets)}개'
+                + (' (증가 캠페인만 좁힘)' if narrowed else ' (전체 — 직전값 없어 비교불가/전부증가)')
+                + f' → {on_start}~{on_end}시 전략 적용')
+            run_strategy([eid], targets, on_start=on_start, on_end=on_end, weekdays=weekdays,
                         execute=True, source='spike_guard')
-            applied.append((eid, names))
+            applied.append((eid, targets))
+            names = targets
             results.append(f'{eid}: 캠페인 {len(names)}개 적용')
 
             merged_accounts = set(sched.accounts or []) | {eid}

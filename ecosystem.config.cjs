@@ -17,8 +17,12 @@ module.exports = {
     {
       name: 'avengers-frontend',
       cwd: '/home/rejoice888/Avengers/frontend',
+      // 2026-09-11: dev 서버(수백개 미번들 모듈 개별요청)가 서버 과부하 시 체감 로딩을 크게
+      // 늦춰서, 프로덕션 빌드(dist/)를 vite preview로 서빙하도록 전환(사용자 선택).
+      // 코드 수정 후엔 `cd frontend && npx vite build && pm2 restart avengers-frontend`
+      // (또는 scripts/rebuild_frontend.sh) 필요 — dev 모드처럼 저장 즉시 반영되지 않음.
       script: 'node_modules/.bin/vite',
-      args: '--host 0.0.0.0 --port 5173',
+      args: 'preview --host 0.0.0.0 --port 5173',
     },
     {
       name: 'avengers-sms-poller',

@@ -1069,3 +1069,42 @@ class GmarketSalePeriodStatus(models.Model):
 
     def __str__(self):
         return f'{self.account_id}:{self.product_no}:{self.disp_end_date}'
+
+
+class DomemartAccountInfo(models.Model):
+    """도매마트(domemart.co.kr) 계정 현황 — 오너클랜 OwnerclanApiAccount(balance/order_stats)와
+    동일 패턴(2026-09-11). 도매마트는 현재 계정이 rejoice888 1개뿐(login_id 하드코딩,
+    crawlers/domemart_crawler.py) — 여러 계정 관리는 필요 시 나중에 확장.
+    order_stats 키는 오너클랜 화면과 맞춘 8종이며, 도매마트 실제 주문상태(ct_flag_banpum)를
+    아래처럼 매핑해 채운다(도매마트가 더 세분화돼 있어 근접 매핑, crawl_account_info() 참고):
+      배송중=배송중(15) · 결제완료=입금확인(12) · 배송완료=배송완료(16) · 배송준비=배송준비중(13)
+      주문취소=취소완료(39) · 취소요청=취소요청접수(31)
+      반품/교환 요청=반품요청접수(41)+교환요청접수(51) · 반품/교환 진행=반품보류대기(42)"""
+    login_id = models.CharField(max_length=50, unique=True, default='rejoice888')
+    balance = models.BigIntegerField(default=0)   # 적립금(예치금) 잔액
+    order_stats = models.JSONField(default=dict, blank=True)
+    info_synced_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'domemart_account_info'
+
+    def __str__(self):
+        return f'{self.login_id}:{self.balance}'
+
+
+class DomemartOrderFile(models.Model):
+    """도매마트 주문/배송조회(od_list) 송장정보(받는분휴대폰·배송사·송장번호) 다운로드 결과
+    (2026-09-11, 사용자 지시). 오너클랜 OwnerclanOrderFile과 동일하게 실물 파일은
+    media/domemart_order_files/에 저장, 여기엔 메타만 보관.
+    원본 엑셀(도매마트 '항목전체' 양식, 42컬럼)에서 S열(받는분휴대폰)·AC열(배송사)·AD열(송장번호)
+    3개만 뽑아 저장한다 — 원본 그대로가 아니라 사용자가 요청한 3컬럼짜리 축소본."""
+    login_id = models.CharField(max_length=50, default='rejoice888')
+    filename = models.CharField(max_length=255)
+    file_path = models.CharField(max_length=500)
+    file_size = models.IntegerField(default=0)
+    row_count = models.IntegerField(default=0)
+    downloaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'domemart_order_file'
+        ordering = ['-downloaded_at']

@@ -6,6 +6,9 @@
 cd /home/rejoice888/Avengers/backend
 YEST=$(date -d "yesterday" +%F)
 DFROM=$(date -d "7 days ago" +%F)
+# 정규크론 우선선점(2026-09-11 사용자 요청) — 전략설정가드 등이 락을 쥐고 있어도 먼저 실행.
+/usr/bin/python3 manage.py st11_priority_preempt >> /tmp/cron_11st_product_daily.log 2>&1
 # 통합: 계정당 adoffice 로그인 1회로 상품별 ROAS + 기간별 보고서(구글시트)까지 한 번에 수집.
 # (--with-gsheet: 같은 세션에서 기간별 보고서 다운로드 후 계정별 구글시트 업로드. 매월 1일=전월/그외=당월 자동)
 /usr/bin/python3 manage.py crawl_11st_product_daily --from "$DFROM" --to "$YEST" --with-gsheet --focused >> /tmp/cron_11st_product_daily.log 2>&1
+/usr/bin/python3 manage.py st11_resume_preempted >> /tmp/cron_11st_product_daily.log 2>&1

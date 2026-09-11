@@ -140,5 +140,7 @@
 - [스마트스토어 계정목록 정렬](project_smartstore_sort_order.md) — 매출desc→등록상품수desc 고정
 - [11번가 광고비 스파이크가드](project_11st_ad_spike_schedule_guard.md) — 증가감지시 8-16시 전략 자동적용 신설
 - [11번가 AI캠페인 그룹명버그](project_11st_ad_strategy_ai_campaign_groupname.md) — 전체- 미사용시 그룹0개 버그 수정, 크론 미등록 발견
+- [네이버광고 계정명 매핑함정](reference_naver_ad_account_mapping.md) — 별칭은 naver_ad_login_id 필드, login_id 아님
+- [11번가 판매자코드수정 원산지함정](project_11st_seller_code_edit_origin_trap.md) — hulk API PUT시 원재료05+원산지코드 조합 400, 미해결
 - [지마켓 대시보드 구매가 항목 추가](project_gmarket_dashboard_cost_column.md) — revenue-profit 역산, 11번가와 동일방식
 - [스마트스토어 신규계정 API키 누락](project_smartstore_new_accounts_no_api_key.md) — 원인=이용정지, 정지해제후 처리보류

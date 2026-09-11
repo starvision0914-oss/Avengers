@@ -56,6 +56,37 @@ def _zip_to_single_xlsx(zip_path, zip_filename):
         return buf, f'{base_name}.xlsx'
 
 
+def _zip_extract_year_xlsx(zip_path, zip_filename, year):
+    """zip 안에서 파일명의 (YYYY) 표기로 특정 연도 하나만 골라 그대로 꺼낸다(병합 안 함).
+    2026-09-11 사용자 요청 — 연도별로 따로 받고 싶을 때. 해당 연도 파일이 없으면 (None, None)."""
+    import re
+    import zipfile
+
+    with zipfile.ZipFile(zip_path) as zf:
+        xlsx_members = [n for n in zf.namelist() if n.lower().endswith('.xlsx')]
+        for member in xlsx_members:
+            m = re.search(r'\((\d{4})\)', member)
+            if m and m.group(1) == str(year):
+                base_name = os.path.splitext(zip_filename)[0]
+                data = zf.read(member)
+                return io.BytesIO(data), f'{base_name}_{year}.xlsx'
+    return None, None
+
+
+def _zip_years(zip_path):
+    """zip 안 엑셀 파일명의 (YYYY) 표기를 전부 모아 정렬 리스트로(최신 먼저). 2026-09-11 신설
+    — 프론트가 연도별 다운로드 버튼을 몇 개 보여줄지 판단하는 용도."""
+    import re
+    import zipfile
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            years = {m.group(1) for n in zf.namelist()
+                     if (m := re.search(r'\((\d{4})\)', n))}
+    except Exception:
+        return []
+    return sorted(years, reverse=True)
+
+
 def _parse_weekly_period(zip_path):
     """zip 안의 엑셀 파일명(best_prod_MMDD_MMDD(YYYY).xlsx)에서 실제 집계기간을 뽑는다.
     2개(올해/작년) 있으면 최신연도 쪽 기준. 이름이 패턴과 안 맞으면 None(호출쪽에서 저장일로 폴백)."""
@@ -486,8 +517,8 @@ class OwnerclanWeeklyPopularView(APIView):
                 path = os.path.join(storage_dir, name)
                 if os.path.isfile(path):
                     stat = os.stat(path)
-                    period_start, period_end = (
-                        _parse_weekly_period(path) if name.lower().endswith('.zip') else (None, None))
+                    is_zip = name.lower().endswith('.zip')
+                    period_start, period_end = (_parse_weekly_period(path) if is_zip else (None, None))
                     files.append({
                         'filename': name,
                         'size': stat.st_size,
@@ -495,6 +526,7 @@ class OwnerclanWeeklyPopularView(APIView):
                         # 실제 집계기간 — zip 내 엑셀명에서 파싱, 실패 시 None(프론트가 저장일로 표시)
                         'period_start': period_start,
                         'period_end': period_end,
+                        'years': _zip_years(path) if is_zip else [],
                     })
         files.sort(key=lambda f: f['saved_at'], reverse=True)
 
@@ -528,7 +560,9 @@ class OwnerclanWeeklyPopularView(APIView):
 
 
 class OwnerclanWeeklyPopularDownloadView(APIView):
-    """날짜별 원본(.zip) 다운로드. ?as=xlsx 를 붙이면 zip 안의 엑셀만 꺼내서(2개면 시트 2장으로 합쳐서) 바로 내려줌."""
+    """날짜별 원본(.zip) 다운로드. ?as=xlsx 를 붙이면 zip 안의 엑셀만 꺼내서(2개면 시트 2장으로 합쳐서)
+    바로 내려줌. ?year=2025 또는 2026 을 추가로 붙이면 그 연도(zip 내부 파일명 (YYYY) 표기 기준)
+    파일 하나만 병합 없이 내려줌(2026-09-11 사용자 요청 — 연도별로 따로 받기)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -545,6 +579,13 @@ class OwnerclanWeeklyPopularDownloadView(APIView):
         if not os.path.isfile(path):
             raise Http404()
 
+        year = request.query_params.get('year')
+        if year and filename.lower().endswith('.zip'):
+            xlsx_buf, xlsx_name = _zip_extract_year_xlsx(path, filename, year)
+            if xlsx_buf is not None:
+                return FileResponse(xlsx_buf, as_attachment=True, filename=xlsx_name)
+            raise Http404()
+
         if request.query_params.get('as') == 'xlsx' and filename.lower().endswith('.zip'):
             xlsx_buf, xlsx_name = _zip_to_single_xlsx(path, filename)
             if xlsx_buf is not None:
@@ -555,17 +596,25 @@ class OwnerclanWeeklyPopularDownloadView(APIView):
 
 
 class OwnerclanWeeklyPopularDownloadAllView(APIView):
-    """주간 인기 상품(db저장창고)에 저장된 날짜별 파일 전체를 zip 하나로 묶어 한번에 다운로드.
-    filenames 쿼리파라미터(콤마구분)로 특정 날짜만 지정도 가능 — 생략 시 전체."""
+    """주간 인기 상품(db저장창고)에 저장된 날짜별 파일 전체를, 지정한 연도(?year=) 기준으로
+    모아 중복(전략상품코드) 제거 후 엑셀 1개로 한번에 다운로드(2026-09-11 사용자 요청 —
+    "알집으로 다운되지 않고 중복제거해서 엑셀로 한번에 받을수있도록"). year 필수.
+    filenames 쿼리파라미터(콤마구분)로 특정 날짜만 지정도 가능 — 생략 시 전체 날짜."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         import os
+        import re
         import zipfile
         import io
+        import openpyxl
         from datetime import date
         from django.conf import settings
         from django.http import FileResponse, Http404
+
+        year = request.query_params.get('year', '').strip()
+        if not year:
+            return Response({'error': 'year 파라미터가 필요합니다(예: 2026)'}, status=400)
 
         storage_dir = os.path.join(settings.BASE_DIR, 'media', 'ownerclan_weekly_popular')
         if not os.path.isdir(storage_dir):
@@ -585,17 +634,49 @@ class OwnerclanWeeklyPopularDownloadAllView(APIView):
             names = sorted(n for n in os.listdir(storage_dir)
                             if os.path.isfile(os.path.join(storage_dir, n)))
 
-        names = [n for n in names if os.path.isfile(os.path.join(storage_dir, n))]
+        names = [n for n in names if os.path.isfile(os.path.join(storage_dir, n))
+                 and n.lower().endswith('.zip')]
         if not names:
             raise Http404()
 
+        codes = []
+        seen_codes = set()
+        used_files = 0
+        for n in names:
+            path = os.path.join(storage_dir, n)
+            try:
+                with zipfile.ZipFile(path) as zf:
+                    member = next((m for m in zf.namelist()
+                                   if m.lower().endswith('.xlsx')
+                                   and (mm := re.search(r'\((\d{4})\)', m)) and mm.group(1) == year), None)
+                    if not member:
+                        continue
+                    used_files += 1
+                    wb = openpyxl.load_workbook(io.BytesIO(zf.read(member)), data_only=True)
+                    ws = wb.worksheets[0]
+                    for row in ws.iter_rows(min_row=2, values_only=True):
+                        code = row[0] if row else None
+                        if code and code not in seen_codes:
+                            seen_codes.add(code)
+                            codes.append(code)
+            except Exception:
+                continue
+
+        if not codes:
+            raise Http404()
+
+        wb_out = openpyxl.Workbook()
+        ws_out = wb_out.active
+        ws_out.title = f'{year}인기상품(중복제거)'
+        ws_out.append(['전략상품코드'])
+        for c in codes:
+            ws_out.append([c])
+
         buf = io.BytesIO()
-        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for n in names:
-                zf.write(os.path.join(storage_dir, n), arcname=n)
+        wb_out.save(buf)
         buf.seek(0)
 
-        bundle_name = f'오너클랜_주간인기상품_{len(names)}개_{date.today():%Y%m%d}.zip'
+        bundle_name = f'오너클랜_주간인기상품_{year}년_중복제거_{len(codes)}개_{date.today():%Y%m%d}.xlsx'
         return FileResponse(buf, as_attachment=True, filename=bundle_name)
 
 
@@ -667,19 +748,40 @@ class OwnerclanOrderFileCollectView(APIView):
 
 
 class OwnerclanOrderFileListView(APIView):
-    """저장된 주문/배송조회 파일 목록. ?file_type= 으로 필터 가능."""
+    """저장된 주문/배송조회 파일 목록. ?file_type= 필터, ?date=YYYY-MM-DD&hour=0~23 로 특정 회차(하루
+    5회 자동수집 09/11/15/16/18시 중 하나)만 조회 가능. batches에 현재 file_type 기준으로 존재하는
+    회차(날짜+시간) 목록도 같이 내려줘 프론트 선택박스를 채운다."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        from django.utils import timezone as dj_tz
         from .models import OwnerclanOrderFile
-        qs = OwnerclanOrderFile.objects.all().order_by('-downloaded_at')
+
         file_type = request.query_params.get('file_type')
+        date_param = request.query_params.get('date')
+        hour_param = request.query_params.get('hour')
+
+        base_qs = OwnerclanOrderFile.objects.all()
         if file_type:
-            qs = qs.filter(file_type=file_type)
+            base_qs = base_qs.filter(file_type=file_type)
+        all_records = list(base_qs.order_by('-downloaded_at'))
+
+        batches = sorted({
+            (dj_tz.localtime(r.downloaded_at).strftime('%Y-%m-%d'), dj_tz.localtime(r.downloaded_at).hour)
+            for r in all_records
+        }, reverse=True)
+
+        records = all_records
+        if date_param:
+            records = [r for r in records if dj_tz.localtime(r.downloaded_at).strftime('%Y-%m-%d') == date_param]
+        if hour_param not in (None, ''):
+            h = int(hour_param)
+            records = [r for r in records if dj_tz.localtime(r.downloaded_at).hour == h]
+
         files = [{'id': f.id, 'login_id': f.login_id, 'file_type': f.file_type,
                   'filename': f.filename, 'file_size': f.file_size,
-                  'downloaded_at': f.downloaded_at} for f in qs]
-        return Response({'files': files})
+                  'downloaded_at': f.downloaded_at} for f in records]
+        return Response({'files': files, 'batches': [{'date': d, 'hour': h} for d, h in batches]})
 
 
 class OwnerclanOrderFileDownloadView(APIView):
@@ -718,37 +820,111 @@ class OwnerclanOrderFileDeleteView(APIView):
 
 
 class OwnerclanOrderFileDownloadAllView(APIView):
-    """저장된 주문파일 전체(또는 file_type/ids 필터)를 zip 하나로 묶어 다운로드."""
+    """저장된 주문파일들을 계정별로 합쳐 엑셀 1개로 다운로드(2026-09-11: 계정별로 따로 zip 압축되던 것을
+    "모든계정 하나의 엑셀 파일로" 요청받아 병합 방식으로 변경).
+    - invoice(플레이오토 송장 정보): 원본에 이미 '오너클랜 아이디' 컬럼이 있어 그대로 이어붙임
+      (플레이오토 재업로드 포맷을 그대로 유지하기 위해 컬럼을 추가하지 않음).
+    - excel(엑셀다운로드): 계정 식별 컬럼이 없어 맨 앞에 '계정' 컬럼을 넣어 이어붙임.
+    file_type만 지정 시 계정별 최신 1건(중복 방지), date+hour 지정 시 그 회차(하루 5회 자동수집
+    09/11/15/16/18시 중 하나) 파일만, ids 지정 시 그 파일들 그대로 사용."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         import io
-        import zipfile
-        from datetime import date
+        from datetime import date as _date
+        import pandas as pd
         from django.http import FileResponse, Http404
+        from django.utils import timezone as dj_tz
         from .models import OwnerclanOrderFile
 
         file_type = request.query_params.get('file_type')
         ids_param = request.query_params.get('ids')
-        qs = OwnerclanOrderFile.objects.all()
+        date_param = request.query_params.get('date')
+        hour_param = request.query_params.get('hour')
+
+        qs = OwnerclanOrderFile.objects.all().order_by('-downloaded_at')
         if file_type:
             qs = qs.filter(file_type=file_type)
+
         if ids_param:
             ids = [int(i) for i in ids_param.split(',') if i.strip().isdigit()]
-            qs = qs.filter(id__in=ids)
-        recs = [r for r in qs if os.path.isfile(r.file_path)]
+            recs = list(qs.filter(id__in=ids))
+        else:
+            recs = list(qs)
+            if date_param:
+                recs = [r for r in recs if dj_tz.localtime(r.downloaded_at).strftime('%Y-%m-%d') == date_param]
+            if hour_param not in (None, ''):
+                h = int(hour_param)
+                recs = [r for r in recs if dj_tz.localtime(r.downloaded_at).hour == h]
+            # 계정별 최신 1건만(이미 -downloaded_at 정렬이라 먼저 만난 게 최신) — 중복/재시도 방지
+            seen = set()
+            dedup = []
+            for r in recs:
+                if r.login_id in seen:
+                    continue
+                seen.add(r.login_id)
+                dedup.append(r)
+            recs = dedup
+
+        recs = [r for r in recs if os.path.isfile(r.file_path)]
         if not recs:
             raise Http404()
+        recs.sort(key=lambda r: r.login_id)
+
+        dfs = []
+        for r in recs:
+            try:
+                if r.file_path.lower().endswith('.xls'):
+                    # 오너클랜 orderList.php가 내려주는 구형 .xls는 xlrd가 정상 파일도 스트림
+                    # 순서 휴리스틱으로 "손상"이라 오판하는 경우가 있어(2026-09-11 실측,
+                    # dlwodb111) ignore_workbook_corruption으로 우회.
+                    df = pd.read_excel(r.file_path, header=0, dtype=str, engine='xlrd',
+                                        engine_kwargs={'ignore_workbook_corruption': True})
+                else:
+                    df = pd.read_excel(r.file_path, header=0, dtype=str)
+            except Exception as e:
+                df = pd.DataFrame([[f'읽기 실패: {e}']], columns=['오류'])
+            if r.file_type != 'invoice':
+                df.insert(0, '계정', r.login_id)
+            dfs.append(df)
+        combined = pd.concat(dfs, ignore_index=True, sort=False) if dfs else pd.DataFrame()
+
+        # 중복주문의심 체크(2026-09-11, 사용자 요청) — 엑셀다운로드(전체 합친 파일)에서만.
+        # 같은 상품(상품명)을 같은 받는사람 앞으로 두 번 이상 주문한 행 = 실수로 두 번 주문했을
+        # 위험이 있어 표시. 상품코드가 아니라 상품명으로 묶는 이유: 판매처(01.지마켓/03.11번가 등)가
+        # 달라도 같은 상품일 수 있어(주문관리 메모 참고) 상품명 기준이 더 넓게 잡아준다.
+        dup_col = '중복주문확인'
+        if file_type == 'excel' and not combined.empty and '상품명' in combined.columns and '받는사람' in combined.columns:
+            key_name = combined['상품명'].fillna('').str.strip()
+            key_recv = combined['받는사람'].fillna('').str.strip()
+            group_key = key_name + '||' + key_recv
+            dup_count = group_key.map(group_key.value_counts())
+            is_dup = (dup_count > 1) & (key_name != '') & (key_recv != '')
+            combined[dup_col] = is_dup.map({True: '중복주문의심상품', False: ''})
+            # 의심상품을 맨 위로, 그 안에서는 상품명·받는사람으로 묶어서 나란히 보이게 정렬
+            combined['_dup_sort'] = (~is_dup).astype(int)   # False(의심)=0이 먼저
+            combined = combined.sort_values(
+                ['_dup_sort', '상품명', '받는사람'], kind='stable').drop(columns=['_dup_sort'])
+            combined = combined.reset_index(drop=True)
 
         buf = io.BytesIO()
-        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for r in recs:
-                zf.write(r.file_path, arcname=r.filename)
+        with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+            combined.to_excel(writer, sheet_name='전체', index=False)
+            if file_type == 'excel' and dup_col in combined.columns:
+                from openpyxl.styles import PatternFill
+                red_fill = PatternFill(start_color='FFC7CE', end_color='FFC7CE', fill_type='solid')
+                ws = writer.sheets['전체']
+                n_cols = len(combined.columns)
+                for row_i, flagged in enumerate(combined[dup_col] == '중복주문의심상품', start=2):
+                    if flagged:
+                        for c in range(1, n_cols + 1):
+                            ws.cell(row=row_i, column=c).fill = red_fill
         buf.seek(0)
 
         label = {'invoice': '송장정보', 'excel': '엑셀다운로드'}.get(file_type, '전체')
-        bundle_name = f'오너클랜_주문{label}_{len(recs)}개_{date.today():%Y%m%d}.zip'
-        return FileResponse(buf, as_attachment=True, filename=bundle_name)
+        batch_label = f'_{date_param}_{hour_param}시' if (date_param or hour_param not in (None, '')) else ''
+        filename = f'오너클랜_주문{label}{batch_label}_{len(recs)}계정_{_date.today():%Y%m%d}.xlsx'
+        return FileResponse(buf, as_attachment=True, filename=filename)
 
 
 class OwnerClanProductWCodesView(_WorkspaceMixin, APIView):

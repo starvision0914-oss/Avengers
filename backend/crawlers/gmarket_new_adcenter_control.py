@@ -48,6 +48,93 @@ def _login(driver, login_id, password):
     return 'login' not in driver.current_url
 
 
+REPORT_URL = 'https://adcenter.esmplus.com/report'
+
+
+def _click_calendar_day(driver, day):
+    """기간선택 캘린더에서 '비활성(is-disabled)이 아닌' 날짜버튼 중 텍스트가 day와 일치하는
+    것을 클릭. 이전/다음달 잔여일이 같은 숫자로 disabled 처리돼 있어 이 필터가 필수."""
+    return driver.execute_script("""
+        const day = arguments[0];
+        const btns = Array.from(document.querySelectorAll("td:not(.is-disabled) button.button__date"));
+        const btn = btns.find(b => b.textContent.trim() === String(day));
+        if (btn) { btn.click(); return true; }
+        return false;
+    """, day)
+
+
+def fetch_daily_report(driver, login_id, password, since_date, until_date, log_fn=None):
+    """신규 광고센터(adcenter.esmplus.com/report) '일별×날짜별' 상세리포트에서 계정 전체
+    일자별 광고비를 가져온다(캠페인 타입 구분 없는 계정 총액, 2026-09-11 실측 확인 —
+    GmarketNewAdCost 시간별 스냅샷 합계와 정확히 일치했음). 최대 3개월 전까지 조회 가능해
+    시간별 스냅샷(2026-09-09부터만 존재)보다 과거를 더 볼 수 있다는 장점이 있음.
+    ⚠️ since_date/until_date는 반드시 캘린더에 현재 표시된 달(=오늘이 속한 달) 안이어야 함
+    (월 이동 클릭은 미구현 — since_date.day==1이 아니면서 이번달1일이 아닌 경우는 호출 안 할 것).
+    반환: {date_str: cost, ...} — 조회기간 중 캠페인 집행이 아예 없던 날짜는 키 자체가 없음."""
+    def log(m):
+        logger.info(f'[신규광고센터리포트:{login_id}] {m}')
+        if log_fn:
+            log_fn(f'[신규광고센터리포트:{login_id}] {m}')
+
+    if not _login(driver, login_id, password):
+        log('로그인 실패')
+        return {}
+
+    driver.get(REPORT_URL)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'button.button__calendar')))
+    except TimeoutException:
+        log('리포트 페이지 로딩 실패')
+        return {}
+    time.sleep(1)
+
+    try:
+        driver.execute_script("document.querySelector('button.button__calendar').click();")
+        time.sleep(1)
+        if not _click_calendar_day(driver, since_date.day):
+            log(f'시작일({since_date}) 클릭 실패'); return {}
+        time.sleep(0.4)
+        if not _click_calendar_day(driver, until_date.day):
+            log(f'종료일({until_date}) 클릭 실패'); return {}
+        time.sleep(0.4)
+        driver.find_element(By.XPATH,
+            "//div[contains(@class,'box__button-wrap')]//button[text()='적용']").click()
+        time.sleep(1.5)
+
+        applied = driver.find_element(By.ID, 'date__start').get_attribute('value')
+        expected = f'{since_date:%Y.%m.%d} ~ {until_date:%Y.%m.%d}'
+        if applied != expected:
+            log(f'기간 설정 확인 실패(적용={applied}, 기대={expected})')
+            return {}
+
+        driver.execute_script("document.getElementById('viewMode-daily').click();")
+        time.sleep(0.3)
+        driver.execute_script("document.querySelectorAll('.button__wrap button')[1].click();")  # 검색
+        time.sleep(3)
+
+        rows = driver.execute_script("""
+            const table = document.querySelector('.box__table table');
+            if (!table) return [];
+            return Array.from(table.querySelectorAll('tbody tr')).map(
+                tr => Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim()));
+        """) or []
+    except Exception as e:
+        log(f'조회 중 오류: {e}')
+        return {}
+
+    result = {}
+    for r in rows:
+        if len(r) < 7:
+            continue
+        d = r[1]
+        cost = int((r[6] or '0').replace(',', '') or 0)
+        if cost:
+            result[d] = cost
+    log(f'{since_date}~{until_date} 일별 {len(result)}일 조회(합계 {sum(result.values()):,}원)')
+    return result
+
+
 def _get_campaign_rows(driver, wait=10, _retried=False):
     """관리 페이지의 캠페인별 (토글엘리먼트, 이름, 현재상태) 목록. 매 호출마다 페이지 새로 진입해야 함
     (토글 클릭 후 다시 읽으려면 이 함수를 재호출).

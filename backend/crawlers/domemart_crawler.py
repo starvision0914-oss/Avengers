@@ -136,3 +136,170 @@ def result_to_status(result):
 
 def new_driver(user_data_dir='/tmp/domemart_profile_run'):
     return create_driver(user_data_dir=user_data_dir, kill_existing=False)
+
+
+ORDER_LIST_URL = 'http://www.domemart.co.kr/shop/mall.php?module=order&xque=od_list'
+_RESULT_COUNT_RE = re.compile(r'검색결과\s*:\s*([\d,]+)\s*건')
+
+# 오너클랜 화면(order_stats 8종)에 맞춘 근접 매핑 — 도매마트 주문상태(ct_flag_banpum)가 더
+# 세분화돼 있어 완전히 1:1은 아님(2026-09-11 실측, 클래스 설명은 models.DomemartAccountInfo 참고).
+# 값이 리스트인 항목(반품/교환 요청)은 여러 코드의 건수를 합산.
+ORDER_STAT_CODE_MAP = {
+    '배송중': ['15'],
+    '결제완료': ['12'],       # 입금확인
+    '배송완료': ['16'],
+    '배송준비': ['13'],       # 배송준비중
+    '주문취소': ['39'],       # 취소완료
+    '취소요청': ['31'],       # 취소요청(접수)
+    '반품/교환 요청': ['41', '51'],   # 반품요청(접수)+교환요청(접수)
+    '반품/교환 진행': ['42'],  # 반품보류(대기)
+}
+
+
+def _order_count(driver, code):
+    driver.get(f'{ORDER_LIST_URL}&ct_flag_banpum={code}')
+    time.sleep(1.2)
+    body = driver.find_element(By.TAG_NAME, 'body').text
+    m = _RESULT_COUNT_RE.search(body)
+    return int(m.group(1).replace(',', '')) if m else 0
+
+
+def crawl_account_info(driver, log_fn=None):
+    """예치금(적립금) 잔액 + 주문상태별 건수를 조회해 DomemartAccountInfo에 저장.
+    반환: {'balance':int, 'order_stats':dict}"""
+    from apps.cpc.models import DomemartAccountInfo
+    from django.utils import timezone
+
+    def log(m):
+        logger.info(f'[domemart-info] {m}')
+        if log_fn:
+            log_fn(f'[domemart-info] {m}')
+
+    do_login(driver)
+    time.sleep(1)
+
+    driver.get(HOME_URL)
+    time.sleep(1.5)
+    balance = 0
+    try:
+        el = driver.find_element(By.XPATH, "//a[contains(@href,'cash_history')]//b")
+        bm = _PRICE_RE.search(el.text or '')
+        if bm:
+            balance = int(bm.group(1).replace(',', ''))
+    except Exception as e:
+        log(f'예치금 조회 실패: {e}')
+    log(f'예치금 {balance:,}원')
+
+    order_stats = {}
+    for label, codes in ORDER_STAT_CODE_MAP.items():
+        try:
+            total = sum(_order_count(driver, c) for c in codes)
+        except Exception as e:
+            log(f'{label} 조회 실패: {e}')
+            total = 0
+        order_stats[label] = str(total)
+        log(f'{label}: {total}건')
+
+    DomemartAccountInfo.objects.update_or_create(
+        login_id=LOGIN_ID,
+        defaults={'balance': balance, 'order_stats': order_stats, 'info_synced_at': timezone.now()},
+    )
+    return {'balance': balance, 'order_stats': order_stats}
+
+
+ORDER_LIST_1M_URL = f'{ORDER_LIST_URL}&q_date_type=m1'
+INVOICE_COLUMNS = ['받는분휴대폰', '배송사', '송장번호']   # 원본(항목전체 양식) S/AC/AD열
+
+
+def crawl_invoice_download(driver, download_dir, log_fn=None):
+    """도매마트 주문/배송조회(1개월) → 엑셀다운로드('항목전체' 양식) → S/AC/AD(받는분휴대폰/배송사/
+    송장번호)만 추출해 media/domemart_order_files/에 저장 + DomemartOrderFile 기록.
+    도매마트 다운로드는 실제로는 .xls 확장자의 HTML 테이블이라 pandas.read_html로 파싱한다
+    (2026-09-11 실측 — xlrd/openpyxl 둘 다 진짜 바이너리가 아니라서 못 읽음).
+    반환: {'ok':bool, 'row_count':int, 'file_path':str} 또는 {'ok':False, 'error':str}"""
+    import glob
+    import os
+    import pandas as pd
+    from django.conf import settings
+    from django.utils import timezone
+    from apps.cpc.models import DomemartOrderFile
+
+    def log(m):
+        logger.info(f'[domemart-invoice] {m}')
+        if log_fn:
+            log_fn(f'[domemart-invoice] {m}')
+
+    do_login(driver)
+    time.sleep(1)
+
+    os.makedirs(download_dir, exist_ok=True)
+    for f in glob.glob(download_dir + '/*'):
+        try: os.remove(f)
+        except Exception: pass
+
+    driver.get(ORDER_LIST_1M_URL)
+    time.sleep(2)
+    try:
+        driver.execute_cdp_cmd('Page.setDownloadBehavior', {'behavior': 'allow', 'downloadPath': download_dir})
+    except Exception as e:
+        log(f'다운로드 경로 설정 실패: {e}')
+
+    try:
+        driver.execute_script("document.getElementById('list_check_excel0').checked = true;")
+        driver.execute_script("multiDown('excel_od_list','excel');")
+    except Exception as e:
+        return {'ok': False, 'error': f'다운로드 트리거 실패: {e}'}
+
+    fp = None
+    for _ in range(20):
+        time.sleep(1)
+        files = [f for f in glob.glob(download_dir + '/*.xls') if not f.endswith('.crdownload')]
+        if files:
+            fp = files[0]
+            break
+    if not fp:
+        return {'ok': False, 'error': '다운로드 파일을 찾지 못함(20초 대기)'}
+
+    try:
+        tables = pd.read_html(fp)
+        df = tables[0]
+    except Exception as e:
+        return {'ok': False, 'error': f'엑셀 파싱 실패: {e}'}
+
+    missing = [c for c in INVOICE_COLUMNS if c not in df.columns]
+    if missing:
+        return {'ok': False, 'error': f'예상 컬럼 없음(사이트 양식 변경?): {missing}'}
+    trimmed = df[INVOICE_COLUMNS].copy()
+    # 송장번호가 float(예: 6.002791e+11)로 읽히는 문제 보정 — 원래 숫자문자열 그대로.
+    trimmed['송장번호'] = trimmed['송장번호'].apply(
+        lambda v: '' if pd.isna(v) else (str(int(v)) if isinstance(v, float) else str(v)))
+    trimmed = trimmed.dropna(how='all')
+
+    storage_dir = os.path.join(settings.BASE_DIR, 'media', 'domemart_order_files')
+    os.makedirs(storage_dir, exist_ok=True)
+    now = timezone.now()
+    filename = f'{LOGIN_ID}_invoice_{now:%Y%m%d_%H%M%S}.csv'
+    out_path = os.path.join(storage_dir, filename)
+    # xlsx/xls 모두 "파일 형식과 확장자가 일치하지 않습니다" 같은 확인창이 뜰 수 있어,
+    # 그런 검사 자체가 없는 순수 텍스트 CSV로 저장한다. utf-8-sig(BOM)로 저장해야
+    # 엑셀에서 더블클릭만으로 한글이 깨지지 않고 바로 열린다.
+    trimmed.to_csv(out_path, index=False, encoding='utf-8-sig')
+
+    rec = DomemartOrderFile.objects.create(
+        login_id=LOGIN_ID, filename=filename, file_path=out_path,
+        file_size=os.path.getsize(out_path), row_count=len(trimmed))
+    log(f'저장 완료: {filename} ({len(trimmed)}행)')
+
+    # 보관 개수 제한(2026-09-11 사용자 요청): 최신 2개만 남기고 그 이전은 파일+DB 모두 삭제.
+    KEEP = 2
+    old = DomemartOrderFile.objects.order_by('-downloaded_at')[KEEP:]
+    for f in old:
+        try:
+            if os.path.isfile(f.file_path):
+                os.remove(f.file_path)
+        except Exception:
+            pass
+        f.delete()
+        log(f'보관 {KEEP}개 초과분 삭제: {f.filename}')
+
+    return {'ok': True, 'row_count': len(trimmed), 'file_path': out_path, 'id': rec.id}

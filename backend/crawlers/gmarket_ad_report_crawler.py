@@ -335,9 +335,11 @@ def run(login_ids=None, year=None, month=None, periods=None, log_fn=None, with_k
     daily_gsheet = gtarget = None
     if with_gsheet:
         try:
-            # 2026-09-10 재구성: 예전 '일자별 계정합계' 시트(gmarket_daily_gsheet) 대신
-            # CPC_KEY=지마켓 신규광고센터 캠페인별, AI_KEY=옥션 AI+CPC 상품별로 용도 변경.
-            from crawlers.gmarket_adcost_gsheet import (
+            # 2026-09-11 원복(사용자 요청 "3일전으로 되돌려줘, 모두 잘못됐다"): 2026-09-10에
+            # '일자별 계정합계' 시트를 '신규광고센터 캠페인별/옥션 상품별'로 재구성했었는데,
+            # 사용자가 그 개편 자체를 되돌리라고 지시 — 다시 gmarket_daily_gsheet 사용.
+            # (gmarket_daily_gsheet._merge_newadcenter_live가 CPC 시트에 신규광고센터 합산도 처리함.)
+            from crawlers.gmarket_daily_gsheet import (
                 run_for_account as daily_gsheet, target_period as gtarget, CPC_KEY, AI_KEY)
             from crawlers import gsheet_upload
             ss_cpc = gsheet_upload.open_spreadsheet(CPC_KEY)

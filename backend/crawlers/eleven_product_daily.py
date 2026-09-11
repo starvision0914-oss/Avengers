@@ -193,8 +193,10 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
         def release_global_lock():
             pass
 
-    # 사전점검: 차단/접속불가/다른크롤 동시실행이면 시작 안 함 (IP 차단 방지)
-    ok, reason = preflight('상품ROAS')
+    # 사전점검: 차단/접속불가면 시작 안 함(IP 차단 방지). 다른 크롤 동시실행 중이면 예전엔 즉시
+    # 포기(0건)했지만, 저녁 안전망 재실행이 하필 전략가드와 겹쳐 통째로 스킵되는 사례가 반복돼
+    # (2026-09-11) 최대 1시간까지 대기 후 재시도하도록 변경 — 그래도 안 풀리면 그제서야 포기.
+    ok, reason = preflight('상품ROAS', wait=True, wait_timeout=3600)
     if not ok:
         log(f'⏭️ 상품ROAS 수집 건너뜀 — {reason}')
         return {'collected': 0, 'failed': 0, 'skipped': reason}

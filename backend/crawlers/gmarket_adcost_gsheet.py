@@ -52,13 +52,20 @@ def target_period(today=None):
 
 
 def _newad_rows(login_id):
-    """지마켓 신규광고센터 오늘자 캠페인별 행 + 합계. 데이터 없으면 None."""
+    """지마켓 신규광고센터 전날(어제) 확정 캠페인별 행 + 합계. 데이터 없으면 None.
+    ⚠️ 2026-09-11 수정: 원래 '오늘자'(use_date=today)로 조회했는데, 이 함수를 호출하는
+    구글시트 업로드(crawl_gmarket_ad_report --with-gsheet)는 매일 07:20에 도는 반면
+    신규광고센터 비용수집(crawl_gmarket_newad_cost)은 07:40이 첫 실행이라 07:20 시점엔
+    당일 GmarketNewAdCost가 단 1건도 없어 매일 100% 빈 시트로 올라가던 구조적 버그였다
+    (2026-09-10 신규센터 대응 재구성 당시엔 두 크론 실행순서를 못 맞춰 못 잡았던 문제).
+    → 상품별 CPC/AI 리포트도 '어제까지' 확정치를 쓰는 것과 동일하게 전날로 변경."""
     from apps.cpc.models import GmarketNewAdCost
     from django.utils import timezone
+    from datetime import timedelta
 
-    today = timezone.localdate()
+    yesterday = timezone.localdate() - timedelta(days=1)
     qs = (GmarketNewAdCost.objects
-          .filter(login_id=login_id, use_date=today)
+          .filter(login_id=login_id, use_date=yesterday)
           .order_by('-cost'))
     data = [NEWAD_HEADER]
     t_cost = t_conv = 0
