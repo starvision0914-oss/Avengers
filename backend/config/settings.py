@@ -146,13 +146,10 @@ LOGGING = {
     },
 }
 
-# CORS
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'http://192.168.1.16:5173',
-    'http://192.168.45.100:5173',
-]
+# CORS — 콤마로 구분된 목록을 .env(CORS_ALLOWED_ORIGINS)에서 읽음.
+# 서버/PC마다 IP가 달라도 코드 수정 없이 .env만 바꾸면 되도록 함.
+_default_cors = 'http://localhost:5173,http://127.0.0.1:5173,http://192.168.1.16:5173,http://192.168.45.100:5173'
+CORS_ALLOWED_ORIGINS = [o.strip() for o in os.environ.get('CORS_ALLOWED_ORIGINS', _default_cors).split(',') if o.strip()]
 
 # DRF
 REST_FRAMEWORK = {

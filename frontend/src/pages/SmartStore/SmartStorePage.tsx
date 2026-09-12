@@ -454,7 +454,7 @@ export default function SmartStorePage() {
                             </div>
                           ) : (
                             <a
-                              href="http://192.168.45.100:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000"
+                              href={`http://${window.location.hostname}:6080/vnc.html?autoconnect=true&reconnect=true&reconnect_delay=2000`}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-block px-2 py-1 text-[14px] rounded bg-[#03C75A] text-white font-semibold hover:bg-[#02a84a] transition-colors"
