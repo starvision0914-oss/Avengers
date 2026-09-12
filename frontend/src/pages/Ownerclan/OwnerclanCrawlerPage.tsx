@@ -305,10 +305,10 @@ export default function OwnerclanCrawlerPage() {
       const url = URL.createObjectURL(res.data);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `오너클랜_주간인기상품_${year}년_중복제거.xlsx`;
+      link.download = `오너클랜_주간인기상품_${year}년.xlsx`;
       link.click();
       URL.revokeObjectURL(url);
-      setWeeklyMsg(`${year}년 전체 주차를 중복제거해서 엑셀 1개로 다운로드했습니다.`);
+      setWeeklyMsg(`${year}년 전체 주차를 엑셀 1개로 다운로드했습니다.`);
     } catch {
       alert('전체 다운로드 실패');
     } finally {
@@ -793,11 +793,11 @@ export default function OwnerclanCrawlerPage() {
               </button>
               {weeklyAllYears.map(y => (
                 <button key={y} onClick={() => handleWeeklyDownloadAll(y)} disabled={weeklyBulkBusy || weeklyFiles.length === 0}
-                  title={`${y}년 전체 주차를 중복(전략상품코드) 제거해서 엑셀 1개로 받습니다`}
+                  title={`${y}년 전체 주차를 엑셀 1개로 합쳐받습니다`}
                   className="flex items-center gap-1.5 px-3 py-1 text-[14px] font-semibold text-white rounded disabled:opacity-50"
                   style={{ background: '#059669' }}>
                   <Download size={13} />
-                  {weeklyBulkBusy ? '합치는 중…' : `${y}년 전체 합쳐받기(중복제거)`}
+                  {weeklyBulkBusy ? '합치는 중…' : `${y}년 전체 합쳐받기`}
                 </button>
               ))}
             </span>

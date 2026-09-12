@@ -667,7 +667,7 @@ class OwnerclanWeeklyPopularDownloadAllView(APIView):
 
         wb_out = openpyxl.Workbook()
         ws_out = wb_out.active
-        ws_out.title = f'{year}인기상품(중복제거)'
+        ws_out.title = f'{year}인기상품'
         ws_out.append(['전략상품코드'])
         for c in codes:
             ws_out.append([c])
@@ -676,7 +676,7 @@ class OwnerclanWeeklyPopularDownloadAllView(APIView):
         wb_out.save(buf)
         buf.seek(0)
 
-        bundle_name = f'오너클랜_주간인기상품_{year}년_중복제거_{len(codes)}개_{date.today():%Y%m%d}.xlsx'
+        bundle_name = f'오너클랜_주간인기상품_{year}년_{len(codes)}개_{date.today():%Y%m%d}.xlsx'
         return FileResponse(buf, as_attachment=True, filename=bundle_name)
 
 

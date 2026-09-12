@@ -377,7 +377,7 @@ const TYPE_COLOR: Record<string, { bg: string; text: string }> = {
   서버비용:  { bg: '#f3e5f5', text: '#7b1fa2' },
 };
 
-function ManualCostSection({ seller, onChanged }: { seller: string; onChanged: () => void }) {
+function ManualCostSection({ seller, onChanged, from, to }: { seller: string; onChanged: () => void; from: string; to: string }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [date, setDate] = useState(todayStrKST());
@@ -431,9 +431,11 @@ function ManualCostSection({ seller, onChanged }: { seller: string; onChanged: (
           {saving ? '추가 중…' : '+ 추가'}
         </button>
       </div>
-      {!loading && items.length > 0 && (
+      {/* 조회 중인 기간(from~to) 밖의 항목은 숨김 — 순수익 계산엔 원래도 안 들어가지만,
+          목록에 다른 달 항목까지 같이 보이면 헷갈린다는 지적(2026-09-12)에 따라 화면도 기간으로 좁힘. */}
+      {!loading && items.filter(it => it.use_date >= from && it.use_date <= to).length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {items.map(it => (
+          {items.filter(it => it.use_date >= from && it.use_date <= to).map(it => (
             <span key={it.id} className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded bg-white border border-orange-200">
               {it.use_date} · {it.label} · {fmt(it.amount)}원
               <button onClick={() => remove(it.id)} className="text-[#c00] hover:text-red-700 ml-1" title="삭제"><X size={11} /></button>
@@ -485,7 +487,7 @@ function CostModal({ seller, type, from, to, onClose }: { seller: string; type?:
           )}
           <button onClick={onClose} className="ml-auto text-[#888] hover:text-black"><X size={18} /></button>
         </div>
-        <ManualCostSection seller={seller} onChanged={load} />
+        <ManualCostSection seller={seller} onChanged={load} from={from} to={to} />
         <div className="flex-1 overflow-auto">
           <table className="w-full text-[12px]">
             <thead className="bg-[#f7f7f7] text-[#666] sticky top-0"><tr>

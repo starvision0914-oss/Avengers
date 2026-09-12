@@ -91,6 +91,16 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
+# 2026-09-12: gunicorn 다중 워커 전환에 맞춰 캐시를 프로세스 공유(Redis)로 변경.
+# LocMemCache(기본값)는 워커별로 따로 놀아서 캐시 적중률이 워커 수만큼 떨어짐.
+# SMS OTP가 db=0을 쓰므로 키 충돌 방지를 위해 db=1 사용.
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',
+    }
+}
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',

@@ -8,9 +8,13 @@ class CpcConfig(AppConfig):
     name = 'apps.cpc'
 
     def ready(self):
-        # runserver가 막 뜬 시점 = 이전 프로세스에 떠있던 백그라운드 스레드는 전부 죽어있음이
+        # 서버 프로세스가 막 뜬 시점 = 이전 프로세스에 떠있던 백그라운드 스레드는 전부 죽어있음이
         # 보장되는 유일한 순간. 그 순간에만 정리해야 지금 진짜로 도는 실행을 오폭 마감하지 않음.
-        if 'runserver' not in sys.argv:
+        # (2026-09-12: runserver→gunicorn 전환 후에도 계속 동작하도록 조건 추가. gunicorn은
+        # 워커마다 이 ready()가 한 번씩 더 불리지만 멱등한 정리라 여러 번 돌아도 무해함.)
+        is_runserver = 'runserver' in sys.argv
+        is_gunicorn = 'gunicorn' in (sys.argv[0] if sys.argv else '')
+        if not (is_runserver or is_gunicorn):
             return
         try:
             self._reconcile_stale_strategy_runs()

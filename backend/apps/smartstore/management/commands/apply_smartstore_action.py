@@ -14,9 +14,12 @@ class Command(BaseCommand):
     help = '스마트스토어 선택 상품 판매중지/가격맞추기/고단가인하를 별도 프로세스로 실행'
 
     def add_arguments(self, parser):
-        parser.add_argument('--mode', required=True, choices=['suspend', 'price_match', 'price_cap'])
+        parser.add_argument('--mode', required=True, choices=['suspend', 'price_match', 'price_cap', 'price_margin'])
         parser.add_argument('--ids-file', required=True, help='SmartStoreProduct PK 목록(JSON 배열) 파일 경로')
         parser.add_argument('--log-file', required=True)
+        parser.add_argument('--margin-pct', type=float, default=30,
+                             help='price_margin 모드 전용 — 원가 대비 마진율(%%), 기본 30 (2026-09-12 신설: '
+                                  '원가 이하 판매 상품 재조정용, 원가×(1+margin/100) 10원단위 반올림)')
 
     def handle(self, *args, **opts):
         from apps.smartstore.models import SmartStoreProduct
@@ -35,7 +38,9 @@ class Command(BaseCommand):
             with open(log_path, 'a') as f:
                 f.write(msg + '\n')
 
-        mode_label = {'suspend': '판매중지', 'price_match': '단가 마켓가 맞춤', 'price_cap': '고단가 인하'}[mode]
+        margin_pct = opts['margin_pct']
+        mode_label = {'suspend': '판매중지', 'price_match': '단가 마켓가 맞춤', 'price_cap': '고단가 인하',
+                      'price_margin': f'원가+{margin_pct:g}% 재조정'}[mode]
         _log(f'{time.strftime("%F %T")} {mode_label} 시작 — {len(targets)}건 / {len(store_groups)}스토어')
 
         # 토큰 유효시간이 있어 대형 스토어(수천~1만+건)를 한 계정에서 계속 처리하다 보면
@@ -72,8 +77,10 @@ class Command(BaseCommand):
                         suspend_product_api(item.channel_product_no, token)
                         SmartStoreProduct.objects.filter(pk=item.pk).update(status_type='SUSPENSION')
                     else:
-                        update_price_api(item.channel_product_no, item.purchase_cost, token)
-                        SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=item.purchase_cost)
+                        target_price = (round(item.purchase_cost * (1 + margin_pct / 100) / 10) * 10
+                                         if mode == 'price_margin' else item.purchase_cost)
+                        update_price_api(item.channel_product_no, target_price, token)
+                        SmartStoreProduct.objects.filter(pk=item.pk).update(sale_price=target_price)
                     success += 1
                 except Exception as e:
                     if '401' in str(e):

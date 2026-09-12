@@ -4702,16 +4702,16 @@ class GmarketDashboardView(views.APIView):
             lid = a.login_id
             b = bal.get(lid) or {}
             c = cost.get(lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0, 'server': 0, 'manual': 0, 'cnt': 0}
-            has_newad = lid in newad_map
             nad = newad_map.get(lid) or {'ai': 0, 'cpc': 0}
-            # 지마켓 CPC/AI 최종 계산(2026-09-09 사용자 확정 — 신규광고센터 이관 반영):
-            # AI = 신규광고센터 '통합운영' 캠페인 금액만(구광고센터 정산장부의 AI매출업은 더 안 씀).
-            # CPC = 신규광고센터 나머지 캠페인(집중/직접운영) + 구광고센터 정산장부의 지마켓 CPC(잔존분).
-            # 단, 신규광고센터 비용수집은 2026-09-09에 신설돼 그 이전 날짜(예: '어제')는 데이터가
-            # 전혀 없어 AI가 0으로 통째로 누락되던 버그(2026-09-09 발견) — 해당 기간에 신규광고센터
-            # 데이터가 없으면 구장부의 AI매출업으로 대체(백필 완료 전까지의 임시 보정, 이후 자동 정정됨).
-            gmkt_ai_final = nad['ai'] if has_newad else c['ai']
-            gmkt_cpc_final = c['gmkt_cpc'] + nad['cpc']
+            # 지마켓 CPC/AI 최종 계산 — (2026-09-12 원복) AI/CPC 둘 다 항상 정산장부(구장부)만
+            # 쓴다. 2026-09-09~09-12 사이엔 AI는 "신규광고센터 것만", CPC는 "정산장부 + 신규센터
+            # 추가"로 계산했었는데, 신규광고센터는 실제로 전체 지출의 일부만 잡고 있을 뿐이라(이번달
+            # 실측: AI는 정산장부의 15.6%만, CPC는 6.6%만 — 신규센터에 금액 찍힌 날의 64%가 정산장부
+            # 에도 같은 날 CPC가 이미 찍혀있음) 별도 추가 지출이 아니라 같은 돈의 부분적 재수집이었다.
+            # AI는 이 대체 때문에 매달 약 240만원 누락(순수익 부풀림), CPC는 반대로 이 추가 때문에
+            # 매달 약 32만원 이중계산(순수익 축소)이 나던 사고 — 둘 다 사용자 확인 후 원복.
+            gmkt_ai_final = c['ai']
+            gmkt_cpc_final = c['gmkt_cpc']
             # 판매예치금 거래내역 기준, market별 분리
             if market == 'combined':
                 cpc = gmkt_cpc_final + c['auct_cpc']
@@ -6425,23 +6425,25 @@ def _fifo_remaining_by_row_id(seller_id, cost_type):
 
     가정: 11번가가 실제로 이 순서(오래된 것부터)로 소진시킨다는 보장은 없음 — 업체 내부
     소진순서를 알 수 없어 가장 통상적인 방식(선입선출)으로 근사한 값."""
-    rows = list(ElevenCostHistory.objects.filter(seller_id=seller_id, cost_type=cost_type)
-                .order_by('transaction_datetime', 'seq'))
+    # .values_list(가벼운 튜플)로 모델 인스턴스 생성 비용을 피한다 — 계정당 수천 행씩이라
+    # 풀 모델 객체화만으로도 비용이 커서(2026-09-12 로딩지연 조사) 이 부분도 같이 최적화.
+    rows = (ElevenCostHistory.objects.filter(seller_id=seller_id, cost_type=cost_type)
+            .order_by('transaction_datetime', 'seq').values_list('id', 'amount'))
     buckets = []  # [row_id, remaining] — transaction_datetime 순서 유지
     remaining_by_id = {}
     deficit = 0
-    for r in rows:
-        if r.amount > 0:
-            amt = r.amount
+    for rid, amount in rows:
+        if amount > 0:
+            amt = amount
             if deficit > 0:
                 pay = min(deficit, amt)
                 deficit -= pay
                 amt -= pay
-            b = [r.id, amt]
+            b = [rid, amt]
             buckets.append(b)
-            remaining_by_id[r.id] = b
-        elif r.amount < 0:
-            need = -r.amount
+            remaining_by_id[rid] = b
+        elif amount < 0:
+            need = -amount
             for b in buckets:
                 if need <= 0:
                     break
@@ -6458,11 +6460,19 @@ def _fifo_remaining_by_row_id(seller_id, cost_type):
 class ElevenPointExpiringView(views.APIView):
     """유효기간이 걸린 셀러포인트/캐시(광고포인트 등) 중 아직 안 지난 것 — 대시보드 상단 요약용.
     남은금액은 계정 전체잔액이 아니라 그 건(포인트 지급)만 선입선출로 추적한 값(_fifo_remaining_by_row_id).
-    만료임박순(가까운 날짜부터) 정렬."""
+    만료임박순(가까운 날짜부터) 정렬.
+    2026-09-12: 계정당 이력 4천~8천행을 매번 처음부터 FIFO 재계산해 3.8초 걸리던 것을 발견
+    (11번가 대시보드 로딩지연의 주범) — 크롤 주기(시간 단위)보다 훨씬 짧은 3분 캐시로 해결."""
     def get(self, request):
         from apps.cpc.models import CrawlerAccount
         from django.utils import timezone
+        from django.core.cache import cache as _pe_cache
         today = timezone.localdate()
+
+        cached = _pe_cache.get('eleven_point_expiring_v1')
+        if cached is not None:
+            return Response({'items': cached})
+
         qs = list(ElevenCostHistory.objects
                   .filter(valid_until__isnull=False, valid_until__gte=today)
                   .order_by('valid_until'))
@@ -6484,6 +6494,7 @@ class ElevenPointExpiringView(views.APIView):
             'days_left': (r.valid_until - today).days,
             'description': r.raw_description,
         } for r in qs]
+        _pe_cache.set('eleven_point_expiring_v1', result, 180)
         return Response({'items': result})
 
 

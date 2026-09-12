@@ -1,13 +1,15 @@
 module.exports = {
   apps: [
     {
+      // 2026-09-12: manage.py runserver(개발용, 요청 순차처리만 가능)→gunicorn 3워커로 전환.
+      // 실측: 동일 API 3개 동시요청이 순서대로 처리돼 시간이 3배로 늘어나던 문제 해결.
+      // 코드 수정 후엔 여전히 pm2 restart 필요(reload 안 씀 — 업로드 중 재시작 시 연결끊김 방지,
+      // 기존 --noreload와 같은 이유).
       name: 'avengers-backend',
       cwd: '/home/rejoice888/Avengers/backend',
-      script: 'manage.py',
-      // --noreload: 업로드(수초) 처리 중 코드/파일 변경 시 dev서버 자동리로드가
-      // 연결을 끊어 'Network Error'가 나던 문제 차단. 코드 수정 후엔 pm2 restart 필요.
-      args: 'runserver 0.0.0.0:8010 --noreload',
-      interpreter: '/usr/bin/python3',
+      script: '/home/rejoice888/.local/bin/gunicorn',
+      args: 'config.wsgi:application --bind 0.0.0.0:8010 --workers 3 --timeout 180',
+      interpreter: 'none',
       env: {
         PYTHONPATH: '/home/rejoice888/.local/lib/python3.12/site-packages',
         NAVER_CLIENT_ID: 'ZB7fEbSJwUrWryyYoUl_',

@@ -45,10 +45,15 @@ XP_STOPSELL = [
     "//button[normalize-space(.)='판매중지']",
 ]
 XP_DELETE = [
-    '//*[@id="ext-gen1019"]/div[3]/div[1]/div[5]/div/a[12]/span',        # 사용자 제공
+    # 2026-09-12: 텍스트 매칭을 최우선으로 — ext-gen 툴바는 상품 상태(판매중/판매중지 등)에 따라
+    # 버튼 구성이 달라져 순번(a[N])이 밀린다(판매중지된 상품만 있을 때 a[12]가 아니라 a[11]이
+    # 실제 "선택상품삭제"였음, 사용자 실측 확인). a[12]가 먼저 매칭되면 엉뚱한(하지만 DOM엔
+    # 존재하는) 버튼을 눌러 "수정된 항목이 없습니다"만 뜨고 조용히 실패했었음.
     "//a[normalize-space(.)='선택상품삭제']",
     "//a[contains(normalize-space(.),'선택상품') and contains(normalize-space(.),'삭제')]",
     "//span[contains(normalize-space(.),'선택상품') and contains(normalize-space(.),'삭제')]/ancestor::a[1]",
+    '//*[@id="ext-gen1019"]/div[3]/div[1]/div[5]/div/a[11]/span',        # 사용자 실측(판매중지 상태 툴바 기준)
+    '//*[@id="ext-gen1019"]/div[3]/div[1]/div[5]/div/a[12]/span',        # 이전 값(판매중 상태 툴바 기준일 수 있어 유지)
     "//a[normalize-space(.)='삭제']",
 ]
 # 결과 그리드 행 카운트 후보
@@ -127,7 +132,12 @@ def _grid_rowcount(driver):
 
 
 def _paste_and_search(driver, nums, log_fn, eid):
-    """prdNo에 숫자만 줄바꿈으로 붙여넣고 검색 실행. 검색 후 그리드 행수 반환."""
+    """prdNo에 숫자만 줄바꿈으로 붙여넣고 검색 실행. 검색 후 그리드 행수 반환.
+    ⚠️ 방어적으로 시작 전 잔여 alert부터 비운다 — 이전 단계(삭제 등)에서 연속으로 뜨는
+    alert 중 일부가 아직 안 닫힌 채 넘어오면 이 함수의 driver 조작이 전부
+    UnexpectedAlertPresentException으로 죽는 사고가 있었음(2026-09-12)."""
+    from crawlers.eleven_crawler import _drain_alerts
+    _drain_alerts(driver, login_id=eid)
     _focus_frame(driver)
     xp, el = _find(driver, XP_PRDNO, 10)
     if not el:
@@ -155,13 +165,37 @@ def _paste_and_search(driver, nums, log_fn, eid):
 
 
 def _select_all(driver, log_fn, eid):
+    """헤더 체크박스를 신뢰된(CDP trusted) 클릭으로 눌러 전체선택 + 실제 선택개수 검증까지 확인.
+    ⚠️ 2026-09-12: "검색결과 그리드는 항상 전체 체크된 상태로 온다"는 가정으로 이 함수를 호출 안
+    하던 시절 real 모드에서 20,236건 처리 시도가 전부 '선택된 항목 없음'으로 조용히 0건 처리되는
+    사고가 있었음(select_all 미클릭 + 결과 미검증). eleven_suspend_only._cdp_click(jqxGrid 커스텀
+    체크박스는 일반 JS click()으로는 내부 선택상태가 안 갱신됨, CDP dispatchMouseEvent 필요)와
+    jqxGrid('getselectedrowindexes') 실제 검증으로 교체 — 선택 실패 시 False 반환해 호출쪽이
+    클릭을 스킵하게 한다(선택 안 됐는데도 판매중지/삭제 버튼을 눌러 헛알림만 받는 사고 재발 방지)."""
+    from crawlers.eleven_suspend_only import _cdp_click
     _focus_frame(driver)
     xp, el = _find(driver, XP_SELECTALL, 8)
     if not el:
         _log(log_fn, f'  [{eid}] ⚠️ 전체선택 체크박스 미발견')
         return False
-    driver.execute_script("arguments[0].click();", el)
-    time.sleep(1)
+    _cdp_click(driver, el, IFRAME_ID)
+    time.sleep(0.8)
+    _focus_frame(driver)
+    sel = driver.execute_script(
+        "try { return jQuery('#dvdataGrid').jqxGrid('getselectedrowindexes').length; } catch(e){ return -1; }")
+    if not sel or sel <= 0:
+        # 그리드 갱신 지연 대비 1회 재시도
+        _, el2 = _find(driver, XP_SELECTALL, 8)
+        if el2:
+            _cdp_click(driver, el2, IFRAME_ID)
+            time.sleep(1.2)
+            _focus_frame(driver)
+            sel = driver.execute_script(
+                "try { return jQuery('#dvdataGrid').jqxGrid('getselectedrowindexes').length; } catch(e){ return -1; }")
+    if not sel or sel <= 0:
+        _log(log_fn, f'  [{eid}] ⚠️ 전체선택 후에도 선택된 행 없음(sel={sel}) — 클릭 스킵')
+        return False
+    _log(log_fn, f'  [{eid}] 전체선택 확인({sel}행)')
     return True
 
 
@@ -190,13 +224,19 @@ XP_CONFIRM = [
 
 def _clear_popups(driver, eid, log_fn=None):
     """판매중지/삭제 확인창 처리 — JS alert는 accept, DOM 모달은 '확인/예'만 클릭(닫기/취소 금지).
-    어떤 모달이 떴는지 텍스트를 로그로 남겨 진단에 활용."""
+    어떤 모달이 떴는지 텍스트를 로그로 남겨 진단에 활용.
+    ⚠️ 2026-09-12: 실제 삭제 시 alert가 "복구불가 경고(확인)" → "정상 처리되었습니다" **2개
+    연속**으로 뜨는데(사용자 실측), 첫 alert만 drain하고 modal도 없으면 바로 break해버려서
+    두번째 alert가 열린 채로 다음 단계(검색)를 시도해 UnexpectedAlertPresentException이
+    나던 사고가 있었음 — 이번 이터레이션에 alert를 drain했으면(drained>0) modal 유무와
+    무관하게 한 번 더 돌아서 뒤이어 뜨는 alert까지 확인한다."""
     from selenium.webdriver.common.by import By
     from crawlers.eleven_crawler import _drain_alerts
     n = 0
     for _ in range(4):
         # 1) 브라우저 JS alert/confirm — accept(=확인)
-        n += _drain_alerts(driver, login_id=eid)
+        drained = _drain_alerts(driver, login_id=eid)
+        n += drained
         # 2) DOM 레이어 모달 — 내용 로깅 + '확인/예'만 클릭
         try:
             modals = [m for m in driver.find_elements(By.XPATH, XP_MODAL) if m.is_displayed() and (m.text or '').strip()]
@@ -220,8 +260,8 @@ def _clear_popups(driver, eid, log_fn=None):
                 pass
             if clicked:
                 break
-        if not modals and not clicked:
-            break   # 더 닫을 모달 없음
+        if not modals and not clicked and not drained:
+            break   # 이번 이터레이션에 alert도 modal도 전혀 없었음 — 더 닫을 게 없음
         time.sleep(0.5)
     return n
 
@@ -253,31 +293,38 @@ def _process_group(driver, nums, stopsell_nums, mode, log_fn, eid, max_retry=2):
         return res
 
     # ── real ──
-    # ⚠️ 검색결과 그리드는 '전체 체크된 상태'로 표시됨 → select_all을 누르면 오히려 해제됨("선택된 항목 없음").
-    #    따라서 select_all은 누르지 않고, 검색 직후(체크된 상태) 바로 판매중지/삭제 클릭한다.
-    # 1) 판매중지: '판매중' 상품번호만 검색 → (이미 전체체크) → 판매중지
+    # ⚠️ 2026-09-12: "검색결과 그리드는 전체 체크된 상태로 온다"는 가정이 항상 참이 아니어서
+    # select_all 생략 시 조용히 0건 처리되는 사고가 있었음 — 매 액션 전 반드시 _select_all()로
+    # 신뢰된 클릭+실제 선택개수 검증을 거치고, 실패하면 그 액션 클릭 자체를 스킵한다.
+    # 1) 판매중지: '판매중' 상품번호만 검색 → 전체선택(검증) → 판매중지
     if stopsell_nums:
         _log(log_fn, f'  [{eid}] [1단계] 판매중 {len(stopsell_nums)}개 판매중지')
         r1 = _timed(log_fn, eid, 'paste+search(판매중)', lambda: _paste_and_search(driver, stopsell_nums, log_fn, eid))
         if r1:
-            if _timed(log_fn, eid, 'click 판매중지', lambda: _click(driver, XP_STOPSELL, '판매중지', log_fn, eid)):
-                res['stopsell_btn'] = 'clicked'
-                _timed(log_fn, eid, 'popups(판매중지후)', lambda: _clear_popups(driver, eid, log_fn))
-                time.sleep(2)
+            if _timed(log_fn, eid, '전체선택(판매중지전)', lambda: _select_all(driver, log_fn, eid)):
+                if _timed(log_fn, eid, 'click 판매중지', lambda: _click(driver, XP_STOPSELL, '판매중지', log_fn, eid)):
+                    res['stopsell_btn'] = 'clicked'
+                    _timed(log_fn, eid, 'popups(판매중지후)', lambda: _clear_popups(driver, eid, log_fn))
+                    time.sleep(2)
+            else:
+                _log(log_fn, f'  [{eid}] ⛔ 전체선택 실패 — 판매중지 클릭 스킵(오탐 방지)')
     elif stopsell_nums is not None:
         _log(log_fn, f'  [{eid}] 판매중 상품 없음 — 판매중지 생략')
 
-    # 2) 삭제: 전체(판매중·판매중지·품절) 검색 → (이미 전체체크) → 선택상품삭제
+    # 2) 삭제: 전체(판매중·판매중지·품절) 검색 → 전체선택(검증) → 선택상품삭제
     _log(log_fn, f'  [{eid}] [2단계] 전체 {len(nums)}개 삭제')
     rows = _timed(log_fn, eid, 'paste+search(삭제)', lambda: _paste_and_search(driver, nums, log_fn, eid))
     res['searched'] = rows
     if rows:
-        if _timed(log_fn, eid, 'click 삭제', lambda: _click(driver, XP_DELETE, '선택상품삭제', log_fn, eid)):
-            res['delete_btn'] = 'clicked'
-            _timed(log_fn, eid, 'popups(삭제후)', lambda: _clear_popups(driver, eid, log_fn))
-            time.sleep(2)
+        if _timed(log_fn, eid, '전체선택(삭제전)', lambda: _select_all(driver, log_fn, eid)):
+            if _timed(log_fn, eid, 'click 삭제', lambda: _click(driver, XP_DELETE, '선택상품삭제', log_fn, eid)):
+                res['delete_btn'] = 'clicked'
+                _timed(log_fn, eid, 'popups(삭제후)', lambda: _clear_popups(driver, eid, log_fn))
+                time.sleep(2)
+        else:
+            _log(log_fn, f'  [{eid}] ⛔ 전체선택 실패 — 삭제 클릭 스킵(오탐 방지)')
 
-    # 3) 잔여 검증 후 재삭제 (select_all 없이) — 실제 잔여 0일 때만 삭제 성공으로 인정
+    # 3) 잔여 검증 후 재삭제(매번 전체선택 검증) — 실제 잔여 0일 때만 삭제 성공으로 인정
     remaining = rows or 0
     for i in range(max_retry):
         r = _timed(log_fn, eid, f'잔여검증{i + 1}', lambda: _paste_and_search(driver, nums, log_fn, eid))
@@ -285,12 +332,93 @@ def _process_group(driver, nums, stopsell_nums, mode, log_fn, eid, max_retry=2):
         if not r:
             break
         _log(log_fn, f'  [{eid}] 잔여 {r}행 → 재삭제 {i + 1}회')
-        _click(driver, XP_DELETE, '선택상품삭제(재)', log_fn, eid)
-        _clear_popups(driver, eid, log_fn)
+        if _select_all(driver, log_fn, eid):
+            _click(driver, XP_DELETE, '선택상품삭제(재)', log_fn, eid)
+            _clear_popups(driver, eid, log_fn)
+        else:
+            _log(log_fn, f'  [{eid}] ⛔ 재삭제 전체선택 실패 — 이번 회차 스킵')
         time.sleep(2)
     res['remaining'] = remaining
     res['deleted'] = (remaining == 0)   # 클릭 여부가 아니라 '잔여 0' 검증으로 성공 판정 → 잘못된 비고기록 방지
     return res
+
+
+STATUS_TAB_XPATH = {
+    '판매중': '//*[@id="div_sch_result"]/ul/li[2]/a',
+    '품절': '//*[@id="div_sch_result"]/ul/li[3]/a',
+    '판매중지': '//*[@id="div_sch_result"]/ul/li[4]/a',
+}
+
+
+def _read_tab_counts(driver):
+    """상단 탭바(#div_sch_result ul, '판매중 : N건' 형태)를 파싱해 상태별 건수 dict 반환."""
+    from selenium.webdriver.common.by import By
+    try:
+        txt = driver.find_element(By.XPATH, '//*[@id="div_sch_result"]/ul').text
+    except Exception:
+        return {}
+    out = {}
+    for line in txt.splitlines():
+        m = re.match(r'\s*(.+?)\s*:\s*(\d+)\s*건', line)
+        if m:
+            out[m.group(1).strip()] = int(m.group(2))
+    return out
+
+
+def delete_all_by_status_tabs(driver, eid, log_fn=None, max_rounds=1500):
+    """상품번호를 일일이 붙여넣는 대신, 상단 상태탭(판매중/품절/판매중지 건수 표시)을 클릭해
+    그 상태 전체가 0이 될 때까지 반복 처리 — 계정을 통째로 비울 때 사용(사용자 제안, 2026-09-12).
+    판매중·품절은 전체선택→판매중지(그러면 판매중지 탭으로 넘어감), 판매중지는 전체선택→
+    선택상품삭제(실삭제). 탭이 그리드 페이지당(20~30건) 한 번에 처리되므로 라운드를 반복한다.
+    ⚠️ 판매금지는 이 탭바에 안 나타나 별도(run_delete의 BANNED_STATUS 경로)로 처리해야 함."""
+    from selenium.webdriver.common.by import By
+    driver.get(PRODUCT_PAGE)
+    time.sleep(3)
+    result = {}
+    for status in ('판매중', '품절', '판매중지'):
+        xp = STATUS_TAB_XPATH[status]
+        prev_cnt = None
+        stuck = 0
+        for rnd in range(max_rounds):
+            _focus_frame(driver)
+            try:
+                tab = driver.find_element(By.XPATH, xp)
+                driver.execute_script("arguments[0].click();", tab)
+            except Exception as e:
+                _log(log_fn, f'  [{eid}] {status} 탭 클릭 실패: {str(e)[:80]}')
+                break
+            time.sleep(2)
+            _focus_frame(driver)
+            counts = _read_tab_counts(driver)
+            cnt = counts.get(status, 0)
+            if cnt <= 0:
+                _log(log_fn, f'  [{eid}] {status} 0건 — 완료(라운드 {rnd})')
+                break
+            if cnt == prev_cnt:
+                stuck += 1
+                if stuck >= 3:
+                    _log(log_fn, f'  [{eid}] ⛔ {status} {cnt}건에서 3라운드 연속 변화없음 — 중단')
+                    break
+            else:
+                stuck = 0
+            prev_cnt = cnt
+            _log(log_fn, f'  [{eid}] {status} {cnt}건 남음 (라운드{rnd + 1})')
+            if not _focus_frame(driver):
+                _log(log_fn, f'  [{eid}] iframe 진입 실패'); break
+            if not _select_all(driver, log_fn, eid):
+                _log(log_fn, f'  [{eid}] ⛔ {status} 전체선택 실패 — 중단')
+                break
+            if status in ('판매중', '품절'):
+                if not _click(driver, XP_STOPSELL, '판매중지', log_fn, eid):
+                    break
+            else:
+                if not _click(driver, XP_DELETE, '선택상품삭제', log_fn, eid):
+                    break
+            _clear_popups(driver, eid, log_fn)
+            time.sleep(1.5)
+        result[status] = prev_cnt if prev_cnt is not None else 0
+    _log(log_fn, f'  [{eid}] 탭기반 처리 종료: {result}')
+    return result
 
 
 def _mark_deleted(eid, targets):
