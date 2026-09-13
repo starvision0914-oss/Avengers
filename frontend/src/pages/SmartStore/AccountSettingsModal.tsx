@@ -33,6 +33,7 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [showPw, setShowPw] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showAdSecret, setShowAdSecret] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
 
@@ -182,10 +183,15 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
                     {F('Access License (빈칸=유지)', 'naver_ad_access_license', { placeholder: 'Access License' })}
                     <div>
                       <label className={`text-xs ${text2} mb-1 block`}>Secret Key (빈칸=유지)</label>
-                      <input type="password" className={`w-full px-3 py-2 rounded-lg border text-sm ${inp}`}
-                        value={form.naver_ad_secret_key}
-                        onChange={e => setForm(f => ({ ...f, naver_ad_secret_key: e.target.value }))}
-                        placeholder="Secret Key" />
+                      <div className="relative">
+                        <input type={showAdSecret ? 'text' : 'password'} className={`w-full px-3 py-2 pr-9 rounded-lg border text-sm ${inp}`}
+                          value={form.naver_ad_secret_key}
+                          onChange={e => setForm(f => ({ ...f, naver_ad_secret_key: e.target.value }))}
+                          placeholder="Secret Key" />
+                        <button type="button" onClick={() => setShowAdSecret(v => !v)} className={`absolute right-2 top-2.5 ${text2}`}>
+                          {showAdSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -198,10 +204,15 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
                     {F('Access License (빈칸=유지)', 'naver_ad_ai_access_license', { placeholder: 'Access License' })}
                     <div>
                       <label className={`text-xs ${text2} mb-1 block`}>Secret Key (빈칸=유지)</label>
-                      <input type="password" className={`w-full px-3 py-2 rounded-lg border text-sm ${inp}`}
-                        value={form.naver_ad_ai_secret_key}
-                        onChange={e => setForm(f => ({ ...f, naver_ad_ai_secret_key: e.target.value }))}
-                        placeholder="Secret Key" />
+                      <div className="relative">
+                        <input type={showAdSecret ? 'text' : 'password'} className={`w-full px-3 py-2 pr-9 rounded-lg border text-sm ${inp}`}
+                          value={form.naver_ad_ai_secret_key}
+                          onChange={e => setForm(f => ({ ...f, naver_ad_ai_secret_key: e.target.value }))}
+                          placeholder="Secret Key" />
+                        <button type="button" onClick={() => setShowAdSecret(v => !v)} className={`absolute right-2 top-2.5 ${text2}`}>
+                          {showAdSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -280,19 +291,46 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
                     <label className={`text-xs ${text2} mb-1 block`}>
                       {{ login_id: '로그인ID', login_pw: '비밀번호', store_name: '스토어명', display_name: '표시명', store_slug: '스토어URL ID', memo: '메모' }[f]}
                     </label>
-                    <input
-                      type={f === 'login_pw' ? 'password' : 'text'}
-                      className={`w-full px-3 py-2 rounded-lg border text-sm ${inp}`}
-                      value={form[f]}
-                      onChange={e => setForm(prev => ({ ...prev, [f]: e.target.value }))}
-                    />
+                    {f === 'login_pw' ? (
+                      <div className="relative">
+                        <input
+                          type={showPw ? 'text' : 'password'}
+                          className={`w-full px-3 py-2 pr-9 rounded-lg border text-sm ${inp}`}
+                          value={form.login_pw}
+                          onChange={e => setForm(prev => ({ ...prev, login_pw: e.target.value }))}
+                        />
+                        <button type="button" onClick={() => setShowPw(v => !v)} className={`absolute right-2 top-2.5 ${text2}`}>
+                          {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        type="text"
+                        className={`w-full px-3 py-2 rounded-lg border text-sm ${inp}`}
+                        value={form[f]}
+                        onChange={e => setForm(prev => ({ ...prev, [f]: e.target.value }))}
+                      />
+                    )}
                   </div>
                 ))}
               </div>
               <div className={`p-3 rounded-lg space-y-2 ${dark ? 'bg-[#13151f]' : 'bg-blue-50'}`}>
                 <div className="text-xs font-semibold text-blue-400 mb-1 flex items-center gap-1"><Key size={12} /> 네이버 커머스 API (선택)</div>
                 {F('Client ID', 'commerce_api_key')}
-                {F('Client Secret', 'commerce_secret_key', { type: 'password' })}
+                <div>
+                  <label className={`text-xs ${text2} mb-1 block`}>Client Secret</label>
+                  <div className="relative">
+                    <input
+                      type={showApiKey ? 'text' : 'password'}
+                      className={`w-full px-3 py-2 pr-9 rounded-lg border text-sm ${inp}`}
+                      value={form.commerce_secret_key}
+                      onChange={e => setForm(f => ({ ...f, commerce_secret_key: e.target.value }))}
+                    />
+                    <button type="button" onClick={() => setShowApiKey(v => !v)} className={`absolute right-2 top-2.5 ${text2}`}>
+                      {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                    </button>
+                  </div>
+                </div>
               </div>
               <div className="flex gap-2 justify-end">
                 <button onClick={() => setShowAdd(false)} className={`px-4 py-1.5 rounded-lg text-sm ${dark ? 'bg-[#2d3144]' : 'bg-gray-100'}`}>취소</button>

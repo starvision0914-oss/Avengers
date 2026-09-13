@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Trash2, Upload, Download, Search, Edit2, Save, X, RefreshCw, Star } from 'lucide-react';
+import { Plus, Trash2, Upload, Download, Search, Edit2, Save, X, RefreshCw, Star, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api/client';
 import { useTheme } from '../../hooks/useTheme';
@@ -27,6 +27,7 @@ export default function CrawlerAccountsPage() {
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState({ platform: '11st', login_id: '', password_enc: '', seller_name: '', cost_type: 'sellerpoint' });
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [showPw, setShowPw] = useState(false);
 
   const bg = dark ? 'bg-[#0f1117]' : 'bg-[#f5f6fa]';
   const card = dark ? 'bg-[#1a1b23] border-[#2a2b35]' : 'bg-white border-[#e5e7eb]';
@@ -379,8 +380,13 @@ export default function CrawlerAccountsPage() {
               </div>
               <div>
                 <label className={`text-xs ${text2} block mb-1`}>비밀번호</label>
-                <input value={form.password_enc} onChange={e => setForm({ ...form, password_enc: e.target.value })}
-                  type="password" className={`w-full border rounded-lg px-3 py-2 text-sm ${input}`} placeholder="비밀번호" />
+                <div className="relative">
+                  <input value={form.password_enc} onChange={e => setForm({ ...form, password_enc: e.target.value })}
+                    type={showPw ? 'text' : 'password'} className={`w-full border rounded-lg px-3 py-2 pr-9 text-sm ${input}`} placeholder="비밀번호" />
+                  <button type="button" onClick={() => setShowPw(v => !v)} className={`absolute right-2 top-2.5 ${text2}`}>
+                    {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className={`text-xs ${text2} block mb-1`}>셀러명 (선택)</label>
