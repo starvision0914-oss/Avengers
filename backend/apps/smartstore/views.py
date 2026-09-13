@@ -4,6 +4,7 @@ import datetime
 import io
 from datetime import date
 
+from django.core.cache import cache
 from django.db.models import Sum, Count, Q, Max, F
 from django.http import HttpResponse
 from django.utils import timezone
@@ -1635,17 +1636,38 @@ def _pred_queryset(category):
     return base.none()
 
 
+def _pred_summary(category):
+    """카테고리 요약(total, by_account)을 쿼리 1번으로 계산.
+    (2026-09-13) 예전엔 count()와 values().annotate()를 따로 호출해 동일한 무거운
+    쿼리를 2번 실행했고, 'duplicate'는 그 무거운 쿼리 안에서 중복그룹 수만큼 Q를
+    OR로 이어붙인 필터까지 또 돌려서 전체 응답이 7초 넘게 걸렸음 — 요약엔 그 상세
+    필터가 필요없어 중복그룹 집계 결과에서 바로 합산하도록 수정."""
+    if category == 'duplicate':
+        base = SmartStoreProduct.objects.filter(status_type='SALE')
+        dup = list(base.values('account_id', 'name').annotate(c=Count('id')).filter(c__gt=1))
+        by_account: dict = {}
+        for d in dup:
+            by_account[d['account_id']] = by_account.get(d['account_id'], 0) + d['c']
+        return sum(by_account.values()), by_account
+
+    by_acc = list(_pred_queryset(category).values('account_id').annotate(c=Count('id')))
+    return sum(r['c'] for r in by_acc), {r['account_id']: r['c'] for r in by_acc}
+
+
+_PRED_CACHE_TTL = 600  # 10분 — 10만 상품 전수스캔이라 매 요청 재계산은 비쌈, 신선도보다 응답속도 우선
+
+
 class PredictedViolationListView(APIView):
     """실제 위반이력 패턴 기반 예상 클린위반 — 카테고리별 건수 요약 (전계정)"""
     def get(self, request):
+        cached = cache.get('pred_violation_summary')
+        if cached is not None:
+            return Response(cached)
         result = []
         for key, meta in _PRED_CATEGORIES.items():
-            total = _pred_queryset(key).count()
-            by_acc = list(_pred_queryset(key).values('account_id').annotate(c=Count('id')))
-            result.append({
-                'key': key, **meta, 'total': total,
-                'by_account': {r['account_id']: r['c'] for r in by_acc},
-            })
+            total, by_account = _pred_summary(key)
+            result.append({'key': key, **meta, 'total': total, 'by_account': by_account})
+        cache.set('pred_violation_summary', result, _PRED_CACHE_TTL)
         return Response(result)
 
 
@@ -1654,6 +1676,11 @@ class PredictedViolationDetailView(APIView):
     def get(self, request, category):
         if category not in _PRED_CATEGORIES:
             return Response({'detail': 'unknown category'}, status=404)
+
+        cache_key = f'pred_violation_detail_{category}'
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
 
         qs = _pred_queryset(category).select_related('account').order_by('account_id', 'name')
         items = [{
@@ -1666,9 +1693,11 @@ class PredictedViolationDetailView(APIView):
             'category_id': p.category_id,
         } for p in qs]
 
-        return Response({
+        payload = {
             'category': category,
             **_PRED_CATEGORIES[category],
             'total': len(items),
             'items': items,
-        })
+        }
+        cache.set(cache_key, payload, _PRED_CACHE_TTL)
+        return Response(payload)

@@ -125,6 +125,7 @@ class SmartStoreProduct(models.Model):
         indexes = [
             models.Index(fields=['account', 'status_type']),
             models.Index(fields=['seller_management_code']),
+            models.Index(fields=['account', 'status_type', 'name'], name='smartstore__acc_st_name_idx'),
         ]
 
     def __str__(self):
