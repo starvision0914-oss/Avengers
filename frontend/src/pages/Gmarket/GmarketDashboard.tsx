@@ -183,7 +183,7 @@ export default function GmarketDashboard() {
           <button onClick={() => navigate('/myproduct')} className="px-2.5 py-1 bg-[#9333ea] text-white rounded font-semibold">상품목록</button>
           <button onClick={() => navigate('/gmarket-adgroup')} className="px-2.5 py-1 bg-[#e67700] text-white rounded font-semibold">광고그룹별</button>
           <button onClick={() => navigate('/gmarket-roas')} className="px-2.5 py-1 bg-[#2563eb] text-white rounded font-semibold">지마켓/옥션 상품 ROAS</button>
-          <button onClick={() => navigate('/crawler-accounts?platform=gmarket')} title="계정 관리" className="inline-flex items-center justify-center w-7 h-7 bg-[#666] text-white rounded font-semibold"><Settings size={13} /></button>
+          <button onClick={() => navigate('/crawler-accounts?platform=gmarket')} className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#666] text-white rounded font-semibold"><Settings size={12} /> 계정관리</button>
           <div className="inline-flex rounded overflow-hidden border border-[#ccc] ml-1">
             <button onClick={() => setMarket('combined')} className={`px-3 py-1 text-[12px] font-bold ${market === 'combined' ? 'bg-[#555] text-white' : 'bg-white text-[#666]'}`}>종합</button>
             <button onClick={() => setMarket('gmarket')} className={`px-3 py-1 text-[12px] font-bold ${market === 'gmarket' ? 'bg-[#00a651] text-white' : 'bg-white text-[#666]'}`}>지마켓</button>

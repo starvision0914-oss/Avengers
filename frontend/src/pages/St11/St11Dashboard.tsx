@@ -254,9 +254,9 @@ export default function St11Dashboard() {
               </button>
             )}
             {loading && <span className="text-[11px] text-[#999] animate-pulse">로딩중...</span>}
-            <button onClick={() => navigate('/crawler-accounts?platform=11st')} title="계정 관리"
-              className="inline-flex items-center justify-center w-7 h-7 bg-[#666] text-white rounded hover:bg-[#555]">
-              <Settings size={13} />
+            <button onClick={() => navigate('/crawler-accounts?platform=11st')}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold bg-[#666] text-white rounded hover:bg-[#555]">
+              <Settings size={12} /> 계정관리
             </button>
           </div>
           {periodMode === 'range' ? (
