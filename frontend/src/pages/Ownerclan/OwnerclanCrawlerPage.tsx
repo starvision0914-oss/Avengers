@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react';
-import { PlayCircle, Package, BarChart3, RefreshCw, Download, TrendingUp, FileSpreadsheet, Trash2 } from 'lucide-react';
+import { PlayCircle, Package, BarChart3, RefreshCw, Download, TrendingUp, FileSpreadsheet, Trash2, Settings } from 'lucide-react';
 import api from '../../api/client';
+import OwnerclanAccountModal from './OwnerclanAccountModal';
 
 interface OrderFile {
   id: number;
@@ -150,6 +151,7 @@ export default function OwnerclanCrawlerPage() {
   const [log, setLog] = useState('');
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [msg, setMsg] = useState('');
+  const [showAccountModal, setShowAccountModal] = useState(false);
 
   const load = useCallback(() => {
     api.get('/ownerclan/api-crawl/').then(r => {
@@ -572,6 +574,10 @@ export default function OwnerclanCrawlerPage() {
         <div className="bg-white border border-[#e0e0e0] rounded px-4 py-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[15px]">
           <span className="font-bold text-[#333]">오너클랜</span>
           <span className="text-[#888]">계정 <b className="text-[#333]">{accounts.length}개</b></span>
+          <button onClick={() => setShowAccountModal(true)}
+            className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold bg-[#f3f4f6] text-[#444] rounded hover:bg-[#e5e7eb]">
+            <Settings size={12} /> 계정 관리
+          </button>
           <span className="ml-auto flex items-center gap-2">
             <button onClick={exportExcel} disabled={!accounts.length}
               className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold bg-[#15803d] text-white rounded hover:bg-[#166534] disabled:opacity-50 disabled:cursor-not-allowed">
@@ -1019,6 +1025,10 @@ export default function OwnerclanCrawlerPage() {
           </pre>
         </div>
       </div>
+
+      {showAccountModal && (
+        <OwnerclanAccountModal onClose={() => setShowAccountModal(false)} onSaved={load} />
+      )}
     </div>
   );
 }

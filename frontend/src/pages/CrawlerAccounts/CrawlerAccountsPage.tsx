@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Plus, Trash2, Upload, Download, Search, Edit2, Save, X, RefreshCw, Star, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../../api/client';
@@ -19,9 +20,11 @@ const PLATFORMS = [
 
 export default function CrawlerAccountsPage() {
   const { dark } = useTheme();
+  const [searchParams] = useSearchParams();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<string>('all');
+  const platformParam = searchParams.get('platform');
+  const [filter, setFilter] = useState<string>(platformParam === 'gmarket' || platformParam === '11st' ? platformParam : 'all');
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);

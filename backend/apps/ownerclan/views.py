@@ -501,6 +501,52 @@ class OwnerclanApiCrawlView(APIView):
         return Response({'status': 'started', 'task_id': task.id})
 
 
+class OwnerclanApiAccountListView(APIView):
+    """오너클랜 정식 API 로그인 계정 목록/등록. /owner(오너클랜 대시보드) 계정 관리에서 사용."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from .models import OwnerclanApiAccount
+        accounts = OwnerclanApiAccount.objects.all().order_by('login_id')
+        return Response([{
+            'id': a.id, 'login_id': a.login_id, 'is_active': a.is_active,
+            'balance': a.balance, 'last_synced_at': a.last_synced_at,
+        } for a in accounts])
+
+    def post(self, request):
+        from .models import OwnerclanApiAccount
+        login_id = (request.data.get('login_id') or '').strip()
+        login_pw = request.data.get('login_pw') or ''
+        if not login_id or not login_pw:
+            return Response({'error': '아이디/비밀번호는 필수입니다.'}, status=400)
+        if OwnerclanApiAccount.objects.filter(login_id=login_id).exists():
+            return Response({'error': '이미 등록된 아이디입니다.'}, status=400)
+        a = OwnerclanApiAccount.objects.create(login_id=login_id, login_pw=login_pw)
+        return Response({'id': a.id, 'login_id': a.login_id}, status=201)
+
+
+class OwnerclanApiAccountDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        from .models import OwnerclanApiAccount
+        try:
+            a = OwnerclanApiAccount.objects.get(pk=pk)
+        except OwnerclanApiAccount.DoesNotExist:
+            return Response({'error': '계정을 찾을 수 없습니다.'}, status=404)
+        if request.data.get('login_pw'):
+            a.login_pw = request.data['login_pw']
+        if 'is_active' in request.data:
+            a.is_active = bool(request.data['is_active'])
+        a.save()
+        return Response({'id': a.id})
+
+    def delete(self, request, pk):
+        from .models import OwnerclanApiAccount
+        OwnerclanApiAccount.objects.filter(pk=pk).delete()
+        return Response(status=204)
+
+
 class OwnerclanWeeklyPopularView(APIView):
     """오너클랜 '주간 인기 상품' 다운로드(db저장창고) — 파일 목록 조회/수동 실행.
     매일 09:00 크론(cron_ownerclan_weekly_popular.sh)으로도 자동 저장됨."""

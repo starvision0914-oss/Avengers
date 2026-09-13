@@ -20,6 +20,8 @@ urlpatterns = [
     path('products/apply-eleven-name/', views.OwnerClanApplyElevenNameView.as_view()),
     path('products/distinct/', views.OwnerClanDistinctValuesView.as_view()),
     path('api-crawl/', views.OwnerclanApiCrawlView.as_view()),
+    path('accounts/', views.OwnerclanApiAccountListView.as_view()),
+    path('accounts/<int:pk>/', views.OwnerclanApiAccountDetailView.as_view()),
     path('account-info-crawl/', views.OwnerclanAccountInfoCrawlView.as_view()),
     path('weekly-popular/', views.OwnerclanWeeklyPopularView.as_view()),
     path('weekly-popular/download/', views.OwnerclanWeeklyPopularDownloadView.as_view()),

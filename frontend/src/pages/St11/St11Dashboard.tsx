@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Settings } from 'lucide-react';
 import { useSt11Data } from '../../hooks/useSt11Data';
 import DateNavigator from '../../components/cpc/DateNavigator';
 import DateRangePicker from '../../components/cpc/DateRangePicker';
@@ -253,6 +254,10 @@ export default function St11Dashboard() {
               </button>
             )}
             {loading && <span className="text-[11px] text-[#999] animate-pulse">로딩중...</span>}
+            <button onClick={() => navigate('/crawler-accounts?platform=11st')}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold bg-[#666] text-white rounded hover:bg-[#555]">
+              <Settings size={12} /> 계정 관리
+            </button>
           </div>
           {periodMode === 'range' ? (
             <DateRangePicker startDate={rangeStart} endDate={rangeEnd}
