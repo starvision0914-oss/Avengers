@@ -156,16 +156,22 @@ def _suspend_current_search(driver, eid, log_fn):
 def _get_real_statuses(driver, nums, log_fn, eid):
     """nums(<=30)를 검색 후 jqxGrid('getrows')로 실시간 판매상태를 직접 읽는다
     (2026-08-26 검증된 방법, [[project_11st_jqxgrid_realtime_verify]] — DOM 파싱/가상스크롤 함정 회피).
-    반환: {product_no: '판매중'|'품절'|'판매중지'|... 라벨}."""
+    반환: {product_no: '판매중'|'품절'|'판매중지'|... 라벨} | None(=조회 자체 실패, "이미삭제됨"으로 오판 금지).
+    ⚠️ 2026-09-13 버그: _paste_and_search가 입력칸을 못 찾아 None을 반환하면 '검색결과 0건'과
+    구분 없이 {}를 리턴해서, 호출부가 "이 30개는 전부 이미 삭제됨"으로 오판 → 실제로는 안 지워진
+    2,800여개를 삭제완료로 잘못 기록하는 사고가 있었음(tmxkqlwus13). 조회 자체가 실패한 경우는
+    반드시 None을 반환해 호출부가 "확인불가(재시도 필요)"로 다르게 처리하게 한다."""
     from crawlers.eleven_loss_delete import _paste_and_search
     rows = _paste_and_search(driver, nums, log_fn, eid)
+    if rows is None:
+        return None
     if not rows:
         return {}
     try:
         data = driver.execute_script("return jQuery('#dvdataGrid').jqxGrid('getrows');") or []
     except Exception as e:
         _log(log_fn, f'  [{eid}] getrows 조회 실패: {str(e)[:100]}')
-        return {}
+        return None
     out = {}
     for r in data:
         prd = str(r.get('prdNo') or '').strip()

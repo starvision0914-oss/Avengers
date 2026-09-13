@@ -326,42 +326,22 @@ class SalesUploadView(views.APIView):
                 if len(errors_list) < 50:
                     errors_list.append(f'행 {i}: {str(e)[:80]}')
 
-        # 쇼핑몰별 기간 교체 (스냅샷, 계정 안전): 파일에 '있는 쇼핑몰'만 그 쇼핑몰의 기간[min~max]을
-        # 삭제 후 재삽입. → ① 그 쇼핑몰의 취소/반품 건은 자동 제거(범위 통째 교체)
-        #   ② 파일에 없는 다른 쇼핑몰/계정 데이터는 그대로 보존(계정별 파일 올려도 손실 0)
-        #   매출=정산받는금액.
+        # 플랫폼별 기간 전체 교체(사용자 지시, 2026-09-13): 새 파일에 있는 플랫폼의 날짜범위[min~max]는
+        # 셀러 구분 없이 그 기간의 기존 데이터를 통째로 삭제 후 새 파일 내용으로만 재구성한다.
+        # → "오늘 파일에 없는 건 오늘 날짜에 존재하면 안 된다"(어제 있던 A상품이 오늘 파일에서 빠지면
+        # 오늘은 A상품이 없어야 함)를 보장. 셀러 단위로 좁게 교체하면 그 셀러가 그 날짜에 파일 내
+        # 다른 행이 하나도 없을 때 옛 행이 안 지워지고 남는 구멍이 있었음 — 플랫폼 전체로 범위를 잡아 해소.
         replaced = 0
         if to_create:
             from collections import defaultdict
-            # 셀러(계정) 기준 기간 교체: 매칭된 계정은 (platform, seller)로, 미매칭은 (platform, shop_name)로.
-            grp = defaultdict(list)
+            plat_dates = defaultdict(list)
             for r in to_create:
-                key = ('S', r.platform, r.seller_id) if r.seller_id else ('N', r.platform, r.shop_name)
-                grp[key].append(r.order_date)
-            for key, ds in grp.items():
-                if key[0] == 'S':
-                    old = SalesRecord.objects.filter(platform=key[1], seller_id=key[2],
-                                                     order_date__gte=min(ds), order_date__lte=max(ds))
-                else:
-                    old = SalesRecord.objects.filter(platform=key[1], seller__isnull=True, shop_name=key[2],
-                                                     order_date__gte=min(ds), order_date__lte=max(ds))
+                plat_dates[r.platform].append(r.order_date)
+            for platform, ds in plat_dates.items():
+                old = SalesRecord.objects.filter(platform=platform,
+                                                 order_date__gte=min(ds), order_date__lte=max(ds))
                 replaced += old.count()
                 old.delete()
-
-            # 옛 양식 정리: 쇼핑몰'명'으로 잘못 생성된 셀러(seller_id에 공백/한글 — 로그인아이디로
-            # 절대 나올 수 없는 꼴)의 동일기간 레코드를 제거 → 재업로드 시 이중집계 방지.
-            # (이메일 키는 스마트스토어 실제 로그인일 수 있어 제외 — 위 계정별 교체로 처리됨)
-            junk_ids = [s.id for s in SellerAccount.objects.all()
-                        if (' ' in (s.seller_id or '')) or any(ord(c) > 0x7f for c in (s.seller_id or ''))]
-            if junk_ids:
-                plat_range = defaultdict(list)
-                for r in to_create:
-                    plat_range[r.platform].append(r.order_date)
-                for plat, ds in plat_range.items():
-                    old = SalesRecord.objects.filter(platform=plat, seller_id__in=junk_ids,
-                                                     order_date__gte=min(ds), order_date__lte=max(ds))
-                    replaced += old.count()
-                    old.delete()
 
         # 일괄 삽입 (7천건도 수초) — 한 건씩 create하면 느려서 502
         if to_create:

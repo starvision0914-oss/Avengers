@@ -17,7 +17,7 @@ interface Props {
 }
 
 const KIND_LABEL: Record<string, string> = {
-  cpc: '광고비', settle: '충전/정산', server_fee: '서버이용료',
+  cpc: '광고비', settle: '충전/차감', server_fee: '서버이용료',
 };
 
 export default function St11CostModal({ sellerId, sellerAlias, date, range, kind, onClose }: Props) {

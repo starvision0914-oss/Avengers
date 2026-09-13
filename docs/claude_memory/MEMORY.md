@@ -144,3 +144,4 @@
 - [11번가 판매자코드수정 원산지함정](project_11st_seller_code_edit_origin_trap.md) — hulk API PUT시 원재료05+원산지코드 조합 400, 미해결
 - [지마켓 대시보드 구매가 항목 추가](project_gmarket_dashboard_cost_column.md) — revenue-profit 역산, 11번가와 동일방식
 - [스마트스토어 신규계정 API키 누락](project_smartstore_new_accounts_no_api_key.md) — 원인=이용정지, 정지해제후 처리보류
+- [11번가 임시삭제스크립트 거짓성공](project_11st_full_delete_false_success_2026-09-13.md) — 잔여검증 누락, 클릭성공=완료 오판

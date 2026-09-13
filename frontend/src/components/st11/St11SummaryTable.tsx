@@ -89,7 +89,7 @@ const INIT_COLS: ColDef[] = [
   { key: 'margin_rate', label: '구매마진율', sortKey: 'margin_rate', align: 'right', initWidth: 88, minWidth: 56 },
   { key: 'net_profit', label: '순수익', sortKey: 'net_profit', align: 'right', initWidth: 100, minWidth: 60 },
   { key: 'net_margin_rate', label: '순수익마진율', sortKey: 'net_margin_rate', align: 'right', initWidth: 96, minWidth: 60 },
-  { key: 'charge', label: '충전/정산·서버료', sortKey: 'charge', align: 'right', initWidth: 140, minWidth: 80 },
+  { key: 'charge', label: '충전/차감', sortKey: 'charge', align: 'right', initWidth: 140, minWidth: 80 },
   { key: 'products', label: '상품', sortKey: 'products', align: 'right', initWidth: 98, minWidth: 50 },
   { key: 'banned', label: '판매금지', sortKey: 'banned', align: 'right', initWidth: 70, minWidth: 48 },
   { key: 'available', label: '등록', sortKey: 'available', align: 'right', initWidth: 52, minWidth: 36 },
