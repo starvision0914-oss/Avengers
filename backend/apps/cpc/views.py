@@ -3760,8 +3760,10 @@ class CrawlerAccountExcelSampleView(views.APIView):
         ws.title = '크롤러 계정'
         headers = ['platform', 'login_id', 'password', 'seller_name', 'cost_type']
         ws.append(headers)
-        ws.append(['gmarket', 'example_id', 'password123', '셀러이름', 'sellerpoint'])
-        ws.append(['11st', 'example_11st', 'pass456', '11번가셀러', 'sellercash'])
+        # 아이디/비밀번호는 보안상 예시값도 넣지 않고 빈칸으로 둠 — 직접 입력해야 하는 칸이라는 걸
+        # 표시만 하고, 헷갈리지 않을 나머지(플랫폼/타입)만 예시로 채움 (2026-09-13 사용자 요청)
+        ws.append(['gmarket', '', '', '셀러이름', 'sellerpoint'])
+        ws.append(['11st', '', '', '11번가셀러', 'sellercash'])
 
         # 컬럼 너비
         for col in ['A', 'B', 'C', 'D', 'E']:

@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { X, Save, Plus, Trash2, Eye, EyeOff, Lock, Unlock, Key } from 'lucide-react';
+import { X, Save, Plus, Trash2, Eye, EyeOff, Lock, Unlock, Key, Upload, Download } from 'lucide-react';
+import toast from 'react-hot-toast';
 import { useTheme } from '../../hooks/useTheme';
 import { updateAccount, createAccount, deleteAccount, type SmartStoreAccount } from '../../api/smartstore';
+import api from '../../api/client';
 
 interface Props {
   accounts: SmartStoreAccount[];
@@ -99,6 +101,22 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
     onClose();
   };
 
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const res = await api.post('/smartstore/accounts/excel-upload/', fd);
+      toast.success(`엑셀 업로드: ${res.data.created}개 추가, ${res.data.updated}개 수정`);
+      if (res.data.errors?.length) toast.error(`오류 ${res.data.errors.length}건`);
+      onSaved?.();
+    } catch (err: any) {
+      toast.error('업로드 실패: ' + (err?.response?.data?.error || err.message));
+    }
+    e.target.value = '';
+  };
+
   const F = (label: string, key: keyof FormState, opts?: { type?: string; placeholder?: string; readOnly?: boolean }) => (
     <div>
       <label className={`text-xs ${text2} mb-1 block`}>{label}</label>
@@ -118,7 +136,17 @@ export default function AccountSettingsModal({ accounts, onClose, onSaved }: Pro
       <div className={`${bg} rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col`}>
         <div className={`flex items-center justify-between px-5 py-4 border-b ${dark ? 'border-[#2d3144]' : 'border-gray-200'}`}>
           <h2 className="font-bold text-lg">스마트스토어 계정 설정</h2>
-          <button onClick={onClose} className={text2}><X size={20} /></button>
+          <div className="flex items-center gap-2">
+            <a href="/api/smartstore/accounts/excel-sample/" download
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold ${dark ? 'bg-[#2d3144] text-gray-300 hover:bg-[#3d4464]' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}>
+              <Download size={13} /> 샘플 엑셀
+            </a>
+            <label className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#03C75A] text-white hover:bg-[#02a84a] cursor-pointer">
+              <Upload size={13} /> 엑셀 업로드
+              <input type="file" accept=".xlsx,.xls" onChange={handleExcelUpload} className="hidden" />
+            </label>
+            <button onClick={onClose} className={text2}><X size={20} /></button>
+          </div>
         </div>
 
         <div className="overflow-y-auto flex-1 p-4 space-y-2">

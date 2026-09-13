@@ -118,6 +118,110 @@ class AccountDetailView(APIView):
         return Response({'ok': True})
 
 
+_ACCOUNT_EXCEL_FIELDS = [
+    'login_id', 'login_pw', 'store_name', 'display_name', 'store_slug', 'memo',
+    'commerce_api_key', 'commerce_secret_key',
+    'naver_ad_account_id', 'naver_ad_login_id', 'naver_ad_customer_id',
+    'naver_ad_access_license', 'naver_ad_secret_key',
+    'naver_ad_ai_customer_id', 'naver_ad_ai_access_license', 'naver_ad_ai_secret_key',
+    'purchase_rate',
+]
+
+
+class AccountExcelSampleView(APIView):
+    """스마트스토어 계정 엑셀 샘플 양식 — 아이디/비밀번호/키 등 보안값은 예시도 넣지 않고 빈칸으로 둠."""
+    permission_classes = []
+
+    def get(self, request):
+        import openpyxl
+        from django.http import HttpResponse
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '스마트스토어 계정'
+        ws.append(_ACCOUNT_EXCEL_FIELDS)
+        # 보안값(아이디/비번/키)은 전부 빈칸, 구조만 보여주는 예시 행 — store_name만 채움(필수값)
+        example = {f: '' for f in _ACCOUNT_EXCEL_FIELDS}
+        example['store_name'] = '예시스토어'
+        example['purchase_rate'] = 0
+        ws.append([example[f] for f in _ACCOUNT_EXCEL_FIELDS])
+
+        for i in range(1, len(_ACCOUNT_EXCEL_FIELDS) + 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = 20
+
+        info = wb.create_sheet('안내')
+        info['A1'] = '필수: login_id, store_name (신규 계정은 login_pw도 필수)'
+        info['A2'] = '기존 계정과 login_id가 같으면, 빈칸이 아닌 값만 덮어씁니다 (빈칸 = 기존 값 유지)'
+        info['A3'] = 'API키 등 나머지 항목은 선택 — 없으면 비워두세요'
+        info.column_dimensions['A'].width = 70
+
+        response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = 'attachment; filename=smartstore_accounts_sample.xlsx'
+        wb.save(response)
+        return response
+
+
+class AccountExcelUploadView(APIView):
+    """스마트스토어 계정 엑셀 일괄 업로드 — login_id 기준 신규생성/부분수정(빈칸=유지)."""
+    permission_classes = []
+
+    def post(self, request):
+        import openpyxl
+        f = request.FILES.get('file')
+        if not f:
+            return Response({'error': '파일 필요'}, status=400)
+        try:
+            wb = openpyxl.load_workbook(f)
+            ws = wb.active
+            rows = list(ws.iter_rows(values_only=True))
+        except Exception as e:
+            return Response({'error': f'파일 읽기 실패: {e}'}, status=400)
+
+        if len(rows) < 2:
+            return Response({'error': '데이터 행 없음 (헤더 + 최소 1행 필요)'}, status=400)
+
+        headers = [str(h or '').strip() for h in rows[0]]
+        created, updated, errors = 0, 0, []
+
+        for i, row in enumerate(rows[1:], start=2):
+            d = dict(zip(headers, row))
+            login_id = str(d.get('login_id') or '').strip()
+            store_name = str(d.get('store_name') or '').strip()
+            if not login_id or not store_name:
+                errors.append(f'{i}행: login_id/store_name 누락')
+                continue
+
+            obj = SmartStoreAccount.objects.filter(login_id=login_id).first()
+            if obj is None:
+                login_pw = str(d.get('login_pw') or '').strip()
+                if not login_pw:
+                    errors.append(f'{i}행: 신규 계정은 login_pw 필수')
+                    continue
+                values = {'login_id': login_id, 'store_name': store_name, 'login_pw': login_pw}
+                for field in _ACCOUNT_EXCEL_FIELDS:
+                    if field in ('login_id', 'store_name', 'login_pw'):
+                        continue
+                    val = d.get(field)
+                    if val is None or str(val).strip() == '':
+                        continue
+                    values[field] = int(val) if field == 'purchase_rate' else val
+                SmartStoreAccount.objects.create(**values)
+                created += 1
+            else:
+                obj.store_name = store_name
+                for field in _ACCOUNT_EXCEL_FIELDS:
+                    if field in ('login_id', 'store_name'):
+                        continue
+                    val = d.get(field)
+                    if val is None or str(val).strip() == '':
+                        continue
+                    setattr(obj, field, int(val) if field == 'purchase_rate' else val)
+                obj.save()
+                updated += 1
+
+        return Response({'created': created, 'updated': updated, 'errors': errors})
+
+
 # ──── 대시보드 통계 ────
 
 class DashboardView(APIView):

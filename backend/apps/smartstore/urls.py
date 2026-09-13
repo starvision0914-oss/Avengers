@@ -4,6 +4,8 @@ from . import views
 urlpatterns = [
     path('accounts/', views.AccountListView.as_view()),
     path('accounts/<int:pk>/', views.AccountDetailView.as_view()),
+    path('accounts/excel-sample/', views.AccountExcelSampleView.as_view()),
+    path('accounts/excel-upload/', views.AccountExcelUploadView.as_view()),
     path('dashboard/', views.DashboardView.as_view()),
     path('products/', views.ProductListView.as_view()),
     path('products/sync/', views.ProductSyncView.as_view()),
