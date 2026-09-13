@@ -11,36 +11,36 @@ DB_USER="avengers"
 DB_PASS="$(openssl rand -hex 12)"
 DJANGO_SECRET="$(openssl rand -hex 32)"
 
-echo "[1/9] 시스템 패키지 설치 중... (몇 분 걸릴 수 있습니다)"
+echo "[1/10] 시스템 패키지 설치 중... (몇 분 걸릴 수 있습니다)"
 sudo apt update
 sudo apt install -y git curl wget unzip build-essential openssl \
   python3 python3-venv python3-pip python3-dev pkg-config \
   default-libmysqlclient-dev mysql-server redis-server \
   xvfb x11vnc python3-websockify android-tools-adb
 
-echo "[2/9] Node.js 20 설치 중..."
+echo "[2/10] Node.js 20 설치 중..."
 if ! command -v node >/dev/null 2>&1 || [[ "$(node -v)" != v20* ]]; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt install -y nodejs
 fi
 
-echo "[3/9] Google Chrome 설치 중..."
+echo "[3/10] Google Chrome 설치 중..."
 if ! command -v google-chrome-stable >/dev/null 2>&1; then
   wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   sudo apt install -y /tmp/chrome.deb
   rm -f /tmp/chrome.deb
 fi
 
-echo "[4/9] MySQL / Redis 서비스 시작 중..."
+echo "[4/10] MySQL / Redis 서비스 시작 중..."
 sudo service mysql start
 sudo service redis-server start
 
-echo "[5/9] MySQL 데이터베이스 생성 중..."
+echo "[5/10] MySQL 데이터베이스 생성 중..."
 sudo mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4;"
 sudo mysql -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';"
 sudo mysql -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost'; FLUSH PRIVILEGES;"
 
-echo "[6/9] .env 파일 생성 중..."
+echo "[6/10] .env 파일 생성 중..."
 if [ -f "$REPO_DIR/.env" ]; then
   echo "  기존 .env 발견 — 덮어쓰지 않고 .env.new로 저장합니다. 필요하면 직접 비교 후 교체하세요."
   ENV_TARGET="$REPO_DIR/.env.new"
@@ -74,7 +74,7 @@ REDIS_DB=0
 REDIS_CHANNEL=sms:new
 EOF
 
-echo "[7/9] 파이썬 가상환경 + 패키지 설치 중... (시간 좀 걸립니다)"
+echo "[7/10] 파이썬 가상환경 + 패키지 설치 중... (시간 좀 걸립니다)"
 cd "$REPO_DIR/backend"
 python3 -m venv venv
 source venv/bin/activate
@@ -82,7 +82,7 @@ pip install --upgrade pip -q
 pip install -r "$REPO_DIR/windows_install/requirements-full.txt" -q
 deactivate
 
-echo "[8/9] DB 마이그레이션 + 관리자 계정 생성 중..."
+echo "[8/10] DB 마이그레이션 + 관리자 계정 생성 중..."
 cd "$REPO_DIR/backend"
 source venv/bin/activate
 python manage.py migrate
@@ -97,7 +97,7 @@ else:
 "
 deactivate
 
-echo "[9/9] 프론트엔드 빌드 + PM2 실행 중..."
+echo "[9/10] 프론트엔드 빌드 + PM2 실행 중..."
 cd "$REPO_DIR/frontend"
 npm install --silent
 npx vite build
@@ -108,6 +108,11 @@ cd "$REPO_DIR"
 pm2 start windows_install/ecosystem.windows.config.cjs
 pm2 save
 
+echo "[10/10] 클로드 코드(Claude Code) 설치 중... — 이후 이 우분투 터미널에서 코드를 직접 고치거나 개선을 요청할 때 사용"
+if ! command -v claude >/dev/null 2>&1; then
+  curl -fsSL https://claude.ai/install.sh | bash
+fi
+
 WSL_IP=$(hostname -I | awk '{print $1}')
 echo ""
 echo "======================================================"
@@ -117,4 +122,7 @@ echo "   http://localhost:5173"
 echo " 로그인: admin / admin123  (로그인 후 꼭 비밀번호를 바꾸세요)"
 echo ""
 echo " 이 우분투(WSL) 안쪽 IP: ${WSL_IP} (참고용, 평소엔 몰라도 됨)"
+echo ""
+echo " 이 터미널에서 'claude' 라고 치면 클로드 코드를 바로 쓸 수 있습니다"
+echo " (코드 수정/개선 요청은 여기서 하면 됩니다 — 지금 대화하는 것과 동일)"
 echo "======================================================"
