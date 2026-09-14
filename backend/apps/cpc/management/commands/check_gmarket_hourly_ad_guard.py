@@ -36,10 +36,11 @@ class Command(BaseCommand):
 
         from crawlers.gmarket_ai_control_crawler import run_control as run_ai_control
         from crawlers.gmarket_cpc2_control_crawler import run_control as run_cpc2_control
+        from crawlers.gmarket_new_adcenter_control import run_control as run_newad_control
         from apps.cpc import eleven_block_guard as guard
 
         acted_rows = []
-        ai_off_cnt = cpc_off_cnt = 0
+        ai_off_cnt = cpc_off_cnt = newad_off_cnt = 0
 
         for a in accts:
             login_id = a.login_id
@@ -80,6 +81,13 @@ class Command(BaseCommand):
                 run_cpc2_control('off', source='schedule', log_fn=lambda m: self.stdout.write(m),
                                   account_filter=[login_id], include_cpc1=True)
                 cpc_off_cnt += 1
+            # 신규광고센터(직접운영/집중운영/통합운영)도 함께 OFF — gmarket_cpc/ai_usage 둘 다
+            # 신규센터 비용이 블렌딩돼있어(_blend_newad_cost) 구광고센터만 꺼서는 안 잡히는
+            # 신규센터발 증가를 놓친다(2026-09-14 사용자 지시로 추가).
+            self.stdout.write(f'=== [{login_id}] 신규광고센터 OFF ===')
+            run_newad_control('off', source='schedule', log_fn=lambda m: self.stdout.write(m),
+                               account_filter=[login_id])
+            newad_off_cnt += 1
             self.stdout.write(f'=== [{login_id}] 완료 — 다음 계정 진행 ===')
             acted_rows.append(f'{login_id}: {tag}')
 
@@ -92,7 +100,7 @@ class Command(BaseCommand):
             return
 
         msg = (f"🛑 [지마켓 시간별 광고비 가드] {now.strftime('%m/%d %H:%M')}\n"
-               f"AI OFF {ai_off_cnt}계정 · CPC(간편+일반) OFF {cpc_off_cnt}계정\n"
+               f"AI OFF {ai_off_cnt}계정 · CPC(간편+일반) OFF {cpc_off_cnt}계정 · 신규광고센터 OFF {newad_off_cnt}계정\n"
                + "\n".join(f"  · {r}" for r in acted_rows))
         try:
             guard._send_telegram_alert(msg)

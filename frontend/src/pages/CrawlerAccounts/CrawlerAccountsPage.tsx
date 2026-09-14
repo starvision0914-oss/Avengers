@@ -86,12 +86,14 @@ export default function CrawlerAccountsPage() {
 
   const handleUpdate = async (a: Account) => {
     try {
-      await api.patch(`/cpc/crawler/accounts/${a.id}/`, {
+      const payload: Record<string, unknown> = {
         seller_name: a.seller_name,
         cost_type: a.cost_type,
         is_active: a.is_active,
         api_key: a.api_key || '',
-      });
+      };
+      if (a.password_enc && a.password_enc.trim()) payload.password_enc = a.password_enc.trim();
+      await api.patch(`/cpc/crawler/accounts/${a.id}/`, payload);
       toast.success('수정 완료');
       setEditId(null);
       load();
@@ -284,7 +286,14 @@ export default function CrawlerAccountsPage() {
                           {plat?.label || a.platform}
                         </span>
                       </td>
-                      <td className={`px-3 py-1.5 font-mono font-medium ${text1}`}>{a.login_id}</td>
+                      <td className={`px-3 py-1.5 font-mono font-medium ${text1}`}>
+                        {a.login_id}
+                        {isEdit && (
+                          <input value={a.password_enc || ''} onChange={e => setAccounts(prev => prev.map(x => x.id === a.id ? { ...x, password_enc: e.target.value } : x))}
+                            type="password" placeholder="비밀번호 변경(입력 시에만 적용)"
+                            className={`mt-1 w-full px-2 py-0.5 rounded border ${input} text-[10px] font-mono`} />
+                        )}
+                      </td>
                       <td className={`px-3 py-1.5 ${text2}`}>
                         {isEdit ? (
                           <input value={a.seller_name} onChange={e => setAccounts(prev => prev.map(x => x.id === a.id ? { ...x, seller_name: e.target.value } : x))}
