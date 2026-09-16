@@ -60,27 +60,30 @@ class Command(BaseCommand):
                 counts[row['status']] += 1
         _, running = _crawl_lock_busy(LCODE_LOCKFILE)
 
+        # DB 기준 실제 남은 작업(미확인 + recheck_days 14일 경과)은 로그 판독 성공 여부와
+        # 무관하게 항상 계산한다 — 로그가 예전에 '완료: X/Y'를 찍은 뒤로 전체 L코드 풀이
+        # 늘어나거나(신규 상품 유입) 기존 건이 14일 넘어 재점검 대상이 돼도, 로그의 완료
+        # 마커는 절대 갱신되지 않아 워치독이 영원히 '완료'로 오판하는 버그가 있었음
+        # (2026-09-16 실측: 완료로그는 99,703건 기준인데 DB엔 146,347건, 59시간째 정지).
+        from django.utils import timezone as _tz
+        db_total = len(all_codes)
+        rows = {r['l_code']: r['checked_at']
+                for r in LCodeStatus.objects.filter(l_code__in=all_codes).values('l_code', 'checked_at')}
+        cutoff = _tz.now() - _tz.timedelta(days=14)
+        never_checked = db_total - len(rows)
+        stale = sum(1 for ts in rows.values() if ts < cutoff)
+        pending = never_checked + stale
+        db_checked = len(rows)
+
         progress = _real_run_progress()
         if progress:
             checked, total, log_done = progress
             pct = round(checked / total * 100, 1) if total else 0
-            done = log_done and not running   # 로그가 완료를 찍었고 프로세스도 실제로 안 살아있을 때만 진짜 완료
+            # 로그가 완료를 찍고, 프로세스도 안 살아있고, DB 기준으로도 남은 일이 없을 때만 진짜 완료.
+            done = log_done and not running and pending == 0
         else:
-            # 로그를 못 읽으면(로그파일 소실 등) 예전엔 '한 번이라도 조회된 적 있는 코드' 비율로
-            # 폴백해 recheck_days(14일) 경과분을 전혀 고려 안 하고 거의 항상 done=True로 오판했음
-            # (2026-09-09 발견: /tmp/check_domemart_lcodes.log가 사라진 뒤 이 경로를 타면서
-            #  재점검 대상이 3만건 넘게 쌓였는데도 계속 '완료'로 찍혀 도매마트 재점검이
-            #  2026-09-06부터 사흘 가까이 멈춰있었음). check_domemart_lcodes와 동일 기준
-            #  (미확인 + 14일 경과)으로 남은 작업이 있는지 계산해야 자동재개가 실제로 동작한다.
-            from django.utils import timezone as _tz
-            total = len(all_codes)
-            rows = {r['l_code']: r['checked_at']
-                    for r in LCodeStatus.objects.filter(l_code__in=all_codes).values('l_code', 'checked_at')}
-            cutoff = _tz.now() - _tz.timedelta(days=14)
-            never_checked = total - len(rows)
-            stale = sum(1 for ts in rows.values() if ts < cutoff)
-            pending = never_checked + stale
-            checked = len(rows)
+            total = db_total
+            checked = db_checked
             pct = round(checked / total * 100, 1) if total else 0
             done = pending == 0 and not running
         resumed = False

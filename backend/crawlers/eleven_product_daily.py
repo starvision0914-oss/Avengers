@@ -233,6 +233,8 @@ def run_all_accounts(log_fn=None, account_filter=None, date_from=None, date_to=N
                         except Exception as ge:
                             log(f'[{a.login_id}] 구글시트 실패(상품수집은 성공): {str(ge)[:120]}')
                     ok = True
+                    a.last_product_daily_check_at = timezone.now()
+                    a.save(update_fields=['last_product_daily_check_at'])
                     break
                 except Exception as e:
                     log(f'[{a.login_id}] 수집 실패(시도 {attempt}/{ATTEMPTS}): {str(e)[:120]}')

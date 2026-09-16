@@ -84,6 +84,12 @@ class CrawlerAccount(models.Model):
     last_excel_stopped = models.IntegerField(null=True, blank=True, help_text='엑셀 반영 후 DB 판매중지 건수')
     last_excel_soldout = models.IntegerField(null=True, blank=True, help_text='엑셀 반영 후 DB 품절 건수')
     last_check_at = models.DateTimeField(null=True, blank=True, help_text='위 값들을 마지막으로 비교/기록한 시각')
+    # 상품별 광고비(ROAS/일별) 테이블은 상품단위라 광고데이터가 0건이면 저장할 row 자체가 없어
+    # collected_at만으로는 "확인했지만 진짜 0건"과 "크롤이 고장나서 방치"를 구분 못함(2026-09-16 실측:
+    # 정상계정 다수가 수개월째 미수집처럼 보였으나 실제론 NODATA 정상 확인이었음) — 성공(0건 포함)
+    # 시마다 이 필드를 갱신하고, 실패(예외)시에는 갱신하지 않아 진짜 방치를 구분한다.
+    last_product_roas_check_at = models.DateTimeField(null=True, blank=True, help_text='상품ROAS(St11ProductRoas) 마지막 정상 확인 시각(0건 확인도 포함, 실패시 갱신 안 됨)')
+    last_product_daily_check_at = models.DateTimeField(null=True, blank=True, help_text='상품일별(St11ProductDaily) 마지막 정상 확인 시각(0건 확인도 포함, 실패시 갱신 안 됨)')
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         db_table = 'crawler_accounts'

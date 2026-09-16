@@ -23,7 +23,8 @@ def suspend_only(targets, mode='validate', log_fn=None):
     from crawlers.gmarket_cost_crawler import _esm_login
     from crawlers.gmarket_loss_delete import (
         _enter_goods_iframe, _paste_and_search, _click, _clear_popups, _find,
-        XP_SELECT_ALL, XP_STATUS_CHANGE, XP_STOPSELL,
+        _select_all_rows, _read_apply_result,
+        XP_SELECT_ALL, XP_STATUS_CHANGE, XP_STOPSELL, XP_APPLY_CHANGE,
     )
 
     by_acc = {}
@@ -88,16 +89,26 @@ def suspend_only(targets, mode='validate', log_fn=None):
                     continue
 
                 # ---- real (판매중지까지만, 삭제 없음) ----
-                _click(d, XP_SELECT_ALL, '전체선택', log_fn)
+                # 헤더 전체선택 체크박스는 일부만 실제 선택되는 문제가 실측 확인돼(2026-08-24)
+                # 행별 체크박스를 직접 클릭하는 _select_all_rows를 쓴다(gmarket_loss_delete와 동일).
+                _select_all_rows(d, log_fn)
                 time.sleep(1)
-                suspended = False
+                applied_pnos = []
                 if _click(d, XP_STATUS_CHANGE, '판매 상태 변경', log_fn):
                     time.sleep(1)
                     if _click(d, XP_STOPSELL, '판매중지', log_fn):
-                        _clear_popups(d, log_fn)
-                        time.sleep(2)
-                        suspended = True
-                results.append({'login_id': eid, 'suspended': suspended})
+                        time.sleep(1)
+                        # "변경" 확정 버튼 — 이걸 안 누르면 옵션만 고른 상태로 아무 반영도 안 됨
+                        # (2026-08-24 실측 확인, gmarket_loss_delete.py와 동일 원칙).
+                        if _click(d, XP_APPLY_CHANGE, '변경', log_fn):
+                            time.sleep(2)
+                            applied_pnos = _read_apply_result(d, log_fn)
+                    _clear_popups(d, log_fn)
+                    time.sleep(2)
+                # 낙관적 전체성공 가정 금지 — 처리결과 모달에서 실제 성공한 건만 인정
+                suspended = bool(applied_pnos)
+                results.append({'login_id': eid, 'suspended': suspended,
+                                 'applied_count': len(applied_pnos), 'applied_pnos': applied_pnos})
                 if suspended:
                     summary['suspended_accounts'] += 1
                 else:

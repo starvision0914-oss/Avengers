@@ -213,7 +213,10 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
     from apps.cpc import eleven_block_guard as guard
     qs = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(crawling_status='차단됨')
     # 테스트/타사 계정은 account_filter로 명시 지정해도 절대 제어하지 않음(뷰어·다운로드만 허용)
-    protected = protected_login_ids('gmarket')
+    # dlwodb777: 상품삭제/판매중지 자동화는 계속 금지(project_gmarket_dlwod777_manual_only)지만,
+    # 신규광고센터(2026-09-07)에 이어 2026-09-16 간편+일반광고(cpc2) ON/OFF도 사용자가 명시적으로
+    # 재요청 — 이 기능에 한해서만 보호 예외.
+    protected = protected_login_ids('gmarket') - {'dlwodb777'}
     if protected:
         qs = qs.exclude(login_id__in=protected)
     if account_filter:

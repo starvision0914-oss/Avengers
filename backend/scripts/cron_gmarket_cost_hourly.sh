@@ -18,6 +18,14 @@ HOUR=$(date '+%H')
 if [ "$HOUR" -ge 16 ] && [ "$HOUR" -le 20 ]; then
     echo "$(date '+%F %T') ${HOUR}시 — 정시실행 최우선(강제선점)" >> "$LOG"
     /usr/bin/python3 manage.py gmarket_ad_priority_preempt >> "$LOG" 2>&1
+    if [ "$HOUR" -eq 16 ]; then
+        # 간편+일반광고 정시OFF 통합(2026-09-16) — 원래 cron_cpc2_off.sh가 별도 16:00 크론으로
+        # 정확히 같은 분에 동시실행되면서 서로 강제선점을 걸어 상대방 크롤을 죽이는 충돌이
+        # 반복됐음(실측 41건). 이 스크립트 안에서 먼저 순차실행해 충돌 자체를 없앤다.
+        echo "$(date '+%F %T') [16시 전용] 간편+일반광고 OFF 시작" >> "$LOG"
+        /usr/bin/python3 manage.py crawl_gmarket_cpc2 off --source schedule >> /tmp/cron_cpc2.log 2>&1
+        echo "$(date '+%F %T') [16시 전용] 간편+일반광고 OFF 완료" >> "$LOG"
+    fi
 else
     # 다른 지마켓 크롤(통합/키워드/today)이나 광고비 락이 잡혀 있으면 — 스킵하지 않고
     # 끝날 때까지 대기 후 수집(스냅샷은 누적값이라 늦게라도 그 시간대까지 다 잡힘).

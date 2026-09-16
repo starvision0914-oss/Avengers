@@ -162,11 +162,18 @@ def collect_account(driver, account, daterange, period_label, log, gsheet=None):
         except Exception:
             continue
         items = obj.get('content') or []
-        cand = [c for c in items if c.get('status') == 'DOWNLOADABLE'
-                and (new_id is None or c.get('id') == new_id
-                     or c.get('requestFileName') == rname)]
+        mine = [c for c in items if new_id is None or c.get('id') == new_id
+                or c.get('requestFileName') == rname]
+        cand = [c for c in mine if c.get('status') == 'DOWNLOADABLE']
         if cand:
             target = cand[0]; break
+        # 이 기간 광고 데이터 자체가 없는 계정(NODATA)은 영원히 DOWNLOADABLE이 안 됨 —
+        # product_daily 크롤러와 동일하게 즉시 종료(실패 아님, 헛기다림 방지). 2026-09-16.
+        statuses = {c.get('status') for c in mine}
+        if statuses and statuses <= {'NODATA', 'NO_DATA', 'FAILED', 'ERROR', 'EXPIRED'}:
+            log(f'[{login_id}] 이 기간 광고 데이터 없음(NODATA) — 0건 처리')
+            St11ProductRoas.objects.filter(eleven_id=login_id, period=period_label).delete()
+            return 0, 0
         log(f'[{login_id}] 생성 대기 {(i+1)*12}s...')
     if not target:
         raise Exception('보고서 생성 타임아웃(DOWNLOADABLE 안 됨)')
@@ -237,6 +244,8 @@ def run_all_accounts(log_fn=None, account_filter=None, daterange=None, period_la
             driver = _make_driver()   # 계정마다 새 세션 (세션 재사용으로 인한 데이터 혼선 방지)
             n, _ = collect_account(driver, a, daterange, period_label, log, gsheet=sheet)
             collected += 1
+            a.last_product_roas_check_at = timezone.now()
+            a.save(update_fields=['last_product_roas_check_at'])
         except Exception as e:
             failed += 1
             log(f'[{a.login_id}] 수집 실패: {str(e)[:120]}')
