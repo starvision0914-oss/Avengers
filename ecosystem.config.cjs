@@ -51,6 +51,17 @@ module.exports = {
       },
     },
     {
+      // 2026-09-17 사용자요청: 도매마트 L코드 품절/미확인 상태를 무한반복으로 계속 재조회
+      // (멈추면 안 됨). check_domemart_lcodes --only-status soldout,not_found를
+      // while true로 반복 — 한 회차 끝나면(처리할 항목 없음) 바로 다음 회차 재시작.
+      name: 'avengers-lcode-soldout-loop',
+      cwd: '/home/rejoice888/Avengers/backend',
+      script: 'scripts/loop_lcode_soldout_recheck.sh',
+      interpreter: 'none',
+      autorestart: true,
+      restart_delay: 5000,
+    },
+    {
       name: 'avengers-xvfb-vnc',
       script: '/usr/bin/Xvfb',
       args: ':99 -screen 0 1920x1080x24',

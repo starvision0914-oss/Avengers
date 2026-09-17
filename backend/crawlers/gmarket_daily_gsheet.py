@@ -307,6 +307,34 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
             ss_ai = gsheet_upload.open_spreadsheet(AI_KEY)
     try:
         for ad_type, ss in (('cpc', ss_cpc), ('ai', ss_ai)):
+            # 2026-09-17 사용자 확정: 9월부터 AI 워크시트는 구광고센터(ad.esmplus.com)
+            # Remarketing/Report 대신 신규광고센터(adcenter.esmplus.com) 일자별 리포트로
+            # 대체 — 8월까지 쌓인 구형식 데이터는 그대로 두고, 이 아래부터는 새로 채워진다.
+            # '종합' 시트가 D열(광고비)/J열(매출액)을 IMPORTRANGE로 참조해서 컬럼 위치를
+            # 그대로 보존해야 하므로 fetch_daily_report_xlsx()가 이미 그렇게 재배치해서 줌.
+            if ad_type == 'ai':
+                try:
+                    from apps.cpc.models import CrawlerAccount as _CA
+                    from crawlers.gmarket_new_adcenter_control import fetch_daily_report_xlsx as _fetch_newad
+                    from datetime import date as _date, timedelta as _td
+                    _acc = _CA.objects.filter(platform='gmarket', login_id=login_id).first()
+                    _since, _until = _date.today().replace(day=1), _date.today() - _td(days=1)
+                    if _acc and _since <= _until:
+                        data = _fetch_newad(driver, login_id, _acc.password_enc, _since, _until, log_fn=log_fn)
+                    else:
+                        data = None
+                    if not data:
+                        res['ai'] = {'ok': False, 'error': '신규광고센터 데이터없음'}
+                        continue
+                    if gsheet:
+                        ok = gsheet_upload.upload_rows(data, login_id, ss, log=lambda m: _log(log_fn, m))
+                        res['ai'] = {'ok': ok, 'rows': len(data) - 1}
+                    else:
+                        res['ai'] = {'ok': True, 'rows': len(data) - 1, 'header': data[0]}
+                except Exception as e:
+                    _log(log_fn, f'  [{login_id}/ai] 신규광고센터 오류 {str(e)[:140]}')
+                    res['ai'] = {'ok': False, 'error': str(e)[:140]}
+                continue
             try:
                 f = _download_daily(driver, login_id, ad_type, year, month, log_fn)
                 if not f:

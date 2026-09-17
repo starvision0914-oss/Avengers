@@ -2,6 +2,8 @@
 2026-09-04 신규 오픈 — 기존 ad.esmplus.com(간편광고/AI)과는 완전히 별도의 로그인 시스템.
 로그인 탭은 'ESM PLUS'가 기본 선택인데 우리 계정은 '지마켓' 탭으로만 로그인됨(실측 확인).
 캠페인 목록의 ON/OFF는 확인창 없이 토글 클릭 한 번으로 즉시 반영(실측)."""
+import os
+import glob
 import time
 import logging
 from selenium.webdriver.common.by import By
@@ -24,8 +26,15 @@ def _dismiss_alert(driver):
         return False
 
 
-def _login(driver, login_id, password):
-    """adcenter.esmplus.com 로그인 — '지마켓' 탭 선택 후 아이디/비번 입력."""
+def _login(driver, login_id, password, _attempt=0):
+    """adcenter.esmplus.com 로그인 — '지마켓' 탭 선택 후 아이디/비번 입력.
+    '지마켓' 탭 클릭이 폼을 리렌더링해서, 여러 계정을 연속으로 빠르게 돌릴 때
+    간헐적으로 stale element reference가 남(2026-09-17 실측: 24계정 연속 실행 중
+    23개가 이 에러로 로그인 실패, 1회 재시도로도 일부는 또 실패) — 최대 3회 시도."""
+    try:
+        driver.delete_all_cookies()
+    except Exception:
+        pass
     driver.get(LOGIN_URL)
     try:
         WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, 'login-username')))
@@ -33,8 +42,8 @@ def _login(driver, login_id, password):
         return False
     try:
         driver.find_element(By.CSS_SELECTOR, '.button__tab--gmarket').click()
-        time.sleep(0.5)
-        user = driver.find_element(By.ID, 'login-username')
+        time.sleep(1.5)
+        user = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'login-username')))
         user.clear()
         user.send_keys(login_id)
         pw = driver.find_element(By.ID, 'login-password')
@@ -44,6 +53,9 @@ def _login(driver, login_id, password):
         time.sleep(3)
     except Exception as e:
         logger.error(f'[신규광고센터:{login_id}] 로그인 폼 처리 오류: {e}')
+        if _attempt < 2:
+            time.sleep(3)
+            return _login(driver, login_id, password, _attempt=_attempt + 1)
         return False
     return 'login' not in driver.current_url
 
@@ -133,6 +145,203 @@ def fetch_daily_report(driver, login_id, password, since_date, until_date, log_f
             result[d] = cost
     log(f'{since_date}~{until_date} 일별 {len(result)}일 조회(합계 {sum(result.values()):,}원)')
     return result
+
+
+NEWAD_DL = '/tmp/avengers_newadcenter_dl'
+
+
+def _clear_newad_dl():
+    os.makedirs(NEWAD_DL, exist_ok=True)
+    for f in glob.glob(NEWAD_DL + '/*'):
+        try: os.remove(f)
+        except Exception: pass
+
+
+def _wait_newad_dl(timeout=30):
+    """.xlsx만 기다린다 — 리포트 생성이 아직 안 끝난 상태에서 다운로드 버튼을 누르면
+    서버가 처리중 HTML을 내려줘 브라우저가 파일명 없이 'downloads.html'로 저장하는
+    경우가 있었다(2026-09-17 실측, 빈 파일이거나 0바이트). 그건 무시하고 진짜 엑셀만 채택."""
+    for _ in range(timeout * 2):
+        fs = [f for f in glob.glob(NEWAD_DL + '/*')
+              if f.lower().endswith('.xlsx') and not f.endswith('.crdownload')]
+        if fs:
+            time.sleep(1)
+            return sorted(fs, key=os.path.getmtime)[-1]
+        time.sleep(0.5)
+    return None
+
+
+def fetch_daily_report_xlsx(driver, login_id, password, since_date, until_date, log_fn=None):
+    """신규 광고센터(adcenter.esmplus.com/report) '일별×날짜별' 상세리포트를 엑셀 다운로드로
+    가져온다(2026-09-17 사용자 요청 — fetch_daily_report()의 화면표 읽기 대신 '엑셀 다운로드'
+    버튼 사용, 노출수/클릭수/클릭률/평균클릭비용/광고비/전환금액/광고수익률 등 17개 컬럼 전체
+    확보). 리포트는 '셀러별' 기준(엑셀 메타 '셀러ID' 행으로 실측 확인)이라 지마켓 아이디 단위
+    집계가 저절로 보장됨 — 서브아이디가 별도 로그인 계정으로 존재하면 그 계정으로 한 번 더
+    이 함수를 호출해서 따로 집계하면 됨(공유 세션/전환 개념 없음, 구광고센터 서브계정과 다름).
+    ⚠️ '오늘'은 조회 캘린더에서 선택 불가(실측) — until_date는 어제 이하여야 함.
+    ⚠️ since_date/until_date는 캘린더에 현재 표시된 달(오늘이 속한 달) 안이어야 함(월 이동 미구현).
+    반환: [header_row, *data_rows](날짜 오름차순 정렬) 또는 실패 시 None. 집행 0건이어도
+    엑셀 자체는 받아지므로 헤더만 있는 리스트가 올 수 있음."""
+    def log(m):
+        logger.info(f'[신규광고센터엑셀:{login_id}] {m}')
+        if log_fn:
+            log_fn(f'[신규광고센터엑셀:{login_id}] {m}')
+
+    if not _login(driver, login_id, password):
+        log('로그인 실패')
+        return None
+
+    driver.get(REPORT_URL)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'button.button__calendar')))
+    except TimeoutException:
+        log('리포트 페이지 로딩 실패')
+        return None
+    time.sleep(1)
+
+    try:
+        driver.execute_script("document.querySelector('button.button__calendar').click();")
+        time.sleep(1)
+        if not _click_calendar_day(driver, since_date.day):
+            log(f'시작일({since_date}) 클릭 실패'); return None
+        time.sleep(0.4)
+        if not _click_calendar_day(driver, until_date.day):
+            log(f'종료일({until_date}) 클릭 실패'); return None
+        time.sleep(0.4)
+        driver.find_element(By.XPATH,
+            "//div[contains(@class,'box__button-wrap')]//button[text()='적용']").click()
+        time.sleep(1.5)
+
+        applied = driver.find_element(By.ID, 'date__start').get_attribute('value')
+        expected = f'{since_date:%Y.%m.%d} ~ {until_date:%Y.%m.%d}'
+        if applied != expected:
+            log(f'기간 설정 확인 실패(적용={applied}, 기대={expected})')
+            return None
+
+        driver.execute_script("document.getElementById('viewMode-daily').click();")
+        time.sleep(0.3)
+        driver.execute_script("document.querySelectorAll('.button__wrap button')[1].click();")  # 검색
+        # 검색 결과 표가 실제로 그려질 때까지 대기(고정 3초만으로는 리포트 생성이 서버에서
+        # 안 끝난 상태로 다운로드를 눌러 'downloads.html' 오다운로드가 발생했음, 2026-09-17 실측)
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, '.box__table table tbody tr')))
+        except TimeoutException:
+            pass
+        time.sleep(2)
+    except Exception as e:
+        log(f'조회 중 오류: {e}')
+        return None
+
+    f = None
+    for attempt in range(3):
+        _clear_newad_dl()
+        try:
+            btn = driver.find_element(By.XPATH,
+                "//button[contains(@class,'button--excel') and text()='엑셀 다운로드']")
+            btn.click()   # JS execute_script click은 실제 다운로드가 안 트리거됨(2026-09-17 실측)
+        except Exception as e:
+            log(f'다운로드 버튼 클릭 실패({attempt + 1}/3): {e}')
+            time.sleep(2)
+            continue
+        f = _wait_newad_dl(20)
+        if f:
+            break
+        log(f'엑셀 다운로드 재시도({attempt + 1}/3)')
+        time.sleep(3)
+    if not f or os.path.getsize(f) < 100:
+        log('엑셀 다운로드 실패(3회 재시도 후)')
+        return None
+
+    try:
+        import pandas as pd
+        # 앞쪽 메타행(리포트종류/사이트/셀러ID/빈행)이 몇 줄인지 고정돼있지 않아, 첫 칸이
+        # '날짜'인 행을 찾아 그 행을 헤더로 삼는다(2026-09-17 실측: 4행 고정 가정이 깨짐).
+        raw = pd.read_excel(f, header=None)
+        header_idx = None
+        for i in range(min(len(raw), 20)):
+            if str(raw.iloc[i, 0]).strip() == '날짜':
+                header_idx = i
+                break
+        if header_idx is None:
+            log('헤더행(날짜) 못 찾음')
+            return None
+        df = pd.read_excel(f, header=header_idx)
+    except Exception as e:
+        log(f'엑셀 파싱 실패: {e}')
+        return None
+    finally:
+        try: os.remove(f)
+        except Exception: pass
+
+    if df.empty or len(df.columns) < 2:
+        log('데이터 없음(0건)')
+        return None
+
+    date_col = df.columns[0]
+    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    df = df.dropna(subset=[date_col]).sort_values(date_col)
+    by_date = {r[date_col].date(): r for _, r in df.iterrows()}
+
+    # CPC_KEY 스프레드시트 '종합' 워크시트가 이 워크시트의 D열(광고비)/J열(매출액)을
+    # IMPORTRANGE로 그대로 참조한다(2026-09-17 확인) — 컬럼을 새로 늘리면서도 그 두 자리
+    # 의미는 유지해야 종합시트 수식이 안 깨짐. '광고 비용'→D, '판매자 전환 금액'→J로
+    # 오도록 나머지 15개 컬럼 순서를 재배치.
+    orig_cols = list(df.columns[1:])
+    # 헤더 '날짜'까지 A열이라 value_cols[0]=B열 ... value_cols[8]=J열.
+    # '광고 비용'이 D열(index 2), '판매자 전환 금액'이 J열(index 8)에 오도록 배치.
+    _priority = ['노출 수', '클릭 수', '광고 비용', '평균클릭비용', '클릭률', '광고수익률',
+                 '판매자 전환 수', '광고 전환 수량', '판매자 전환 금액']
+    value_cols = [c for c in _priority if c in orig_cols]
+    value_cols += [c for c in orig_cols if c not in value_cols]
+
+    pct_cols = {c for c in value_cols if ('률' in str(c) or '전환율' in str(c))}
+    header = [str(date_col)] + [str(c) for c in value_cols]
+    rows = [header]
+
+    # '종합' 시트가 날짜별로 고정된 행번호(row=day+1)를 IMPORTRANGE로 참조하므로 월중
+    # 어느 날 실행해도 행번호가 안 밀리게 그 달의 실제 말일까지 채우고, 합계는 말일 바로
+    # 다음 행에 온다(2026-09-17 확정 — 9월은 30일까지+31행에 합계, 31일짜리 달은
+    # 31일까지+32행에 합계 — 기존 일자별 시트 관례와 동일한 가변 위치).
+    import calendar
+    import datetime as _dt
+    month_len = calendar.monthrange(since_date.year, since_date.month)[1]
+
+    for day in range(1, month_len + 1):
+        cur = since_date.replace(day=day)
+        future = cur > until_date
+        r = None if future else by_date.get(cur)
+        row = [cur.strftime('%Y-%m-%d')]
+        for c in value_cols:
+            if future:
+                row.append('')
+            elif r is None:
+                row.append('0%' if c in pct_cols else '0')
+            else:
+                v = r[c]
+                row.append('' if pd.isna(v) else str(v))
+        rows.append(row)
+
+    # 기존 일자별 시트 관례(_build_daily_matrix)와 동일하게 맨 아래 합계행 추가
+    # (2026-09-17 사용자 지적: 신규광고센터 형식엔 원래 없었음). %컬럼은 합산 의미가
+    # 없어 빈칸으로 둔다.
+    totals = ['합계']
+    for idx, c in enumerate(value_cols):
+        if c in pct_cols:
+            totals.append('')
+            continue
+        s = 0
+        for row in rows[1:]:
+            try:
+                s += float(row[idx + 1])
+            except (ValueError, TypeError):
+                pass
+        totals.append(str(int(s)) if s == int(s) else str(s))
+    rows.append(totals)
+
+    log(f'{since_date}~{until_date} 일별 {len(rows) - 2}행(전체 날짜 채움, 원본 {len(df)}행) + 합계행')
+    return rows
 
 
 def _get_campaign_rows(driver, wait=10, _retried=False):

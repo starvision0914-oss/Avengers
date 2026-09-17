@@ -366,6 +366,14 @@ def run_control(action, source='manual', log_fn=None, account_filter=None, inclu
                 else:
                     try: _dismiss_alert(driver)   # 잔여 알림 정리 → 다음 계정 보호(연쇄실패 방지)
                     except Exception: pass
+                    # 세션은 살아있지만 stale element reference 등 일시적 DOM 오류로 실패한 경우도
+                    # 그대로 스킵되면 그날 ON/OFF가 영구 누락됨(2026-09-17 rejoice321/rejoice794
+                    # 실측: 세션 죽음이 아니어서 재시도 큐에 안 들어가고 그냥 넘어감) — 세션 죽음과
+                    # 동일하게 1회만 재시도(같은 retried_logins로 무한루프 방지).
+                    if acct.login_id not in retried_logins:
+                        retried_logins.add(acct.login_id)
+                        pending.append(acct)
+                        if log_fn: log_fn(f'[간편:{acct.login_id}] 일시적 오류 — 재시도 예약')
     finally:
         if driver:
             try: driver.quit()
