@@ -6,7 +6,8 @@ import {
   getSt11StrategyAccounts, getSt11StrategyCampaigns, fetchSt11StrategyCampaigns, controlSt11Strategy, stopSt11Strategy, getSt11StrategyLogs, getSt11StrategyRuns,
   getSt11StrategySchedule, saveSt11StrategySchedule,
   getNewAdCenterHistory, controlNewAdCenter,
-  getNewAdCenterSchedule, updateNewAdCenterSchedule, createNewAdCenterSchedule
+  getNewAdCenterSchedule, updateNewAdCenterSchedule, createNewAdCenterSchedule,
+  getGmarketAdStrategySchedule, updateGmarketAdStrategySchedule, getGmarketAdStrategyStatus,
 } from '../../api/crawler';
 import { Save, Play, Clock, Zap, Target, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -21,6 +22,11 @@ export default function AdSettingsPage() {
   const [newAdHistory, setNewAdHistory] = useState<any[]>([]);
   const [newAdSched, setNewAdSched] = useState<any>(null);
   const [newAdForm, setNewAdForm] = useState<any>({ on_time: '08:00', off_time: '20:00', weekdays: [1, 2, 3, 4, 5], off_weekdays: [1, 2, 3, 4, 5] });
+  // ── 옥션광고센터(L코드 도매마트) 전략설정 — 2026-09-18 ──
+  const [auctionStratSched, setAuctionStratSched] = useState<any>(null);
+  const [auctionStratForm, setAuctionStratForm] = useState<any>({ on_start: 8, on_end: 16, weekdays: [1, 2, 3, 4, 5], enabled: true });
+  const [auctionStratStatus, setAuctionStratStatus] = useState<any>(null);
+  const [auctionStratSaving, setAuctionStratSaving] = useState(false);
   const [cpc2Sched, setCpc2Sched] = useState<any>(null);
   const [aiScheds, setAiScheds] = useState<any[]>([]);
   const [cpc2History, setCpc2History] = useState<any[]>([]);
@@ -52,7 +58,32 @@ export default function AdSettingsPage() {
   const [stratSched, setStratSched] = useState<any>(null); // 저장된 전략(메타)
   const [stratSaving, setStratSaving] = useState(false);
 
+  const loadAuctionStrategy = () => {
+    getGmarketAdStrategySchedule().then(d => {
+      const list = Array.isArray(d) ? d : d.results || [];
+      if (list[0]) {
+        setAuctionStratSched(list[0]);
+        setAuctionStratForm({
+          on_start: list[0].on_start ?? 8, on_end: list[0].on_end ?? 16,
+          weekdays: list[0].weekdays?.length ? list[0].weekdays : [1, 2, 3, 4, 5],
+          enabled: !!list[0].enabled,
+        });
+      }
+    });
+    getGmarketAdStrategyStatus().then(setAuctionStratStatus).catch(() => {});
+  };
+
+  const saveAuctionStrategy = () => {
+    if (!auctionStratSched) return;
+    setAuctionStratSaving(true);
+    updateGmarketAdStrategySchedule(auctionStratSched.id, { ...auctionStratForm })
+      .then(() => { toast.success('옥션광고센터 전략 저장됨'); loadAuctionStrategy(); })
+      .catch(() => toast.error('저장 실패'))
+      .finally(() => setAuctionStratSaving(false));
+  };
+
   const load = () => {
+    loadAuctionStrategy();
     getCpc2Schedule().then(d => {
       const list = Array.isArray(d) ? d : d.results || [];
       if (list[0]) { setCpc2Sched(list[0]); setCpc2Form({ on_time: list[0].on_time || '08:30', off_time: list[0].off_time || '16:00', weekdays: list[0].weekdays?.length ? list[0].weekdays : [1, 2, 3, 4, 5], off_weekdays: list[0].off_weekdays?.length ? list[0].off_weekdays : [1, 2, 3, 4, 5], include_cpc1: !!list[0].include_cpc1 }); setCpc2Accounts(list[0].selected_accounts || []); }
@@ -376,6 +407,7 @@ export default function AdSettingsPage() {
             { key: 'cpc2', label: '옥션 간편/일반광고 제어' },
             { key: 'ai', label: '옥션 AI 광고 제어' },
             { key: 'st11strategy', label: '11번가 전략설정' },
+            { key: 'auctionstrategy', label: '옥션광고센터 전략설정' },
             { key: 'history', label: '제어 이력' },
           ].map(t => (
             <button key={t.key} onClick={() => setTab(t.key)}
@@ -944,6 +976,93 @@ export default function AdSettingsPage() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {tab === 'auctionstrategy' && (
+            <div className="space-y-5">
+              <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm text-blue-800">
+                옥션광고센터(ad.esmplus.com) 일반광고 그룹 중 <b>L코드(도매마트) 상품이 들어있는 그룹만</b> 자동으로 찾아서
+                아래 요일·시간대로 노출요일/시간을 맞춥니다. 그룹이 계정당 수백 개라 백그라운드에서 천천히(계속) 스캔합니다 —
+                전체 계정 1바퀴 도는 데 몇 시간 걸릴 수 있습니다.
+              </div>
+
+              <div className="border rounded p-4 space-y-3">
+                <h3 className="font-semibold flex items-center gap-2"><Target size={16} /> 전략 설정</h3>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={!!auctionStratForm.enabled}
+                    onChange={e => setAuctionStratForm((f: any) => ({ ...f, enabled: e.target.checked }))} />
+                  자동 적용 사용(끄면 스캔만 하고 실제 설정 변경은 안 함)
+                </label>
+                <div className="flex items-center gap-3 text-sm">
+                  <span>노출시간</span>
+                  <select value={auctionStratForm.on_start}
+                    onChange={e => setAuctionStratForm((f: any) => ({ ...f, on_start: Number(e.target.value) }))}
+                    className="border rounded px-2 py-1">
+                    {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{h}시</option>)}
+                  </select>
+                  <span>~</span>
+                  <select value={auctionStratForm.on_end}
+                    onChange={e => setAuctionStratForm((f: any) => ({ ...f, on_end: Number(e.target.value) }))}
+                    className="border rounded px-2 py-1">
+                    {Array.from({ length: 24 }, (_, h) => <option key={h + 1} value={h + 1}>{h + 1}시</option>)}
+                  </select>
+                </div>
+                <div className="flex items-center gap-2 text-sm flex-wrap">
+                  <span>적용 요일</span>
+                  {WEEKDAYS.map(w => (
+                    <label key={w.v} className="flex items-center gap-1">
+                      <input type="checkbox" checked={auctionStratForm.weekdays?.includes(w.v)}
+                        onChange={e => setAuctionStratForm((f: any) => ({
+                          ...f,
+                          weekdays: e.target.checked
+                            ? [...(f.weekdays || []), w.v]
+                            : (f.weekdays || []).filter((x: number) => x !== w.v),
+                        }))} />
+                      {w.n}
+                    </label>
+                  ))}
+                </div>
+                <button onClick={saveAuctionStrategy} disabled={auctionStratSaving}
+                  className="flex items-center gap-1 px-4 py-1.5 bg-blue-600 text-white rounded text-sm disabled:opacity-50">
+                  <Save size={14} /> {auctionStratSaving ? '저장 중...' : '저장'}
+                </button>
+                {auctionStratSched?.last_run_at && (
+                  <p className="text-xs text-gray-500">마지막 스캔: {new Date(auctionStratSched.last_run_at).toLocaleString('ko-KR')}</p>
+                )}
+              </div>
+
+              <div className="border rounded p-4 space-y-3">
+                <h3 className="font-semibold flex items-center gap-2"><RefreshCw size={16} /> 스캔 진행상황
+                  <button onClick={loadAuctionStrategy} className="text-xs text-blue-600 underline">새로고침</button>
+                </h3>
+                {auctionStratStatus ? (
+                  <>
+                    <div className="grid grid-cols-4 gap-3 text-sm">
+                      <div className="bg-gray-50 rounded p-3"><div className="text-gray-500">대상 계정</div><div className="text-lg font-bold">{auctionStratStatus.scanned_accounts}/{auctionStratStatus.target_accounts}</div></div>
+                      <div className="bg-gray-50 rounded p-3"><div className="text-gray-500">확인한 그룹</div><div className="text-lg font-bold">{auctionStratStatus.total_checked?.toLocaleString()}</div></div>
+                      <div className="bg-gray-50 rounded p-3"><div className="text-gray-500">L코드 발견</div><div className="text-lg font-bold text-orange-600">{auctionStratStatus.lcode_found?.toLocaleString()}</div></div>
+                      <div className="bg-gray-50 rounded p-3"><div className="text-gray-500">전략 적용됨</div><div className="text-lg font-bold text-green-600">{auctionStratStatus.applied?.toLocaleString()}</div></div>
+                    </div>
+                    {auctionStratStatus.by_account?.length > 0 && (
+                      <table className="w-full text-sm mt-2">
+                        <thead><tr className="text-left text-gray-500 border-b">
+                          <th className="py-1">계정</th><th className="py-1 text-right">L코드 그룹</th><th className="py-1 text-right">적용됨</th>
+                        </tr></thead>
+                        <tbody>
+                          {auctionStratStatus.by_account.map((r: any) => (
+                            <tr key={r.login_id} className="border-b last:border-0">
+                              <td className="py-1">{r.login_id}</td>
+                              <td className="py-1 text-right">{r.groups}</td>
+                              <td className="py-1 text-right">{r.applied}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </>
+                ) : <p className="text-sm text-gray-400">불러오는 중...</p>}
               </div>
             </div>
           )}

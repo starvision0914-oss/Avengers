@@ -30,6 +30,9 @@ export const getNewAdCenterSchedule = () => api.get('/cpc/new-adcenter-schedule/
 export const updateNewAdCenterSchedule = (id: number, data: any) => api.put(`/cpc/new-adcenter-schedule/${id}/`, data).then(r => r.data);
 export const createNewAdCenterSchedule = (data: any) => api.post('/cpc/new-adcenter-schedule/', data).then(r => r.data);
 export const getGmarketMyAccounts = () => api.get('/cpc/gmarket-my/accounts/').then(r => r.data);
+export const getGmarketAdStrategySchedule = () => api.get('/cpc/gmarket-ad-strategy-schedule/').then(r => r.data);
+export const updateGmarketAdStrategySchedule = (id: number, data: any) => api.put(`/cpc/gmarket-ad-strategy-schedule/${id}/`, data).then(r => r.data);
+export const getGmarketAdStrategyStatus = () => api.get('/cpc/gmarket/ad-strategy-status/').then(r => r.data);
 export const getAiSchedule = () => api.get('/cpc/ai-schedule/').then(r => r.data);
 export const updateAiSchedule = (id: number, data: any) => api.put(`/cpc/ai-schedule/${id}/`, data).then(r => r.data);
 export const createAiSchedule = (data: any) => api.post('/cpc/ai-schedule/', data).then(r => r.data);

@@ -16,7 +16,9 @@ from .views import (
     GmarketSuspendAllNoMatchView, WCodeDownloadView, Eleven11stSoldoutUnifiedView,
     LCodeCheckStartView, LCodeCheckStopView, LCodeStatusView, DomemartAccountInfoView,
     DomemartInvoiceCollectView, DomemartInvoiceListView, DomemartInvoiceDownloadView,
+    DomemartInvoiceHistoryDownloadView,
     CpcAdStatusViewSet, Cpc2ScheduleViewSet, Cpc2HistoryViewSet,
+    GmarketAdStrategyScheduleViewSet, GmarketAdStrategyStatusView,
     NewAdCenterHistoryViewSet, NewAdCenterControlView, NewAdCenterScheduleViewSet,
     AiScheduleViewSet, TelegramConfigViewSet, TelegramRecipientViewSet,
     SellerGroupViewSet, TelegramSendView, Cpc2ControlView,
@@ -65,6 +67,7 @@ router.register(r'ai-history', GmarketAiHistoryViewSet, basename='aihistory')
 router.register(r'st11-campaigns', St11CampaignViewSet)
 router.register(r'cpc-status', CpcAdStatusViewSet)
 router.register(r'cpc2-schedule', Cpc2ScheduleViewSet)
+router.register(r'gmarket-ad-strategy-schedule', GmarketAdStrategyScheduleViewSet)
 router.register(r'cpc2-history', Cpc2HistoryViewSet, basename='cpc2history')
 router.register(r'new-adcenter-history', NewAdCenterHistoryViewSet, basename='newadcenterhistory')
 router.register(r'new-adcenter-schedule', NewAdCenterScheduleViewSet, basename='newadcenterschedule')
@@ -155,6 +158,7 @@ urlpatterns = [
     path('gmarket/loss-products/', GmarketLossProductsView.as_view()),
     path('gmarket/loss-products/mark-deleted/', GmarketLossMarkDeletedView.as_view()),
     path('gmarket/loss-products/delete/', GmarketLossDeleteView.as_view()),
+    path('gmarket/ad-strategy-status/', GmarketAdStrategyStatusView.as_view()),
     path('gmarket/keyword-crawl/', GmarketKeywordCrawlView.as_view()),
     path('gmarket/keyword-upload/', GmarketKeywordUploadView.as_view()),
     path('gmarket/keyword-status/', GmarketKeywordStatusView.as_view()),
@@ -169,6 +173,7 @@ urlpatterns = [
     path('domemart/account-info/', DomemartAccountInfoView.as_view()),
     path('domemart/invoice/collect/', DomemartInvoiceCollectView.as_view()),
     path('domemart/invoice/', DomemartInvoiceListView.as_view()),
+    path('domemart/invoice/history/download/', DomemartInvoiceHistoryDownloadView.as_view()),
     path('domemart/invoice/<int:pk>/download/', DomemartInvoiceDownloadView.as_view()),
     path('eleven-my/products/', ElevenMyProductListView.as_view()),
     path('eleven-my/products/<int:pk>/', ElevenMyProductDetailView.as_view()),

@@ -403,6 +403,24 @@ export default function OwnerclanCrawlerPage() {
     }
   };
 
+  // 회차별 파일(최신 2개만 보관)과 별개로, 품목주문번호 기준 중복제거 누적본을 통째로 받는다
+  // (2026-09-18 사용자 요청 — 지난 회차 자료도 나중에 볼 수 있게).
+  const handleDomemartInvoiceHistoryDownload = async () => {
+    try {
+      const res = await api.get('/cpc/domemart/invoice/history/download/', { responseType: 'blob' });
+      const cd = res.headers['content-disposition'] || '';
+      const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^"]+)"?/i);
+      const url = URL.createObjectURL(res.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = m ? decodeURIComponent(m[1]) : '도매마트_송장정보_전체이력.xlsx';
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert('다운로드 실패');
+    }
+  };
+
   const orderBatchParams = useCallback((): Record<string, string> => {
     const params: Record<string, string> = { file_type: orderFileType };
     if (orderBatchKey !== 'latest') {
@@ -629,6 +647,13 @@ export default function OwnerclanCrawlerPage() {
                 style={{ background: '#2563eb' }}>
                 <Download size={13} />
                 송장다운로드
+              </button>
+              <button onClick={handleDomemartInvoiceHistoryDownload}
+                title="회차마다 최신 2개만 남는 위 목록과 별개로, 지금까지 수집된 전체 이력을 중복 없이 하나의 엑셀로 받습니다"
+                className="flex items-center gap-1.5 px-3 py-1 text-[13px] font-semibold text-white rounded"
+                style={{ background: '#7c3aed' }}>
+                <Download size={13} />
+                전체이력 다운로드
               </button>
             </span>
           </div>

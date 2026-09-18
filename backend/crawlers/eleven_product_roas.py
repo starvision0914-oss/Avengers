@@ -140,43 +140,57 @@ def collect_account(driver, account, daterange, period_label, log, gsheet=None):
             log(f'[{login_id}] 기존 보고서 {len(old)}개 삭제')
     except Exception:
         pass
-    log(f'[{login_id}] sellerNo={sn} 보고서 생성요청...')
-    rname = f'auto_{login_id}_{daterange.replace(",", "_")}'
-    gen = (f'{API}/advertiser/reports/v1/bulkdownload/files?dateRange={daterange}&dateInterval=monthly'
-           f'&reportName={rname}&downloadReportType=FOCUS&reportScope=PRODUCT_KEYWORD'
-           f'&metricTypes=BASIC,TOTAL_CONVERSION')
-    res = driver.execute_async_script(_POST, gen, sn)
-    if not res.startswith('[200'):
-        raise Exception(f'생성요청 실패: {res[:80]}')
-    try:
-        new_id = json.loads(res[res.index('{'):]).get('id')
-    except Exception:
-        new_id = None
-    # 폴링: 방금 생성한 보고서가 DOWNLOADABLE 될 때까지
     files_url = f'{API}/advertiser/reports/v1/bulkdownload/files'
-    target = None
-    for i in range(20):
-        time.sleep(12)
+
+    def _generate_and_wait(attempt):
+        rname = f'auto_{login_id}_{daterange.replace(",", "_")}_{attempt}'
+        log(f'[{login_id}] sellerNo={sn} 보고서 생성요청...(시도 {attempt}/2)')
+        gen = (f'{API}/advertiser/reports/v1/bulkdownload/files?dateRange={daterange}&dateInterval=monthly'
+               f'&reportName={rname}&downloadReportType=FOCUS&reportScope=PRODUCT_KEYWORD'
+               f'&metricTypes=BASIC,TOTAL_CONVERSION')
+        res = driver.execute_async_script(_POST, gen, sn)
+        if not res.startswith('[200'):
+            raise Exception(f'생성요청 실패: {res[:80]}')
         try:
-            obj = json.loads(driver.execute_async_script(_GET, files_url, sn))
+            new_id = json.loads(res[res.index('{'):]).get('id')
         except Exception:
-            continue
-        items = obj.get('content') or []
-        mine = [c for c in items if new_id is None or c.get('id') == new_id
-                or c.get('requestFileName') == rname]
-        cand = [c for c in mine if c.get('status') == 'DOWNLOADABLE']
-        if cand:
-            target = cand[0]; break
-        # 이 기간 광고 데이터 자체가 없는 계정(NODATA)은 영원히 DOWNLOADABLE이 안 됨 —
-        # product_daily 크롤러와 동일하게 즉시 종료(실패 아님, 헛기다림 방지). 2026-09-16.
-        statuses = {c.get('status') for c in mine}
-        if statuses and statuses <= {'NODATA', 'NO_DATA', 'FAILED', 'ERROR', 'EXPIRED'}:
+            new_id = None
+        # 폴링: 방금 생성한 보고서가 DOWNLOADABLE 될 때까지
+        for i in range(20):
+            time.sleep(12)
+            try:
+                obj = json.loads(driver.execute_async_script(_GET, files_url, sn))
+            except Exception:
+                continue
+            items = obj.get('content') or []
+            mine = [c for c in items if new_id is None or c.get('id') == new_id
+                    or c.get('requestFileName') == rname]
+            cand = [c for c in mine if c.get('status') == 'DOWNLOADABLE']
+            if cand:
+                return cand[0], False
+            # 이 기간 광고 데이터 자체가 없는 계정(NODATA)은 영원히 DOWNLOADABLE이 안 됨 —
+            # product_daily 크롤러와 동일하게 즉시 종료(실패 아님, 헛기다림 방지). 2026-09-16.
+            statuses = {c.get('status') for c in mine}
+            if statuses and statuses <= {'NODATA', 'NO_DATA', 'FAILED', 'ERROR', 'EXPIRED'}:
+                return None, True   # (target, nodata)
+            log(f'[{login_id}] 생성 대기 {(i+1)*12}s...')
+        return None, False
+
+    target = None
+    for attempt in (1, 2):
+        # 일부 계정(2026-09-18 실측: tmxkqlwus2)이 240초 폴링에도 간헐적으로 안 끝나는 경우가
+        # 있어서, 한 번 더 새로 생성요청해서 재시도(서버측 처리 지연으로 추정 — 재시도하면
+        # 대부분 정상 완료됨). 2회 다 실패해야 최종 실패 처리.
+        target, nodata = _generate_and_wait(attempt)
+        if nodata:
             log(f'[{login_id}] 이 기간 광고 데이터 없음(NODATA) — 0건 처리')
             St11ProductRoas.objects.filter(eleven_id=login_id, period=period_label).delete()
             return 0, 0
-        log(f'[{login_id}] 생성 대기 {(i+1)*12}s...')
+        if target:
+            break
+        log(f'[{login_id}] {attempt}차 시도 타임아웃 — 재시도' if attempt == 1 else f'[{login_id}] 2차 시도도 타임아웃')
     if not target:
-        raise Exception('보고서 생성 타임아웃(DOWNLOADABLE 안 됨)')
+        raise Exception('보고서 생성 타임아웃(DOWNLOADABLE 안 됨, 2회 시도)')
     fid = target['id']
     log(f'[{login_id}] 다운로드 (id={fid})...')
     csv_text = driver.execute_async_script(_GET, f'{API}/advertiser/reports/v1/bulkdownload/files/{fid}', sn)

@@ -1405,8 +1405,8 @@ class AdDetailView(views.APIView):
 from .models import GmarketAiAdSummary, GmarketAiAdHistory, St11AdofficeCampaign
 from .serializers import GmarketAiSummarySerializer, GmarketAiHistorySerializer, St11CampaignSerializer
 
-from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup, NewAdCenterHistory, NewAdCenterSchedule
-from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer, NewAdCenterHistorySerializer, NewAdCenterScheduleSerializer
+from .models import GmarketCpcAdStatus, Cpc2Schedule, Cpc2History, AiSchedule, TelegramConfig, TelegramRecipient, SellerGroup, NewAdCenterHistory, NewAdCenterSchedule, GmarketAdStrategySchedule
+from .serializers import CpcAdStatusSerializer, Cpc2ScheduleSerializer, Cpc2HistorySerializer, AiScheduleSerializer, TelegramConfigSerializer, TelegramRecipientSerializer, SellerGroupSerializer, NewAdCenterHistorySerializer, NewAdCenterScheduleSerializer, GmarketAdStrategyScheduleSerializer
 
 class CpcAdStatusViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = GmarketCpcAdStatus.objects.all()
@@ -1509,6 +1509,39 @@ class Cpc2ScheduleViewSet(viewsets.ModelViewSet):
 class Cpc2HistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Cpc2History.objects.all()[:100]
     serializer_class = Cpc2HistorySerializer
+
+
+class GmarketAdStrategyScheduleViewSet(viewsets.ModelViewSet):
+    """옥션광고센터(L코드 도매마트) 전략설정 — 백그라운드 루프(loop_gmarket_ad_strategy.sh)가
+    이 설정(enabled/on_start/on_end/weekdays/accounts)을 읽어서 계속 스캔+적용한다."""
+    queryset = GmarketAdStrategySchedule.objects.all()
+    serializer_class = GmarketAdStrategyScheduleSerializer
+
+
+class GmarketAdStrategyStatusView(views.APIView):
+    """옥션광고센터 전략 스캔 진행상황 — 그룹 확인/L코드발견/적용 건수 요약."""
+    from rest_framework.permissions import IsAuthenticated as _IsAuth
+    permission_classes = [_IsAuth]
+
+    def get(self, request):
+        from django.db.models import Q
+        from apps.cpc.models import GmarketAdGroupLcodeStatus, CrawlerAccount, protected_login_ids
+        qs = GmarketAdGroupLcodeStatus.objects.all()
+        total_checked = qs.count()
+        lcode_found = qs.filter(has_lcode=True).count()
+        applied = qs.filter(has_lcode=True, strategy_applied=True).count()
+        protected = protected_login_ids('gmarket')
+        target_accounts = CrawlerAccount.objects.filter(platform='gmarket', is_active=True).exclude(
+            login_id__in=protected).count()
+        scanned_accounts = qs.values('login_id').distinct().count()
+        by_account = list(qs.filter(has_lcode=True).values('login_id').annotate(
+            groups=Count('id'), applied=Count('id', filter=Q(strategy_applied=True))
+        ).order_by('-groups'))
+        return Response({
+            'total_checked': total_checked, 'lcode_found': lcode_found, 'applied': applied,
+            'target_accounts': target_accounts, 'scanned_accounts': scanned_accounts,
+            'by_account': by_account,
+        })
 
 class NewAdCenterHistoryViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = NewAdCenterHistory.objects.all()[:100]
@@ -5252,6 +5285,31 @@ class DomemartInvoiceDownloadView(views.APIView):
         return FileResponse(open(rec.file_path, 'rb'), as_attachment=True, filename=rec.filename)
 
 
+class DomemartInvoiceHistoryDownloadView(views.APIView):
+    """DomemartOrderRecord에 품목주문번호 기준으로 중복 없이 누적된 송장정보 전체 이력을 엑셀
+    1개로 다운로드(2026-09-18 사용자 요청 — DomemartOrderFile은 최신 2개만 남기고 지워지므로
+    그 이전 회차 자료도 나중에 볼 수 있게)."""
+    def get(self, request):
+        import io
+        from datetime import date as _date
+        from django.http import FileResponse
+        from openpyxl import Workbook
+        from apps.cpc.models import DomemartOrderRecord
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = '전체'
+        ws.append(['받는분휴대폰', '배송사', '송장번호', '상품명'])
+        for r in DomemartOrderRecord.objects.all().order_by('-updated_at'):
+            ws.append([r.receiver_mobile, r.courier, r.tracking_no, r.product_name])
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename = f'도매마트_송장정보_전체이력_{DomemartOrderRecord.objects.count()}건_{_date.today():%Y%m%d}.xlsx'
+        return FileResponse(buf, as_attachment=True, filename=filename)
+
+
 class MyProductsAllView(views.APIView):
     """11번가+지마켓/옥션+쿠팡+스마트스토어 나의 상품 통합 조회 — 플랫폼 구분 없이 하나의 그리드로 병합.
     스키마가 다른 여러 테이블 사이의 진짜 SQL UNION은 불가하므로, 각 소스에서 정렬된 상위
@@ -7393,13 +7451,22 @@ def _gmkt_product_rows(request):
     roas_max = float(_rmax) if _rmax not in (None, '') else None
     roas_min = float(_rmin) if _rmin not in (None, '') else None
     status_filter = request.query_params.get('status') or ''   # 지정 시 이 상태(예: '판매중')만 표시
-    CAP = 5000
+    # site: ''=전체(지마켓+옥션) / 'G'=지마켓만 / 'A'=옥션만 (실제 저장값 G/A, 2026-09-18 사용자요청)
+    site_filter = request.query_params.get('site') or ''
+    # sold_only=1이면 실매출(정산기준) 매칭이 있는(팔린 적 있는) 상품만 — 2026-09-18 사용자요청
+    # ("팔린상품과 키워드부터"): 광고비만 쓰고 한 번도 안 팔린 상품은 제외해 분량도 줄인다.
+    sold_only = request.query_params.get('sold_only') == '1'
+    # export=1이면 화면표시용 CAP을 걸지 않고 전량 반환(다운로드용, 2026-09-18) — 화면 조회는 계속 CAP 적용.
+    no_cap = request.query_params.get('export') == '1'
+    CAP = 5000 if not no_cap else 10**9
 
     base = GmarketProductAdCost.objects.filter(mq)
     if eid:
         base = base.filter(login_id=eid)
     if ad_type in ('cpc', 'ai'):
         base = base.filter(ad_type=ad_type)
+    if site_filter in ('G', 'A'):
+        base = base.filter(site=site_filter)
     name_map = {a.login_id: (a.seller_name or a.login_id)
                 for a in CrawlerAccount.objects.filter(platform='gmarket')}
     grp = (base.values('product_no')
@@ -7488,6 +7555,10 @@ def _gmkt_product_rows(request):
         _sy = synced_by_pno.get(pno)
         # '판매중'인데 상태수집이 STALE_DAYS+ 지난 경우만 확인필요(중지/품절/삭제는 이미 확정상태라 제외)
         _stale = bool(st == '판매중' and _sy and (_now - _sy).days >= STALE_DAYS)
+        # 팔린상품만(sold_only) — 누적판매수량(2025-01-01~현재, 판매자코드 전역매칭)이 0이면 제외.
+        # real_by_pno(협의 실매출창)보다 cum_qty_by_pno가 "2025~현재" 범위와 정확히 일치해 이걸 기준으로 삼는다.
+        if sold_only and cum_qty_by_pno.get(pno, 0) <= 0:
+            continue
         rows.append({
             'login_id': lid, 'seller_name': name_map.get(lid, lid),
             'product_no': pno, 'product_name': name_by_pno.get(pno, ''),

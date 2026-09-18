@@ -145,3 +145,5 @@
 - [지마켓 대시보드 구매가 항목 추가](project_gmarket_dashboard_cost_column.md) — revenue-profit 역산, 11번가와 동일방식
 - [스마트스토어 신규계정 API키 누락](project_smartstore_new_accounts_no_api_key.md) — 원인=이용정지, 정지해제후 처리보류
 - [11번가 임시삭제스크립트 거짓성공](project_11st_full_delete_false_success_2026-09-13.md) — 잔여검증 누락, 클릭성공=완료 오판
+- [실패보고시 해소여부까지](feedback_report_resolution_status.md) — 실패만 던지지 말고 재시도로 해소됐는지 확인해서 같이 보고
+- [스마트스토어 10계정 이용정지 보류](project_smartstore_10accounts_suspended_2026-09-18.md) — is_active=False, 재개는 사용자 지시 후만

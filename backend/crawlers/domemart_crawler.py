@@ -208,7 +208,34 @@ def crawl_account_info(driver, log_fn=None):
 
 
 ORDER_LIST_1M_URL = f'{ORDER_LIST_URL}&q_date_type=m1'
-INVOICE_COLUMNS = ['받는분휴대폰', '배송사', '송장번호']   # 원본(항목전체 양식) S/AC/AD열
+INVOICE_COLUMNS = ['받는분휴대폰', '배송사', '송장번호', '상품명']   # 원본(항목전체 양식) S/AC/AD열 + 상품명(D열, 2026-09-18 사용자 요청 — 다운로드했을 때 어떤 상품인지 바로 보이게)
+
+
+def _ingest_order_records(raw_df, trimmed_df, log_fn=None):
+    """품목주문번호 기준으로 DomemartOrderRecord에 upsert(중복 제거) — DomemartOrderFile은
+    최신 2개만 보관돼 지워지므로, 나중에도 이력을 볼 수 있게 여기 별도로 쌓는다(2026-09-18)."""
+    import pandas as pd
+    from apps.cpc.models import DomemartOrderRecord
+
+    if '품목주문번호' not in raw_df.columns:
+        return 0
+    count = 0
+    for idx in trimmed_df.index:
+        item_no = raw_df.loc[idx, '품목주문번호']
+        if not isinstance(item_no, str) or not item_no.strip():
+            continue
+        row = trimmed_df.loc[idx]
+        DomemartOrderRecord.objects.update_or_create(
+            item_order_no=item_no.strip(),
+            defaults={
+                'product_name': '' if pd.isna(row.get('상품명')) else str(row.get('상품명')),
+                'receiver_mobile': '' if pd.isna(row.get('받는분휴대폰')) else str(row.get('받는분휴대폰')),
+                'courier': '' if pd.isna(row.get('배송사')) else str(row.get('배송사')),
+                'tracking_no': str(row.get('송장번호') or ''),
+            },
+        )
+        count += 1
+    return count
 
 
 def crawl_invoice_download(driver, download_dir, log_fn=None):
@@ -274,6 +301,9 @@ def crawl_invoice_download(driver, download_dir, log_fn=None):
     trimmed['송장번호'] = trimmed['송장번호'].apply(
         lambda v: '' if pd.isna(v) else (str(int(v)) if isinstance(v, float) else str(v)))
     trimmed = trimmed.dropna(how='all')
+
+    ingested = _ingest_order_records(df, trimmed, log_fn=log_fn)
+    log(f'DB 누적 저장(중복제거): {ingested}건')
 
     storage_dir = os.path.join(settings.BASE_DIR, 'media', 'domemart_order_files')
     os.makedirs(storage_dir, exist_ok=True)

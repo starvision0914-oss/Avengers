@@ -344,6 +344,249 @@ def fetch_daily_report_xlsx(driver, login_id, password, since_date, until_date, 
     return rows
 
 
+def collect_product_costs(driver, login_id, password, since_date, until_date, log_fn=None):
+    """신규광고센터 '상품별×날짜별' 상세리포트를 엑셀로 받아 GmarketNewAdProductCost에 upsert
+    (2026-09-18 사용자 요청 — 상품별 광고비를 못 받고 있던 문제 해결). 같은 상품이 여러
+    캠페인/그룹에 동시 노출되면 날짜+상품 조합이 중복 행으로 나오므로(실측: 5,789행 중
+    483건 중복) login_id+use_date+product_no로 합산해서 저장한다.
+    반환: 저장된 (날짜,상품) 조합 수, 실패 시 None."""
+    from apps.cpc.models import GmarketNewAdProductCost
+
+    def log(m):
+        logger.info(f'[신규광고센터상품별:{login_id}] {m}')
+        if log_fn:
+            log_fn(f'[신규광고센터상품별:{login_id}] {m}')
+
+    if not _login(driver, login_id, password):
+        log('로그인 실패')
+        return None
+
+    driver.get(REPORT_URL)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'button.button__calendar')))
+    except TimeoutException:
+        log('리포트 페이지 로딩 실패')
+        return None
+    time.sleep(1)
+
+    try:
+        driver.execute_script("document.querySelector('button.button__calendar').click();")
+        time.sleep(1)
+        if not _click_calendar_day(driver, since_date.day):
+            log(f'시작일({since_date}) 클릭 실패'); return None
+        time.sleep(0.4)
+        if not _click_calendar_day(driver, until_date.day):
+            log(f'종료일({until_date}) 클릭 실패'); return None
+        time.sleep(0.4)
+        driver.find_element(By.XPATH,
+            "//div[contains(@class,'box__button-wrap')]//button[text()='적용']").click()
+        time.sleep(1.5)
+
+        applied = driver.find_element(By.ID, 'date__start').get_attribute('value')
+        expected = f'{since_date:%Y.%m.%d} ~ {until_date:%Y.%m.%d}'
+        if applied != expected:
+            log(f'기간 설정 확인 실패(적용={applied}, 기대={expected})')
+            return None
+
+        driver.execute_script("document.getElementById('reportType-product').click();")
+        time.sleep(0.5)
+        driver.execute_script("document.getElementById('viewMode-daily').click();")
+        time.sleep(0.5)
+        driver.execute_script("document.querySelectorAll('.button__wrap button')[1].click();")  # 검색
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, '.box__table table tbody tr')))
+        except TimeoutException:
+            pass
+        time.sleep(2)
+    except Exception as e:
+        log(f'조회 중 오류: {e}')
+        return None
+
+    f = None
+    for attempt in range(3):
+        _clear_newad_dl()
+        try:
+            btn = driver.find_element(By.XPATH,
+                "//button[contains(@class,'button--excel') and text()='엑셀 다운로드']")
+            btn.click()
+        except Exception as e:
+            log(f'다운로드 버튼 클릭 실패({attempt + 1}/3): {e}')
+            time.sleep(2)
+            continue
+        f = _wait_newad_dl(30)   # 상품별은 행이 훨씬 많아 계정별 리포트보다 여유있게 대기
+        if f:
+            break
+        log(f'엑셀 다운로드 재시도({attempt + 1}/3)')
+        time.sleep(3)
+    if not f or os.path.getsize(f) < 100:
+        log('엑셀 다운로드 실패(3회 재시도 후)')
+        return None
+
+    try:
+        import pandas as pd
+        raw = pd.read_excel(f, header=None)
+        header_idx = None
+        for i in range(min(len(raw), 20)):
+            if str(raw.iloc[i, 0]).strip() == '날짜':
+                header_idx = i
+                break
+        if header_idx is None:
+            log('헤더행(날짜) 못 찾음')
+            return None
+        df = pd.read_excel(f, header=header_idx)
+    except Exception as e:
+        log(f'엑셀 파싱 실패: {e}')
+        return None
+    finally:
+        try: os.remove(f)
+        except Exception: pass
+
+    if df.empty:
+        log('데이터 없음(0건)')
+        return 0
+
+    df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
+    df = df.dropna(subset=['날짜', '상품번호'])
+
+    agg = df.groupby(['날짜', '상품번호']).agg(
+        상품명=('상품명', 'last'),
+        노출수=('노출 수', 'sum'),
+        클릭수=('클릭 수', 'sum'),
+        광고비=('광고 비용', 'sum'),
+        전환금액=('판매자 전환 금액', 'sum'),
+        전환수=('판매자 전환 수', 'sum'),
+    ).reset_index()
+
+    saved = 0
+    for _, r in agg.iterrows():
+        cost = int(r['광고비'])
+        clicks = int(r['클릭수'])
+        conv_amount = int(r['전환금액'])
+        roas = round(conv_amount / cost * 100, 2) if cost else 0
+        GmarketNewAdProductCost.objects.update_or_create(
+            login_id=login_id, use_date=r['날짜'].date(), product_no=str(r['상품번호']),
+            defaults={
+                'product_name': str(r['상품명'])[:500],
+                'impressions': int(r['노출수']),
+                'clicks': clicks,
+                'avg_click_cost': round(cost / clicks) if clicks else 0,
+                'cost': cost,
+                'conv_amount': conv_amount,
+                'conv_count': int(r['전환수']),
+                'roas': roas,
+            },
+        )
+        saved += 1
+
+    log(f'{since_date}~{until_date} 상품 {agg["상품번호"].nunique()}개 / {saved}건 저장(원본 {len(df)}행, 중복합산)')
+    return saved
+
+
+def collect_product_keywords(driver, login_id, password, product_nos, since_date, until_date, log_fn=None):
+    """신규광고센터 '키워드별' 리포트에서 지정 상품번호들의 키워드를 조회해 GmarketNewAdKeyword에
+    upsert(2026-09-18 사용자 요청 — 효율 100%+ 상품 키워드 매칭용). 상품번호 필터는 콤마구분
+    최대 5개까지만 되므로 5개씩 나눠서 조회. 보기방식은 '합계'(기간 전체 누적, 일자별 아님).
+    ⚠️ '직접운영형'(자동타겟팅) 캠페인 상품은 수동 키워드가 없어 결과에 아예 안 잡힘 — 정상.
+    반환: {product_no: 매칭된 키워드 수}, 로그인 실패 시 None."""
+    from apps.cpc.models import GmarketNewAdKeyword
+
+    def log(m):
+        logger.info(f'[신규광고센터키워드:{login_id}] {m}')
+        if log_fn:
+            log_fn(f'[신규광고센터키워드:{login_id}] {m}')
+
+    if not _login(driver, login_id, password):
+        log('로그인 실패')
+        return None
+
+    counts = {p: 0 for p in product_nos}
+    batches = [product_nos[i:i + 5] for i in range(0, len(product_nos), 5)]
+
+    for bi, batch in enumerate(batches):
+        driver.get(REPORT_URL)
+        try:
+            WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'button.button__calendar')))
+        except TimeoutException:
+            log(f'배치{bi+1}/{len(batches)} 리포트 페이지 로딩 실패')
+            continue
+
+        try:
+            driver.execute_script("document.querySelector('button.button__calendar').click();")
+            time.sleep(1)
+            if not _click_calendar_day(driver, since_date.day):
+                log(f'배치{bi+1} 시작일 클릭 실패'); continue
+            time.sleep(0.4)
+            if not _click_calendar_day(driver, until_date.day):
+                log(f'배치{bi+1} 종료일 클릭 실패'); continue
+            time.sleep(0.4)
+            driver.find_element(By.XPATH,
+                "//div[contains(@class,'box__button-wrap')]//button[text()='적용']").click()
+            time.sleep(1.5)
+
+            driver.find_element(By.ID, 'reportType-keyword').click()
+            time.sleep(1)
+            driver.find_element(By.ID, 'search-productNo').send_keys(','.join(batch))
+            time.sleep(0.3)
+            driver.execute_script("document.getElementById('viewMode-total').click();")
+            time.sleep(0.3)
+            driver.execute_script("document.querySelectorAll('.button__wrap button')[1].click();")  # 검색
+            try:
+                WebDriverWait(driver, 15).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, '.box__table table')))
+            except TimeoutException:
+                pass
+            time.sleep(2)
+        except Exception as e:
+            log(f'배치{bi+1} 조회 오류: {e}')
+            continue
+
+        rows = driver.execute_script("""
+            const table = document.querySelector('.box__table table');
+            if (!table) return [];
+            return Array.from(table.querySelectorAll('tbody tr')).map(
+                tr => Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim()));
+        """) or []
+
+        # 컬럼: [checkbox, 기간, 캠페인명, 그룹명, 상품명, 상품번호, 키워드, 노출수, 클릭수,
+        #        클릭률, 평균클릭비용, 광고비, 판매자전환금액, 광고수익률, 판매자전환수, ...]
+        for r in rows:
+            if len(r) < 15 or not r[5].strip().isdigit():
+                continue
+            product_no = r[5].strip()
+            if product_no not in counts:
+                continue
+            try:
+                GmarketNewAdKeyword.objects.update_or_create(
+                    login_id=login_id, product_no=product_no, keyword=r[6].strip(),
+                    period_start=since_date, period_end=until_date,
+                    defaults={
+                        'product_name': r[4][:500],
+                        'campaign_name': r[2][:255],
+                        'group_name': r[3][:255],
+                        'impressions': int(r[7].replace(',', '') or 0),
+                        'clicks': int(r[8].replace(',', '') or 0),
+                        'avg_click_cost': int(r[10].replace(',', '') or 0),
+                        'cost': int(r[11].replace(',', '') or 0),
+                        'conv_amount': int(r[12].replace(',', '') or 0),
+                        'conv_count': int(r[14].replace(',', '') or 0),
+                        'roas': float(r[13].replace('%', '').replace(',', '') or 0),
+                    },
+                )
+                counts[product_no] += 1
+            except Exception as e:
+                log(f'행 저장 오류({product_no}): {e}')
+        time.sleep(1)
+
+    matched = sum(1 for v in counts.values() if v > 0)
+    total_kw = sum(counts.values())
+    log(f'상품 {len(product_nos)}개 중 {matched}개 키워드 매칭됨(총 {total_kw}개 키워드), '
+        f'나머지 {len(product_nos) - matched}개는 자동타겟팅이라 키워드 없음')
+    return counts
+
+
 def _get_campaign_rows(driver, wait=10, _retried=False):
     """관리 페이지의 캠페인별 (토글엘리먼트, 이름, 현재상태) 목록. 매 호출마다 페이지 새로 진입해야 함
     (토글 클릭 후 다시 읽으려면 이 함수를 재호출).

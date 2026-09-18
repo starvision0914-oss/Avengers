@@ -128,20 +128,29 @@ export default function GmarketRoasPage() {
   const [lossEid, setLossEid] = useState('');          // 현재 적자/ROAS 모달이 보고있는 계정(자동갱신용)
   const [kwYears, setKwYears] = useState<number[] | null>(null);  // 연도-버킷 모드(2025/2026/전체)
   const [lossAd, setLossAd] = useState<'' | 'cpc' | 'ai'>('');    // 광고유형 필터: ''=전체(CPC+AI 합산) / cpc / ai
+  const [lossSite, setLossSite] = useState<'' | 'G' | 'A'>('');  // 마켓 필터: ''=전체(지마켓+옥션) / G=지마켓만 / A=옥션만(2026-09-18)
+  // 팔린상품만(2025~현재 누적판매수량>0) — 사용자요청(2026-09-18) "팔린상품과 키워드부터".
+  // '전체 상품 ROAS' 모드는 기본 ON(광고비만 쓰고 한번도 안팔린 건 제외 — 5000건 CAP도 자연히 덜 걸림).
+  const [lossSoldOnly, setLossSoldOnly] = useState(true);
+  const [lossFullBusy, setLossFullBusy] = useState(false);   // 전체다운(잘림없음) 진행중
   // 상태 필터: 판매중/판매중지·품절/삭제/삭제완료/전체(빈값) — 적자상품(loss) 모드는 기본 '판매중'만.
   const STATUS_OPTIONS = ['판매중', '판매중지', '품절', '삭제', '삭제완료'];
   const [lossStatus, setLossStatus] = useState<string>('판매중');
-  const fetchLoss = (mode: LMode, eid = '', ymF = ymFrom, ymT = ymTo, ad: '' | 'cpc' | 'ai' = lossAd, status = lossStatus) => {
+  const fetchLoss = (mode: LMode, eid = '', ymF = ymFrom, ymT = ymTo, ad: '' | 'cpc' | 'ai' = lossAd, status = lossStatus, site: '' | 'G' | 'A' = lossSite, soldOnly = lossSoldOnly) => {
     setLossEid(eid);
     setLossLoading(true); setLossData(null); setLossSel(new Set());
     // 키워드 모드는 CPC 전용(고정), 그 외 모드만 토글(ad)로 CPC/AI/전체 분리
     const adParam = (mode !== 'keyword' && ad) ? { ad_type: ad } : {};
     const statusParam = status ? { status } : {};
-    api.get('/cpc/gmarket/loss-products/', { params: { ym_from: ymF, ym_to: ymT, eid, ...LMODES[mode].params, ...adParam, ...statusParam } })
+    const siteParam = site ? { site } : {};
+    const soldParam = soldOnly ? { sold_only: '1' } : {};
+    api.get('/cpc/gmarket/loss-products/', { params: { ym_from: ymF, ym_to: ymT, eid, ...LMODES[mode].params, ...adParam, ...statusParam, ...siteParam, ...soldParam } })
       .then(r => setLossData(r.data)).catch(() => setLossData(null)).finally(() => setLossLoading(false));
   };
   const setLossAdAnd = (ad: '' | 'cpc' | 'ai') => { setLossAd(ad); fetchLoss(lossMode, lossEid, ymFrom, ymTo, ad); };
   const setLossStatusAnd = (status: string) => { setLossStatus(status); fetchLoss(lossMode, lossEid, ymFrom, ymTo, lossAd, status); };
+  const setLossSiteAnd = (site: '' | 'G' | 'A') => { setLossSite(site); fetchLoss(lossMode, lossEid, ymFrom, ymTo, lossAd, lossStatus, site, lossSoldOnly); };
+  const setLossSoldOnlyAnd = (v: boolean) => { setLossSoldOnly(v); fetchLoss(lossMode, lossEid, ymFrom, ymTo, lossAd, lossStatus, lossSite, v); };
   const openLoss = (mode: LMode) => { setKwYears(null); setLossMode(mode); setLossOpen(true); fetchLoss(mode, ''); };
   // 연도별 키워드 대상: 기간을 해당 연도로 맞추고 키워드모달 오픈 + 수집대상 연도 기록
   const openKwYear = (years: number[]) => {
@@ -245,11 +254,10 @@ export default function GmarketRoasPage() {
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a'); a.href = url; a.download = fname; a.click(); URL.revokeObjectURL(url);
   };
-  const lossExcel = () => {
-    const rows = lossTargets();
-    if (!rows.length) { alert('대상 없음'); return; }
+  // CSV head/body 구성 — lossExcel(화면에 뜬 것)과 lossExcelFull(잘림없는 전체다운) 공용.
+  const buildLossCsv = (rows: any[], mode: LMode): { head: string[]; body: any[][] } | null => {
     let head: string[]; let body: any[][];
-    if (lossMode === 'keyword') {
+    if (mode === 'keyword') {
       // 키워드 단위 상세 양식 — 계정아이디+상품번호 앞, 상품번호 정렬, (아이디·상품번호·키워드) 중복 제거
       head = ['계정아이디', '상품번호', '판매자코드', '키워드', '노출수', '클릭수', '클릭율', '평균노출순위', '평균클릭비용', '총비용', '구매수', '구매금액', '전환율', '광고수익률'];
       // 먼저 광고비 내림차순으로 모은 뒤 (상품번호+키워드) 중복 제거 → 같은 상품의 동일 키워드는 광고비 큰 1줄만
@@ -272,7 +280,7 @@ export default function GmarketRoasPage() {
         (x.k.click_rate ?? 0) + '%', (x.k.avg_rank || '-'), (x.k.avg_click_cost ?? 0) + '원',
         (x.k.cost ?? 0) + '원', x.k.orders ?? 0, (x.k.conv_amount ?? 0) + '원',
         (x.k.conv_rate ?? 0) + '%', (x.k.roas ?? 0) + '%']);
-      if (!body.length) { alert('키워드 없음 (수집된 ROAS≥기준 키워드가 없습니다)'); return; }
+      if (!body.length) { alert('키워드 없음 (수집된 ROAS≥기준 키워드가 없습니다)'); return null; }
     } else {
       head = ['계정', '상품번호', '상품명', '판매자코드', '누적판매(25~)', '평균단가', '광고비', '키워드', '클릭', '구매수(광고센터)', '구매금액(광고센터)', 'ROAS(광고센터)', '실구매건수(참고)', '실매출(참고)', '실ROAS(참고)', '비고'];
       // 키워드별로 한 줄씩 펼침 — 한 상품에 키워드 N개면 N행, 상품정보(번호·코드·메트릭)는 각 행 반복.
@@ -287,13 +295,42 @@ export default function GmarketRoasPage() {
         return kws.map((k: any) => [r.login_id, r.product_no, r.product_name || '', r.seller_code, cum, avg, r.cost, k.keyword, ...tail]);
       });
     }
-    const csv = '﻿' + [head, ...body].map(a => a.map((c: any) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    return { head, body };
+  };
+  const downloadLossCsv = (rows: any[], mode: LMode, fnameSuffix = '') => {
+    const built = buildLossCsv(rows, mode);
+    if (!built) return;
+    const csv = '﻿' + [built.head, ...built.body].map(a => a.map((c: any) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     // 파일명은 현재 모달 모드에 맞게 (적자/ROAS200상품/ROAS200키워드/상품목록)
     const fnameByMode: Record<string, string> = { loss: '적자상품', high: 'ROAS200상품', keyword: 'ROAS200키워드', all: '상품목록' };
-    const fnamePart = fnameByMode[lossMode] || '상품목록';
+    const fnamePart = (fnameByMode[mode] || '상품목록') + fnameSuffix;
     const a = document.createElement('a'); a.href = url; a.download = `지마켓_${fnamePart}_${ymFrom}_${ymTo}.csv`; a.click();
     URL.revokeObjectURL(url);
+  };
+  const lossExcel = () => {
+    const rows = lossTargets();
+    if (!rows.length) { alert('대상 없음'); return; }
+    downloadLossCsv(rows, lossMode);
+  };
+  // 잘림없는 전체다운로드(2026-09-18) — 화면표시는 CAP(5000)이 걸려있지만, 다운로드는 export=1로
+  // 캡 없이 서버에서 다시 조회해 받는다(기간이 길면(예: 2025~현재) 대상이 5천 개를 넘을 수 있음).
+  const lossExcelFull = () => {
+    if (lossFullBusy) return;
+    setLossFullBusy(true);
+    const adParam = (lossMode !== 'keyword' && lossAd) ? { ad_type: lossAd } : {};
+    const statusParam = lossStatus ? { status: lossStatus } : {};
+    const siteParam = lossSite ? { site: lossSite } : {};
+    const soldParam = lossSoldOnly ? { sold_only: '1' } : {};
+    api.get('/cpc/gmarket/loss-products/', {
+      params: { ym_from: ymFrom, ym_to: ymTo, eid: lossEid, export: '1', ...LMODES[lossMode].params, ...adParam, ...statusParam, ...siteParam, ...soldParam },
+      timeout: 300000,
+    }).then(r => {
+      const rows = r.data?.rows || [];
+      if (!rows.length) { alert('대상 없음'); return; }
+      downloadLossCsv(rows, lossMode, '_전체');
+    }).catch(() => alert('전체 다운로드 실패 — 기간이 너무 길면 다시 시도해주세요'))
+      .finally(() => setLossFullBusy(false));
   };
   const markLossDeleted = () => {
     const rows = lossTargets();
@@ -809,12 +846,26 @@ export default function GmarketRoasPage() {
                 <option value="">전체 상태</option>
                 {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}만</option>)}
               </select>
-              {lossData && <span className="text-[12px] text-[#c2410c] font-semibold">{lossData.count.toLocaleString()}개{lossData.capped ? '+' : ''}</span>}
+              <span className="inline-flex rounded overflow-hidden border border-[#d0d0d0]" title="마켓: 전체(지마켓+옥션) / 지마켓만 / 옥션만">
+                {([['', '전체마켓'], ['G', '지마켓'], ['A', '옥션']] as ['' | 'G' | 'A', string][]).map(([v, lbl]) => (
+                  <button key={v} onClick={() => setLossSiteAnd(v)}
+                    className={`px-2 py-0.5 text-[11px] font-semibold ${lossSite === v ? 'bg-[#0d9488] text-white' : 'bg-white text-[#555] hover:bg-[#f0f0f0]'}`}>{lbl}</button>
+                ))}
+              </span>
+              <button onClick={() => setLossSoldOnlyAnd(!lossSoldOnly)}
+                title="2025-01-01~현재 누적판매수량이 1개 이상인 상품만(한 번도 안 팔린 상품은 제외)"
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded ${lossSoldOnly ? 'bg-[#1d4ed8] text-white' : 'bg-gray-100 text-[#555]'}`}>
+                {lossSoldOnly ? '✓ 팔린상품만' : '팔린상품만'}</button>
+              {lossData && <span className="text-[12px] text-[#c2410c] font-semibold">{lossData.count.toLocaleString()}개{lossData.capped ? '+(5000 잘림, 전체다운 이용)' : ''}</span>}
               {lossData && <span className="text-[11px] text-[#999]">{lossData.ym_from}~{lossData.ym_to}</span>}
               {lossSel.size > 0 && <span className="text-[11px] text-[#1e6fd9] font-semibold">선택 {lossSel.size}</span>}
               <button onClick={copySellerCodes} className="ml-auto px-2.5 py-1 text-[12px] font-semibold bg-[#1e6fd9] text-white rounded hover:bg-[#1857ad]">📋 판매자코드 복사</button>
               <button onClick={copyProductNos} title="상품번호(숫자만) 복사" className="px-2.5 py-1 text-[12px] font-semibold bg-[#0d9488] text-white rounded hover:bg-[#0f766e]">📋 상품번호코드 복사</button>
-              <button onClick={lossExcel} className="px-2.5 py-1 text-[12px] font-semibold bg-[#1d7a46] text-white rounded hover:bg-[#155c34]">⬇ 엑셀</button>
+              <button onClick={lossExcel} title="현재 화면에 뜬 목록만(최대 5,000개)" className="px-2.5 py-1 text-[12px] font-semibold bg-[#1d7a46] text-white rounded hover:bg-[#155c34]">⬇ 엑셀</button>
+              <button onClick={lossExcelFull} disabled={lossFullBusy}
+                title="기간이 길어 5,000개 넘게 잘려도 전량 조회해서 다운로드(오래 걸릴 수 있음)"
+                className="px-2.5 py-1 text-[12px] font-semibold bg-[#065f46] text-white rounded hover:bg-[#064e3b] disabled:opacity-50">
+                {lossFullBusy ? '전체다운 중...' : '⬇ 전체다운(잘림없음)'}</button>
               <button onClick={() => bulkRegCsv(lossTargets(), `지마켓_대량등록_${lossData?.ym_from || ''}_${lossData?.ym_to || ''}.csv`)}
                 title="키워드 대량등록 양식(판매자ID·사이트·광고그룹명·키워드명·상품번호·희망클릭비용). 선택 없으면 전체, 희망클릭비용=평균단가×91%"
                 className="px-2.5 py-1 text-[12px] font-semibold bg-[#b45309] text-white rounded hover:bg-[#92400e]">⬇ 대량등록양식</button>

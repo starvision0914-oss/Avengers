@@ -94,6 +94,13 @@ class Cpc2ScheduleSerializer(serializers.ModelSerializer):
         model = Cpc2Schedule
         fields = '__all__'
 
+from .models import GmarketAdStrategySchedule
+
+class GmarketAdStrategyScheduleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GmarketAdStrategySchedule
+        fields = '__all__'
+
 class Cpc2HistorySerializer(serializers.ModelSerializer):
     class Meta:
         model = Cpc2History

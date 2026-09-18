@@ -1396,6 +1396,10 @@ class NaverProductRoasView(APIView):
         roas_max_s = request.query_params.get('roas_max')
         roas_min_s = request.query_params.get('roas_min')
         clicks_min = int(request.query_params.get('clicks_min') or 0)
+        # 기준 전환(2026-09-18 사용자요청): 적자/우수상품 판정을 광고센터ROAS(기본) 또는
+        # 실매출ROAS 중 무엇으로 할지 프론트 토글로 선택 — 화면에는 항상 둘 다 표시하고,
+        # 필터링(roas_max/roas_min) 기준만 이걸로 바꾼다.
+        roas_basis = request.query_params.get('roas_basis') or 'ad'
 
         rows = []
         for r in agg:
@@ -1411,12 +1415,17 @@ class NaverProductRoasView(APIView):
             sc = p.seller_management_code if p else ''
             real_sales = sum(sales_by_code.get(x, 0) for x in {sc, _bare_seller_code(sc)}) if sc else 0
             real_roas = round(real_sales * 100.0 / cost, 1) if cost else 0
-            # 사용자 지시(2026-09-04, 밀양사과 케이스): 광고센터 ROAS가 아무리 높아도 정산
-            # 실매출이 0원이면 전환이 허수일 가능성이 높다 — roas_max 필터에서도 real_sales==0인
-            # 상품은 예외로 적자상품에 포함시킨다(sc 있어야, 즉 실매출 매칭 근거가 있어야 함).
-            if roas_max_s is not None and roas > float(roas_max_s) and not (sc and real_sales == 0):
+            filter_roas = roas if roas_basis == 'ad' else real_roas
+            # 사용자 지시(2026-09-04, 밀양사과 케이스): 광고센터 ROAS 기준일 때는, 아무리 ROAS가
+            # 높아도 정산 실매출이 0원이면 전환이 허수일 가능성이 높아 예외로 적자상품에 포함시킨다
+            # (sc 있어야, 즉 실매출 매칭 근거가 있어야 함). 실매출 기준으로 볼 때는 이미 real_roas
+            # 자체가 실매출로 계산되므로 이 예외가 필요 없다(real_sales==0이면 real_roas도 0이라
+            # 정상적으로 필터에 걸림).
+            if roas_max_s is not None and filter_roas > float(roas_max_s) and not (
+                roas_basis == 'ad' and sc and real_sales == 0
+            ):
                 continue
-            if roas_min_s is not None and roas < float(roas_min_s):
+            if roas_min_s is not None and filter_roas < float(roas_min_s):
                 continue
             rows.append({
                 'account_id': r['account_id'],

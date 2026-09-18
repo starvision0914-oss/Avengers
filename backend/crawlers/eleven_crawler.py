@@ -611,13 +611,21 @@ def _do_login(driver, login_id, password):
             if _is_soffice_url(driver.current_url):
                 logger.info(f'[11st:{login_id}] OTP 인증 성공!')
                 try:
+                    from django.db import close_old_connections
                     from apps.cpc.models import CrawlerAccount
+                    # OTP 대기(최대 180초)로 스레드가 오래 유휴 상태였다가 MySQL 연결이 끊겨서
+                    # ("MySQL server has gone away") update()가 조용히 실패하는 사고가 실측
+                    # 확인됨(2026-09-18: tmxkql27 등 매일 "성공" 로그가 찍혀도 last_real_otp_at이
+                    # 며칠씩 그대로였음, 원인=여기 있던 bare except: pass). 재시도 전 연결 갱신.
+                    close_old_connections()
                     # last_real_otp_at: 실제로 OTP 번호입력 화면을 거쳐 통과한 경우만 갱신
                     # (아래 세션스킵 분기와 구분 — 2026-09-08 대시보드 인증현황 판정용 신설).
-                    CrawlerAccount.objects.filter(login_id=login_id, platform='11st').update(
+                    n = CrawlerAccount.objects.filter(login_id=login_id, platform='11st').update(
                         last_otp_at=timezone.now(), last_real_otp_at=timezone.now())
-                except Exception:
-                    pass
+                    if n == 0:
+                        logger.error(f'[11st:{login_id}] last_real_otp_at 갱신 대상 0건(계정 못 찾음?)')
+                except Exception as e:
+                    logger.error(f'[11st:{login_id}] last_real_otp_at 갱신 실패: {e}')
                 return True
             logger.warning(f'[11st:{login_id}] OTP 후 예상 페이지 아님: {driver.current_url}')
             return False
@@ -627,10 +635,12 @@ def _do_login(driver, login_id, password):
         # 매번 같은 계정들을 다시 잡아 무한 반복되는 버그가 있었음, 2026-09-02 발견.)
         if _is_soffice_url(driver.current_url):
             try:
+                from django.db import close_old_connections
                 from apps.cpc.models import CrawlerAccount
+                close_old_connections()
                 CrawlerAccount.objects.filter(login_id=login_id, platform='11st').update(last_otp_at=timezone.now())
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f'[11st:{login_id}] last_otp_at 갱신 실패: {e}')
             return True
 
         return False

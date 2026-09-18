@@ -62,6 +62,28 @@ module.exports = {
       restart_delay: 5000,
     },
     {
+      // 2026-09-18 사용자요청: 옥션광고센터(ad.esmplus.com) 일반광고 그룹 중 L코드(도매마트)
+      // 상품이 있는 그룹만 찾아서 노출요일/시간 전략(기본 월~금 8~16시)을 자동 적용.
+      // 계정당 그룹이 수백 개라 30개씩 나눠 무한반복(check_domemart_lcodes와 동일 원칙).
+      name: 'avengers-gmarket-ad-strategy-loop',
+      cwd: '/home/rejoice888/Avengers/backend',
+      script: 'scripts/loop_gmarket_ad_strategy.sh',
+      interpreter: 'none',
+      autorestart: true,
+      restart_delay: 5000,
+    },
+    {
+      // 2026-09-18 사용자요청: tmxkql111/tmxkql222/dlrmsgh012 3계정 전체 그룹의 노출요일/시간을
+      // "사용안함"으로 일괄처리(금요일 광고 안 켜지던 문제 긴급대응). 멱등 — 완료 확인되면
+      // 사용자가 pm2 stop/delete로 내려주면 됨(자동종료 조건 없음, 계속 재확인만 함).
+      name: 'avengers-gmarket-friday-fix-loop',
+      cwd: '/home/rejoice888/Avengers/backend',
+      script: 'scripts/loop_gmarket_friday_fix.sh',
+      interpreter: 'none',
+      autorestart: true,
+      restart_delay: 5000,
+    },
+    {
       name: 'avengers-xvfb-vnc',
       script: '/usr/bin/Xvfb',
       args: ':99 -screen 0 1920x1080x24',

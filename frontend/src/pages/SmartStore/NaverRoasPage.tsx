@@ -103,6 +103,8 @@ export default function NaverRoasPage() {
   const [accountId, setAccountId] = useState('');
   const [adType,    setAdType]    = useState('');
   const [mode,  setMode]  = useState<Mode>('all');
+  // 적자/우수상품 판정 기준: 광고센터(전환매출) 또는 실매출(정산) — 버튼으로 전환(2026-09-18)
+  const [roasBasis, setRoasBasis] = useState<'ad' | 'real'>('ad');
   const [rows,  setRows]  = useState<Row[]>([]);
   const [totals, setTotals] = useState<Totals | null>(null);
   const [loading, setLoading] = useState(false);
@@ -188,8 +190,9 @@ export default function NaverRoasPage() {
     );
   }, []);
 
-  const load = useCallback((modeArg?: Mode, ymF = ymFrom, ymT = ymTo, aid = accountId, at = adType) => {
+  const load = useCallback((modeArg?: Mode, ymF = ymFrom, ymT = ymTo, aid = accountId, at = adType, basisArg?: 'ad' | 'real') => {
     const m = modeArg ?? mode;
+    const basis = basisArg ?? roasBasis;
     const ticket = ++loadTicket.current;
     setMode(m);
     setLoading(true);
@@ -199,13 +202,13 @@ export default function NaverRoasPage() {
     setRows([]);
     setSelected(new Set());
     api.get('/smartstore/naver-product-roas/', {
-      params: { ym_from: ymF, ym_to: ymT, account_id: aid, ad_type: at, ...MODES[m].params },
+      params: { ym_from: ymF, ym_to: ymT, account_id: aid, ad_type: at, roas_basis: basis, ...MODES[m].params },
     }).then(r => {
       if (ticket !== loadTicket.current) return; // 더 최신 요청이 이미 나감 — 이 응답은 버림
       setRows(r.data.rows || []);
       setTotals(r.data.totals);
     }).finally(() => { if (ticket === loadTicket.current) setLoading(false); });
-  }, [ymFrom, ymTo, accountId, adType, mode]);
+  }, [ymFrom, ymTo, accountId, adType, mode, roasBasis]);
 
   useEffect(() => { load(); }, []); // eslint-disable-line
 
@@ -327,6 +330,21 @@ export default function NaverRoasPage() {
           ))}
         </div>
 
+        {/* 적자/우수상품 판정 기준: 광고센터 ↔ 실매출 전환 */}
+        <div className="flex gap-1 ml-1 border border-[#ddd] rounded p-0.5"
+          title="적자상품/우수상품 판정에 어느 ROAS를 기준으로 쓸지 선택 (표에는 항상 둘 다 보임)">
+          {([['ad', '광고센터 기준'], ['real', '실매출 기준']] as const).map(([b, label]) => (
+            <button key={b}
+              onClick={() => { setRoasBasis(b); load(mode, ymFrom, ymTo, accountId, adType, b); }}
+              className="px-2.5 py-1 text-[13px] font-semibold rounded transition-colors"
+              style={roasBasis === b
+                ? { background: '#2563eb', color: '#fff' }
+                : { background: 'transparent', color: '#666' }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         {/* 복사 / 엑셀 */}
         <div className="flex gap-1.5 ml-auto">
           <button onClick={openLoss} title="실매출 기준(광고센터 전환매출 아님) — ROAS≤100 · 광고비≥3,000 · 클릭≥10 (이번달)"
@@ -355,7 +373,9 @@ export default function NaverRoasPage() {
           <span className="text-[#555]">실매출 <b className="text-[#16a34a] text-[16px]">{formatKRW(totals.real_sales)}</b></span>
           <span className="text-[#555]">ROAS(실매출) <b className={`text-[16px] ${roasColor(totals.real_roas)}`}>{totals.real_roas}%</b></span>
           {mode !== 'all' && (
-            <span className="text-[13px] text-[#999] ml-auto">기준: {MODES[mode].crit}</span>
+            <span className="text-[13px] text-[#999] ml-auto">
+              기준: {MODES[mode].crit} ({roasBasis === 'ad' ? 'ROAS는 광고센터 기준' : 'ROAS는 실매출 기준'})
+            </span>
           )}
         </div>
       )}

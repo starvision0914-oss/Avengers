@@ -515,6 +515,72 @@ class GmarketNewAdCost(models.Model):
         indexes = [models.Index(fields=['login_id', 'use_date'])]
 
 
+class GmarketNewAdProductCost(models.Model):
+    """지마켓 신규 광고센터(adcenter.esmplus.com) '상품별×날짜별' 상세리포트(2026-09-18 사용자
+    요청 — 상품별 광고비를 지금 못 받고 있어서 신설). 같은 상품이 여러 캠페인/그룹에 동시
+    노출되면 리포트에 날짜+상품 조합이 중복 행으로 나옴(실측: rejoice666 17일치 5,789행 중
+    483건 중복) — 캠페인 구분 없이 login_id+use_date+product_no로 합산해서 저장한다."""
+    login_id = models.CharField(max_length=50, db_index=True)
+    use_date = models.DateField(db_index=True)
+    product_no = models.CharField(max_length=50, db_index=True)
+    product_name = models.CharField(max_length=500, blank=True, default='')
+    impressions = models.BigIntegerField(default=0)
+    clicks = models.BigIntegerField(default=0)
+    avg_click_cost = models.BigIntegerField(default=0)
+    cost = models.BigIntegerField(default=0)
+    conv_amount = models.BigIntegerField(default=0)      # 판매자 전환 금액
+    conv_count = models.IntegerField(default=0)          # 판매자 전환 수
+    roas = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    collected_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'gmarket_newad_product_cost'
+        constraints = [
+            models.UniqueConstraint(fields=['login_id', 'use_date', 'product_no'],
+                                     name='uniq_newad_product_cost_login_date_product')
+        ]
+        indexes = [
+            models.Index(fields=['login_id', 'use_date']),
+            models.Index(fields=['product_no']),
+        ]
+
+
+class GmarketNewAdKeyword(models.Model):
+    """지마켓 신규 광고센터(adcenter.esmplus.com) '키워드별' 리포트 — 효율(ROAS) 100% 이상
+    상품의 키워드를 매칭(2026-09-18 사용자 요청). /report 리포트유형=키워드별, 상품번호
+    필터(콤마구분 최대5개)로 조회. 기간 누적(합계, 일자별 아님) — period_start~end 범위로
+    저장, 재수집 시 (login_id, product_no, period_start, period_end) 범위 삭제 후 재삽입.
+    ⚠️ '직접운영형'(자동타겟팅) 캠페인은 수동 키워드가 없어 리포트에 아예 안 잡힘 — 상품
+    다수가 키워드 0건으로 나오는 게 정상(실측: rejoice666 ROAS100%+ 5개 중 1개만 키워드 있음)."""
+    login_id = models.CharField(max_length=50, db_index=True)
+    product_no = models.CharField(max_length=50, db_index=True)
+    product_name = models.CharField(max_length=500, blank=True, default='')
+    keyword = models.CharField(max_length=255)
+    campaign_name = models.CharField(max_length=255, blank=True, default='')
+    group_name = models.CharField(max_length=255, blank=True, default='')
+    period_start = models.DateField()
+    period_end = models.DateField()
+    impressions = models.BigIntegerField(default=0)
+    clicks = models.BigIntegerField(default=0)
+    avg_click_cost = models.BigIntegerField(default=0)
+    cost = models.BigIntegerField(default=0)
+    conv_amount = models.BigIntegerField(default=0)
+    conv_count = models.IntegerField(default=0)
+    roas = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    collected_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'gmarket_newad_keyword'
+        constraints = [
+            models.UniqueConstraint(
+                fields=['login_id', 'product_no', 'keyword', 'period_start', 'period_end'],
+                name='uniq_newad_keyword_login_product_keyword_period')
+        ]
+        indexes = [
+            models.Index(fields=['login_id', 'product_no']),
+        ]
+
+
 class CppSchedule(models.Model):
     """프라임 입찰기간 변경 예약 (싱글톤)"""
     enabled = models.BooleanField(default=False)
@@ -596,6 +662,45 @@ class CronSchedule(models.Model):
     class Meta:
         db_table = 'cron_schedules'
         ordering = ['name']
+
+
+class GmarketAdStrategySchedule(models.Model):
+    """옥션광고센터(ad.esmplus.com 일반광고) 노출요일/시간 전략 — L코드(도매마트) 상품이 있는
+    광고그룹만 자동으로 찾아서 지정한 요일/시간대로 맞춘다(2026-09-18, 11번가 St11AdStrategySchedule과
+    동일 취지). accounts 빈값=전체(비테스트) 계정. 백그라운드 루프가 느리게 계속 스캔+적용한다."""
+    name = models.CharField(max_length=100, default='L코드 도매마트 전략', blank=True)
+    accounts = models.JSONField(default=list, blank=True)      # 빈값=전체 비테스트 지마켓 계정
+    on_start = models.IntegerField(default=8)                  # ON 시작 시(0~23)
+    on_end = models.IntegerField(default=16)                   # ON 종료 시(0~23, 배타적 — 8~16이면 08~16시 8칸)
+    weekdays = models.JSONField(default=list)                  # ON 요일 [1=월..7=일], 빈값=매일
+    enabled = models.BooleanField(default=False)                # False면 백그라운드 루프가 스캔만 하고 적용 안 함
+    last_run_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'gmarket_ad_strategy_schedule'
+        ordering = ['-updated_at']
+
+
+class GmarketAdGroupLcodeStatus(models.Model):
+    """옥션광고센터 일반광고그룹별 L코드(도매마트) 상품 보유 여부 + 전략적용 상태 캐시.
+    (login_id, group_name) 유니크 — 그룹 수백 개를 계정당 매번 처음부터 다 확인하지 않도록
+    체크포인트로 쓴다(check_domemart_lcodes.py와 동일 원칙)."""
+    login_id = models.CharField(max_length=50, db_index=True)
+    group_name = models.CharField(max_length=255)
+    product_nos = models.JSONField(default=list, blank=True)    # 그룹에 속한 상품번호들(확인시점)
+    seller_codes = models.JSONField(default=list, blank=True)   # 그 중 매칭된 판매자코드
+    has_lcode = models.BooleanField(default=False, db_index=True)
+    strategy_applied = models.BooleanField(default=False)
+    checked_at = models.DateTimeField()
+    applied_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'gmarket_adgroup_lcode_status'
+        unique_together = [('login_id', 'group_name')]
+        indexes = [models.Index(fields=['login_id', 'has_lcode'])]
+
 
 class ReceivedSmsMessage(models.Model):
     """SMS 수신 메시지 (OTP 인증 + smsApp 게이트웨이)"""
@@ -1099,11 +1204,13 @@ class DomemartAccountInfo(models.Model):
 
 
 class DomemartOrderFile(models.Model):
-    """도매마트 주문/배송조회(od_list) 송장정보(받는분휴대폰·배송사·송장번호) 다운로드 결과
+    """도매마트 주문/배송조회(od_list) 송장정보(받는분휴대폰·배송사·송장번호·상품명) 다운로드 결과
     (2026-09-11, 사용자 지시). 오너클랜 OwnerclanOrderFile과 동일하게 실물 파일은
     media/domemart_order_files/에 저장, 여기엔 메타만 보관.
     원본 엑셀(도매마트 '항목전체' 양식, 42컬럼)에서 S열(받는분휴대폰)·AC열(배송사)·AD열(송장번호)
-    3개만 뽑아 저장한다 — 원본 그대로가 아니라 사용자가 요청한 3컬럼짜리 축소본."""
+    + 상품명(2026-09-18 사용자 요청, D열) 4개만 뽑아 저장한다 — 원본 그대로가 아니라 사용자가
+    요청한 컬럼만 남긴 축소본. 회차마다 최신 2개만 남기고 지워지는 이 파일과 별개로,
+    [[DomemartOrderRecord]]에 품목주문번호 기준 중복 제거된 전체 이력이 계속 쌓인다."""
     login_id = models.CharField(max_length=50, default='rejoice888')
     filename = models.CharField(max_length=255)
     file_path = models.CharField(max_length=500)
@@ -1114,3 +1221,24 @@ class DomemartOrderFile(models.Model):
     class Meta:
         db_table = 'domemart_order_file'
         ordering = ['-downloaded_at']
+
+
+class DomemartOrderRecord(models.Model):
+    """도매마트 송장정보(받는분휴대폰·배송사·송장번호·상품명)를 품목주문번호 기준으로 중복 제거해
+    누적 저장(2026-09-18 사용자 요청 — DomemartOrderFile은 최신 2개만 남기고 지워지므로(KEEP=2),
+    나중에도 이력을 볼 수 있게 여기에 별도로 쌓는다). 매 수집 회차마다 겹치는 주문을 다시
+    받아오므로 update_or_create로 최신 상태만 유지."""
+    item_order_no = models.CharField(max_length=50, unique=True)   # 품목주문번호
+    product_name = models.TextField(blank=True, default='')        # 상품명
+    receiver_mobile = models.CharField(max_length=30, blank=True, default='')  # 받는분휴대폰
+    courier = models.CharField(max_length=50, blank=True, default='')          # 배송사
+    tracking_no = models.CharField(max_length=50, blank=True, default='')      # 송장번호
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'domemart_order_record'
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'{self.item_order_no}/{self.product_name}'
