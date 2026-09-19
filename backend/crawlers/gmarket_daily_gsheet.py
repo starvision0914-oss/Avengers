@@ -191,51 +191,53 @@ def _build_zero_matrix(ss, login_id, year, month):
     return data
 
 
-def _merge_auction(data, login_id, ad_type, year, month):
-    """dailyReport는 지마켓만 줌 → 거래원장(market='auction') 옥션 광고비를 일자별 '총비용'에 합산.
-    data(일자별 매트릭스)를 in-place 수정. 더한 총액 반환. (매일 새 data라 멱등)"""
-    import calendar
-    from datetime import date
+def _build_auction_matrix(login_id, cost_type, year, month):
+    """옥션 거래원장(GmarketCostHistory market='auction') 비용만으로 [헤더,날짜행...,합계행]
+    매트릭스를 만든다(2026-09-19 사용자 요청 — 옥션과 지마켓 집계를 완전히 분리해달라는 요청에
+    따라, 예전처럼 지마켓 시트 '총비용'에 합산하지 않고 계정별 '{login_id}_옥션' 탭에 따로
+    올린다). cost_type: 'CPC' 또는 'AI매출업'. 데이터가 없어도 0으로 채운 전체 날짜를 반환
+    (매일 새로 만드는 멱등 스냅샷)."""
     from django.db.models import Sum
     from apps.cpc.models import GmarketCostHistory
-    tt = 'CPC' if ad_type == 'cpc' else 'AI매출업'
     me = calendar.monthrange(year, month)[1]
-    auc = {}
+    by_date = {}
     for r in (GmarketCostHistory.objects
-              .filter(seller_id=login_id, market='auction', transaction_type=tt,
+              .filter(seller_id=login_id, market='auction', transaction_type=cost_type,
                       use_date__gte=date(year, month, 1), use_date__lte=date(year, month, me))
               .values('use_date').annotate(s=Sum('amount'))):
         v = abs(r['s'] or 0)
         if v:
-            auc[str(r['use_date'])] = v
-    if not auc:
-        return 0
-    hdr = data[0]
-    if '총비용' not in hdr:
-        return 0
-    ci = hdr.index('총비용')
-    added = 0
-    for row in data[1:]:
-        if not row or str(row[0]).strip() == '합계':
-            continue
-        dt = str(row[0])[:10]
-        if dt in auc and ci < len(row):
-            cur = int(str(row[ci]).replace(',', '') or 0) if row[ci] else 0
-            row[ci] = str(cur + auc[dt]); added += auc[dt]
-    if added:
-        for row in data[1:]:
-            if row and str(row[0]).strip() == '합계' and ci < len(row):
-                cur = int(str(row[ci]).replace(',', '') or 0) if row[ci] else 0
-                row[ci] = str(cur + added)
-    return added
+            by_date[r['use_date']] = v
+    header = ['날짜', '총비용']
+    data = [header]
+    total = 0
+    for day in range(1, me + 1):
+        d = date(year, month, day)
+        v = by_date.get(d, 0)
+        total += v
+        data.append([d.strftime('%Y-%m-%d'), str(int(v))])
+    data.append(['합계', str(int(total))])
+    return data
+
+
+def _upload_auction_tab(login_id, cost_type, ss, year, month, log_fn=None):
+    """_build_auction_matrix 결과를 계정별 '{login_id}_옥션' 워크시트에 업로드. 실패해도
+    예외를 밖으로 던지지 않음(본수집 비차단)."""
+    try:
+        data = _build_auction_matrix(login_id, cost_type, year, month)
+        ok = gsheet_upload.upload_rows(data, f'{login_id}_옥션', ss, log=lambda m: _log(log_fn, m))
+        return {'ok': ok, 'rows': len(data) - 2}
+    except Exception as e:
+        _log(log_fn, f'  [{login_id}/옥션-{cost_type}] 업로드 오류 {str(e)[:120]}')
+        return {'ok': False, 'error': str(e)[:120]}
 
 
 def _merge_newadcenter_live(driver, data, login_id, year, month, log_fn=None):
     """신규 광고센터(adcenter.esmplus.com)는 구광고센터(ad.esmplus.com)와 완전히 별도
     시스템이라 dailyReport 화면엔 이 캠페인들이 전혀 안 잡힘 — /report 페이지의
     '일별×날짜별' 상세리포트(계정 전체 총액, CPC/AI 구분 없음)를 직접 조회해서 CPC
-    시트의 '총비용'에 합산한다(2026-09-11 사용자 요청 — 신규광고센터 데이터가 CPC/AI
-    타입 구분이 안 나오니 CPC 시트=지마켓 전체로, AI 시트=옥션 전용으로 재정의).
+    시트의 '총비용'에 합산한다(2026-09-11 신설, 2026-09-17부터는 AI 시트 자체가 이 데이터로
+    대체됨 — fetch_daily_report_xlsx 참고. 지마켓끼리의 합산이라 옥션/지마켓 분리 대상 아님).
     가능구간: 이번달 1일~어제(전월 없음, 캘린더가 현재 표시 중인 달 안에서만 클릭
     가능해서 — 1일에 실행되면 어제=전월이라 클릭 불가 → 스킵). 최대 3개월 전까지도
     조회는 가능하나 여기선 당월치만 씀. 반환: 추가된 총액."""
@@ -316,11 +318,30 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                 try:
                     from apps.cpc.models import CrawlerAccount as _CA
                     from crawlers.gmarket_new_adcenter_control import fetch_daily_report_xlsx as _fetch_newad
+                    from crawlers.gmarket_new_adcenter_control import NEWAD_DL as _NEWAD_DL
                     from datetime import date as _date, timedelta as _td
                     _acc = _CA.objects.filter(platform='gmarket', login_id=login_id).first()
                     _since, _until = _date.today().replace(day=1), _date.today() - _td(days=1)
                     if _acc and _since <= _until:
+                        # fetch_daily_report_xlsx()는 다운로드된 엑셀을 NEWAD_DL에서 찾는데,
+                        # 이 driver는 위에서 CDP 다운로드 경로를 DL(옛 광고센터용)로 잡아둔
+                        # 채로 재사용돼 둘이 어긋나 있었다 — 실제 파일은 DL에 떨어지는데
+                        # fetch_daily_report_xlsx는 NEWAD_DL만 20초씩 3번 폴링하다 타임아웃
+                        # 나서 매 계정·매일 "데이터없음"으로 잡혔다(2026-09-19 실측 확인,
+                        # 로그엔 전 계정 100% "엑셀 다운로드 실패(3회 재시도 후)"). 여기서
+                        # 호출 직전에 CDP 경로를 NEWAD_DL로 맞춰준다.
+                        try:
+                            driver.execute_cdp_cmd(
+                                'Page.setDownloadBehavior',
+                                {'behavior': 'allow', 'downloadPath': _NEWAD_DL})
+                        except Exception:
+                            pass
                         data = _fetch_newad(driver, login_id, _acc.password_enc, _since, _until, log_fn=log_fn)
+                        try:
+                            driver.execute_cdp_cmd(
+                                'Page.setDownloadBehavior', {'behavior': 'allow', 'downloadPath': DL})
+                        except Exception:
+                            pass
                     else:
                         data = None
                     if not data:
@@ -334,6 +355,8 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                 except Exception as e:
                     _log(log_fn, f'  [{login_id}/ai] 신규광고센터 오류 {str(e)[:140]}')
                     res['ai'] = {'ok': False, 'error': str(e)[:140]}
+                if gsheet:
+                    res['auction_ai'] = _upload_auction_tab(login_id, 'AI매출업', ss, year, month, log_fn)
                 continue
             try:
                 f = _download_daily(driver, login_id, ad_type, year, month, log_fn)
@@ -347,17 +370,11 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                     if not data:
                         res[ad_type] = {'ok': False, 'error': '빈데이터'}
                         continue
-                # dailyReport는 지마켓만 → 거래원장 옥션을 총비용에 합산(지마켓+옥션)
-                try:
-                    _add = _merge_auction(data, login_id, ad_type, year, month)
-                    if _add:
-                        _log(log_fn, f'  [{login_id}/{ad_type}] 옥션 +{_add:,}원 합산')
-                except Exception as _e:
-                    _log(log_fn, f'  [{login_id}/{ad_type}] 옥션합산 오류 {str(_e)[:80]}')
+                # 2026-09-19 사용자 요청: 옥션과 지마켓 집계를 완전히 분리 — 더 이상 지마켓
+                # '총비용'에 옥션 거래원장을 합산하지 않고, 계정별 '{login_id}_옥션' 탭에
+                # 따로 올린다(아래 gsheet 업로드 직후 처리).
                 # 신규광고센터(adcenter.esmplus.com, 지마켓 전용)는 구리포트 화면에 안 잡히는
-                # 별도 시스템 — CPC 시트에만 합산(2026-09-11 사용자 확정: CPC=지마켓 전체,
-                # AI 시트=옥션 전용으로 재정의 — 신규광고센터는 CPC/AI 타입 구분 없이 계정
-                # 총액만 나와서 AI에는 못 넣음).
+                # 별도 시스템이라 CPC 시트 '총비용'에 계속 합산(지마켓끼리라 분리 대상 아님).
                 if ad_type == 'cpc':
                     try:
                         _newad_add = _merge_newadcenter_live(driver, data, login_id, year, month, log_fn)
@@ -368,6 +385,8 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                 if gsheet:
                     ok = gsheet_upload.upload_rows(data, login_id, ss, log=lambda m: _log(log_fn, m))
                     res[ad_type] = {'ok': ok, 'rows': len(data) - 2}
+                    if ad_type == 'cpc':
+                        res['auction_cpc'] = _upload_auction_tab(login_id, 'CPC', ss, year, month, log_fn)
                 else:
                     _log(log_fn, f'  [{login_id}/{ad_type}] {len(data) - 2}일 (업로드 생략) 헤더={data[0]}')
                     res[ad_type] = {'ok': True, 'rows': len(data) - 2, 'header': data[0]}

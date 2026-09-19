@@ -11,6 +11,17 @@ from django.utils import timezone
 
 LOCKFILE = '/tmp/avengers_domemart_lcode.lock'
 
+# 11번가/지마켓 새벽 배치(02:00~04시대)와 CPU 경합으로 그쪽이 전량 타임아웃나던 사고(2026-09-19) 방지 —
+# 이 시간대엔 새 코드 조회를 잠깐 멈춰 브라우저를 유휴 상태로 둔다(창 유지, 페이지이동/렌더링만 중단).
+BLACKOUT_START = (1, 50)
+BLACKOUT_END = (4, 30)
+
+
+def _in_blackout(now=None):
+    now = now or timezone.localtime()
+    t = (now.hour, now.minute)
+    return BLACKOUT_START <= t < BLACKOUT_END
+
 
 class Command(BaseCommand):
     help = '도매마트 L코드 판매중/품절 상태 조회(재개 가능)'
@@ -104,6 +115,16 @@ class Command(BaseCommand):
                 if not os.path.exists(LOCKFILE):
                     self.stdout.write('중단 신호 감지 — 종료')
                     break
+                if _in_blackout():
+                    self.stdout.write('새벽 배치 시간대(01:50~04:30) — 브라우저 유휴 대기')
+                    while _in_blackout():
+                        if not os.path.exists(LOCKFILE):
+                            break
+                        time.sleep(60)
+                    if not os.path.exists(LOCKFILE):
+                        self.stdout.write('중단 신호 감지 — 종료')
+                        break
+                    self.stdout.write('배치 시간대 종료 — 재개')
                 r = dm.check_code(driver, code)
                 status = dm.result_to_status(r)
                 if status is None:

@@ -459,26 +459,32 @@ def collect_product_costs(driver, login_id, password, since_date, until_date, lo
         전환수=('판매자 전환 수', 'sum'),
     ).reset_index()
 
-    saved = 0
+    # 2026-09-19 사용자 요청(속도개선): 행마다 update_or_create()로 DB 왕복(SELECT+INSERT/UPDATE)을
+    # 하던 걸 bulk_create(update_conflicts=True)로 일괄 upsert로 바꿈 — 실측 결과 계정당 처리속도가
+    # 행수와 상관없이 초당 약 40행으로 고정돼 있어(7,648행=169초, 456행=..동일 비율) DB 왕복이
+    # 병목이었음을 확인. 배치(1000건)로 묶어 왕복 횟수를 크게 줄인다.
+    objs = []
     for _, r in agg.iterrows():
         cost = int(r['광고비'])
         clicks = int(r['클릭수'])
         conv_amount = int(r['전환금액'])
         roas = round(conv_amount / cost * 100, 2) if cost else 0
-        GmarketNewAdProductCost.objects.update_or_create(
+        objs.append(GmarketNewAdProductCost(
             login_id=login_id, use_date=r['날짜'].date(), product_no=str(r['상품번호']),
-            defaults={
-                'product_name': str(r['상품명'])[:500],
-                'impressions': int(r['노출수']),
-                'clicks': clicks,
-                'avg_click_cost': round(cost / clicks) if clicks else 0,
-                'cost': cost,
-                'conv_amount': conv_amount,
-                'conv_count': int(r['전환수']),
-                'roas': roas,
-            },
-        )
-        saved += 1
+            product_name=str(r['상품명'])[:500],
+            impressions=int(r['노출수']), clicks=clicks,
+            avg_click_cost=round(cost / clicks) if clicks else 0,
+            cost=cost, conv_amount=conv_amount, conv_count=int(r['전환수']), roas=roas,
+        ))
+
+    GmarketNewAdProductCost.objects.bulk_create(
+        objs, update_conflicts=True,
+        unique_fields=['login_id', 'use_date', 'product_no'],
+        update_fields=['product_name', 'impressions', 'clicks', 'avg_click_cost',
+                        'cost', 'conv_amount', 'conv_count', 'roas'],
+        batch_size=1000,
+    )
+    saved = len(objs)
 
     log(f'{since_date}~{until_date} 상품 {agg["상품번호"].nunique()}개 / {saved}건 저장(원본 {len(df)}행, 중복합산)')
     return saved
