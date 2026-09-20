@@ -1006,6 +1006,10 @@ class GmarketMyProduct(models.Model):
             # 중복제외(dedup) GROUP BY(account, seller_product_code) Min(id) 커버링
             models.Index(fields=['account', 'seller_product_code', 'id'],
                          name='gmkt_my_dedup_idx'),
+            # 대시보드 판매중 상품수 집계(status_type IN(...) GROUP BY account,market) 커버링
+            # — 없으면 36만행 풀스캔(2026-09-20 실측 0.6~0.8초)
+            models.Index(fields=['status_type', 'account', 'market'],
+                         name='gmkt_my_status_acct_mkt_idx'),
         ]
 
 

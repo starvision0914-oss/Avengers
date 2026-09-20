@@ -730,13 +730,20 @@ class ElevenSummaryView(views.APIView):
 
         # 이전 크롤링 시점 CPC (증감 계산용) — CrawlerLog에서 직전 성공 시각 조회.
         # 조회 기간과 무관(전체 로그 기준)한 결과라 짧게 캐시(2026-09-09, 0.2초 절감).
+        # 2026-09-20: crawler_logs가 로테이션 없이 계속 쌓이는 테이블이라([[project_cron_log_no_rotation]])
+        # 날짜 제한 없이 전체를 훑던 이 쿼리가 하루하루 데이터가 늘수록 느려지는 근본 원인이었음
+        # (실측 3.2만행). 계정마다 필요한 건 "가장 최근 2건"뿐이고 크롤은 매일 도니 최근 14일이면
+        # 항상 충분해서, 최근 창으로 범위를 고정해 테이블이 아무리 커져도 시간이 늘 일정하게 함.
         from .models import CrawlerLog
         from django.core.cache import cache as _es_cache
         prev_crawl_map = _es_cache.get('eleven_prev_crawl_map_v1')
         if prev_crawl_map is None:
+            from django.utils import timezone as _tz2
+            _recent_cutoff = _tz2.now() - timedelta(days=14)
             prev_crawl_map = {}
             # .values로 message(TextField) 제외해 경량화 (인덱스 platform,level,-created_at 사용)
-            for log in (CrawlerLog.objects.filter(platform='11st', level='success')
+            for log in (CrawlerLog.objects.filter(platform='11st', level='success',
+                                                   created_at__gte=_recent_cutoff)
                         .order_by('-created_at').values('account_id', 'created_at')):
                 sid = log['account_id']
                 if sid not in prev_crawl_map:
@@ -787,12 +794,18 @@ class ElevenSummaryView(views.APIView):
         if _mp_cached is not None:
             myprod_counts, myprod_synced = _mp_cached
         else:
+            # account__platform='11st'로 조인 필터를 걸면 (account_id,status_type) 커버링
+            # 인덱스가 무력화돼 임시테이블+filesort로 빠졌음(EXPLAIN 확인) — 이 테이블은 어차피
+            # 11st 전용이라 조인 없이 account_id로 집계 후 파이썬에서 login_id로 매핑.
+            _id2lid = {a.id: a.login_id for a in accounts}
             myprod_counts = {}
             myprod_synced = {}
-            for r in (_EMP.objects.filter(account__platform='11st')
-                      .values('account__login_id', 'status_type')
+            for r in (_EMP.objects
+                      .values('account_id', 'status_type')
                       .annotate(c=Count('id'), latest=Max('synced_at'))):
-                lid = r['account__login_id']
+                lid = _id2lid.get(r['account_id'])
+                if not lid:
+                    continue
                 d = myprod_counts.setdefault(lid, {})
                 d[r['status_type']] = r['c']
                 if r['latest'] and (lid not in myprod_synced or r['latest'] > myprod_synced[lid]):
@@ -1065,6 +1078,15 @@ class OverviewView(views.APIView):
         if end_d < start_d:
             start_d, end_d = end_d, start_d
 
+        # 2026-09-20: 지마켓·11번가·스마트스토어 대시보드를 전부 재호출하는 무거운 뷰라
+        # 짧게(60초) 응답 전체를 캐시 — 자동새로고침 주기(5분)보다 훨씬 짧아 데이터 신선도엔
+        # 영향 없이, 같은 기간을 반복 조회할 때(탭 전환 등)만 즉시 응답하게 함.
+        from django.core.cache import cache as _ov_cache
+        _ov_key = f'overview_resp_v1_{start_d}_{end_d}'
+        _cached_resp = _ov_cache.get(_ov_key)
+        if _cached_resp is not None:
+            return Response(_cached_resp)
+
         # 하위 뷰가 동일 기간을 쓰도록 date_from/date_to 주입
         q = QueryDict(mutable=True)
         for k, v in request.query_params.items():
@@ -1232,7 +1254,7 @@ class OverviewView(views.APIView):
             'net_after_ad': g_net + a_net + e_net + ss_net + cp_profit + lt_profit,
         }
 
-        return Response({
+        _resp_data = {
             'date_from': start_d.isoformat(),
             'date_to': end_d.isoformat(),
             'date': end_d.isoformat(),
@@ -1244,7 +1266,9 @@ class OverviewView(views.APIView):
                 'zero_ad': zero_ad,
             },
             'last_collected': e.get('last_collected_at'),
-        })
+        }
+        _ov_cache.set(_ov_key, _resp_data, 60)
+        return Response(_resp_data)
 
 
 class OverviewExpenseView(views.APIView):
@@ -1443,7 +1467,10 @@ def _write_schedule_cron(tag, items):
     for t, dow, script in items:
         if t is None:
             continue
-        lines.append(f'{t.minute} {t.hour} * * {dow} {script} # {tag}')
+        # 2026-09-20: 크롤러가 대시보드(gunicorn)와 CPU/DB를 다투지 않도록 전 크론에 적용한
+        # nice/ionice를 여기서도 유지 — 이 함수가 스케줄 재생성 때마다 해당 줄을 통째로 새로
+        # 쓰기 때문에, 여기 안 넣으면 광고 ON/OFF 스케줄을 UI에서 바꿀 때마다 nice가 빠짐.
+        lines.append(f'{t.minute} {t.hour} * * {dow} nice -n 10 ionice -c3 {script} # {tag}')
     cron_text = '\n'.join([l for l in lines if l.strip()]) + '\n'
     subprocess.run(['crontab', '-'], input=cron_text, text=True)
 
@@ -4463,7 +4490,7 @@ class GmarketDashboardView(views.APIView):
     def get(self, request):
         import re as _re
         from datetime import datetime, timedelta
-        from django.db.models import Count, Sum, Max
+        from django.db.models import Count, Sum, Max, Q
         from apps.cpc.models import (CrawlerAccount, GmarketDepositSnapshot,
                                      GmarketCostHistory, GmarketMyProduct, GmarketSellerGrade)
         df = request.query_params.get('date_from')
@@ -4500,17 +4527,23 @@ class GmarketDashboardView(views.APIView):
         # 계정별 최신 잔액 스냅샷 — market 파라미터와 무관(지마켓/옥션 탭 공용)한 결과라
         # 캐시해 재사용한다(2026-09-09: Overview가 이 뷰를 gmarket/auction 두 번 부르며
         # 매번 통째로 재계산해 느렸음 — N+1 쿼리라 계정 수만큼 라운드트립도 발생).
+        # (2026-09-20: 계정 수만큼 왕복하던 N+1 쿼리(계정당 1쿼리, 최대 76개)가 캐시 만료 때마다
+        #  느려지던 근본 원인 — 최대시각을 먼저 한 방에 구하고, (gmarket_id,collected_at) 쌍을
+        #  OR체인 하나로 묶어 두 번째 쿼리로 일괄조회(계정 수가 적어 OR체인도 안전, 46만행 전체를
+        #  끌어오지 않아도 됨). 캐시에만 의존하지 않고 콜드 상태에서도 빠르게 만듦.)
         from django.core.cache import cache as _gmkt_agg_cache
         bal = _gmkt_agg_cache.get('gmarket_bal_agg_v1')
         if bal is None:
             bal = {}
-            for s in (GmarketDepositSnapshot.objects.values('gmarket_id')
-                      .annotate(m=Max('collected_at'))):
-                last = (GmarketDepositSnapshot.objects.filter(gmarket_id=s['gmarket_id'], collected_at=s['m'])
-                        .values('total_balance', 'total_usage', 'gmarket_cpc', 'ai_usage',
-                                'auction_cpc', 'auction_ai_usage', 'collected_at').first())
-                if last:
-                    bal[s['gmarket_id']] = last
+            _bal_maxes = list(GmarketDepositSnapshot.objects.values('gmarket_id').annotate(m=Max('collected_at')))
+            if _bal_maxes:
+                _bal_q = Q()
+                for _row in _bal_maxes:
+                    _bal_q |= Q(gmarket_id=_row['gmarket_id'], collected_at=_row['m'])
+                for s in (GmarketDepositSnapshot.objects.filter(_bal_q)
+                          .values('gmarket_id', 'total_balance', 'total_usage', 'gmarket_cpc', 'ai_usage',
+                                  'auction_cpc', 'auction_ai_usage', 'collected_at')):
+                    bal[s['gmarket_id']] = s
             _gmkt_agg_cache.set('gmarket_bal_agg_v1', bal, 180)
         # 광고비 — 기본은 판매예치금 거래내역(GmarketCostHistory) 기준(과거 날짜는 이걸로 충분히 정확).
         # market('gmarket'/'auction')로 분리 집계해 탭별 정확한 값 표시.
@@ -4637,19 +4670,30 @@ class GmarketDashboardView(views.APIView):
         if _prod_agg is not None:
             prod, prod_mkt, max_items = _prod_agg
         else:
-            prod = {r['account__login_id']: r['n'] for r in (
-                GmarketMyProduct.objects.values('account__login_id').annotate(n=Count('id')))}
-            prod_mkt = {(r['account__login_id'], r['market']): r['n'] for r in (
-                GmarketMyProduct.objects.filter(status_type__in=['판매중', '11', '21'])
-                .values('account__login_id', 'market').annotate(n=Count('id')))}
-            # 등록가능수량(등급별 최대 상품등록수) — 최신 수집분만
+            # account__login_id로 조인해서 GROUP BY하면 account_id 인덱스가 무력화돼(EXPLAIN 확인)
+            # 36만행 풀스캔이 됐었음 — account_id로 집계 후 파이썬에서 login_id 매핑(조인 제거).
+            # accts는 market='auction'일 때 서브ID가 치환/제외돼 있어 여기 캐시 키를 공유하는
+            # id2lid로 쓰면 안 됨 — 지마켓 계정 전체를 다시 조회해 고정된 매핑을 씀.
+            _gmkt_id2lid = dict(CrawlerAccount.objects.filter(platform='gmarket').values_list('id', 'login_id'))
+            prod = {}
+            for r in GmarketMyProduct.objects.values('account_id').annotate(n=Count('id')):
+                lid = _gmkt_id2lid.get(r['account_id'])
+                if lid:
+                    prod[lid] = r['n']
+            prod_mkt = {}
+            for r in (GmarketMyProduct.objects.filter(status_type__in=['판매중', '11', '21'])
+                      .values('account_id', 'market').annotate(n=Count('id'))):
+                lid = _gmkt_id2lid.get(r['account_id'])
+                if lid:
+                    prod_mkt[(lid, r['market'])] = r['n']
+            # 등록가능수량(등급별 최대 상품등록수) — 최신 수집분만 (계정별 N+1 제거, 단일쿼리)
             max_items = {}
-            for g in (GmarketSellerGrade.objects.values('gmarket_id')
-                      .annotate(m=Max('collected_at'))):
-                last = (GmarketSellerGrade.objects.filter(gmarket_id=g['gmarket_id'], collected_at=g['m'])
-                        .values('max_item_count').first())
-                if last:
-                    max_items[g['gmarket_id']] = last['max_item_count']
+            for g in (GmarketSellerGrade.objects
+                      .order_by('gmarket_id', '-collected_at')
+                      .values('gmarket_id', 'max_item_count')):
+                gid = g['gmarket_id']
+                if gid not in max_items:
+                    max_items[gid] = g['max_item_count']
             _gmkt_agg_cache.set('gmarket_prodcount_agg_v1', (prod, prod_mkt, max_items), 180)
 
         # 계정별 매출/순수익 — SalesRecord(지마켓+옥션 플랫폼, 셀러 login_id, 기간)
