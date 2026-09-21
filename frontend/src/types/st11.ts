@@ -1,6 +1,7 @@
 export interface St11SellerRow {
   seller_id: string;
   seller_alias: string;
+  is_active?: boolean;
   balance: number;
   cpc_spend: number;
   cpc_pure?: number;

@@ -379,3 +379,41 @@ def update_price_api(channel_product_no: str, new_price: int, token: str):
     )
     put_resp.raise_for_status()
     return put_resp.json()
+
+
+def update_product_name_api(channel_product_no: str, new_name: str, token: str):
+    """상품명(name)을 변경. suspend_product_api/update_price_api와 동일 GET→보정→PUT 패턴 재사용.
+    2026-09-21 실측: statusType='OUTOFSTOCK'은 조회(GET) 응답엔 나오지만 PUT 입력값으로는
+    거부되는 파생(계산) 상태값 — 재고 0일 때 SALE+stockQuantity=0을 넣으면 응답에서 자동으로
+    다시 OUTOFSTOCK으로 계산돼 나옴. 그대로 되돌려보내면 전량 400(NotValidEnum) 나던 버그 수정."""
+    url = NAVER_CHANNEL_PRODUCT_URL.format(channel_product_no=channel_product_no)
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+
+    get_resp = requests.get(url, headers=headers, timeout=30)
+    get_resp.raise_for_status()
+    data = get_resp.json()
+    op = data.get('originProduct', {})
+    op['name'] = new_name
+    if op.get('statusType') == 'OUTOFSTOCK':
+        op['statusType'] = 'SALE'
+
+    op.get('detailAttribute', {}).pop('seoInfo', None)
+    da = op.setdefault('detailAttribute', {})
+    unit_cap = da.get('unitCapacity')
+    if unit_cap is None:
+        da['unitCapacity'] = {'unitPriceYn': False}
+    elif 'unitPriceYn' not in unit_cap:
+        unit_cap['unitPriceYn'] = False
+    certs = da.get('productCertificationInfos')
+    if isinstance(certs, list):
+        da['productCertificationInfos'] = [c for c in certs if c.get('certificationKindType')]
+        if not da['productCertificationInfos']:
+            da.pop('productCertificationInfos', None)
+
+    put_resp = requests.put(
+        url,
+        json={'originProduct': op, 'smartstoreChannelProduct': data.get('smartstoreChannelProduct', {})},
+        headers=headers, timeout=30,
+    )
+    put_resp.raise_for_status()
+    return put_resp.json()

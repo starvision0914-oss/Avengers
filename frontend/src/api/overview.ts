@@ -145,6 +145,26 @@ export interface MallProductsResponse {
   mode: string;
 }
 
+export interface OverviewDailyRow {
+  date: string;
+  revenue: number;
+  gross_profit: number;
+  ad_cost: number;
+  net_profit: number;
+  orders: number;
+}
+export interface OverviewDailyResponse {
+  date_from: string;
+  date_to: string;
+  rows: OverviewDailyRow[];
+  totals: { revenue: number; gross_profit: number; ad_cost: number; net_profit: number; orders: number };
+}
+
+export async function getOverviewDaily(params: { date_from: string; date_to: string }): Promise<OverviewDailyResponse> {
+  const { data } = await api.get('/cpc/overview/daily/', { params });
+  return data;
+}
+
 export async function getMallProfitProducts(
   params: { platform: string; date_from: string; date_to: string; mode: 'all' | 'loss' | 'high' }
 ): Promise<MallProductsResponse> {

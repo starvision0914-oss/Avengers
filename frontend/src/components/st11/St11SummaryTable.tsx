@@ -136,7 +136,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
   const base = onlyZero
     ? sellers.filter(s => (s.cpc_spend || 0) === 0)
     : hideEmpty
-      ? sellers.filter(s => s.cpc_spend > 0 || s.charge > 0 || (s.products || 0) > 0 || (s.cash || 0) > 0 || (s.point || 0) > 0)
+      ? sellers.filter(s => s.is_active !== false)
       : sellers;
   const filtered = useMemo(() => {
     if (!sortKey) return base;

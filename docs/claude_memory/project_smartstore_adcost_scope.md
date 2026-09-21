@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: project
   originSessionId: 3b74a53b-7c7e-4165-8a60-ec6720571afd
+  modified: 2026-09-20T15:46:24.457Z
 ---
 
 ## 확정 사실 (2026-07-06)
@@ -23,6 +24,15 @@ metadata:
 
 **Why:** "스마트스토어 광고비 수집 완료해줘" 요청에 응해 15개 미설정 계정 자동발견을 시도했으나 인증 구조상 불가능함을 확인, 대신 실제 문제(AI 계정 잔액 소진)를 찾아 해결
 **How to apply:** 향후 "왜 광고비가 0원이냐" 질문 시 스타쇼핑몰 AI는 비즈머니 충전 여부부터 확인. 나머지 15개 스토어에 대해 광고비 수집을 다시 시도할 필요 없음(광고 자체가 없음).
+
+## 2026-09-21 갱신: naver_ad_login_id 매핑이 위와 달라짐(재설정된 듯)
+DB(smartstore_account) 확인 결과 현재는 CPC 광고계정이 설정된 스토어가 3개(위와 개수는 동일)이지만 매핑이 다름:
+- id=4 유진코리아몰(dlwodbs7942@gmail.com) → naver_ad_login_id=rejoice888, customer_id=1891217
+- id=7 아이리스.(starvis7783@gmail.com) → naver_ad_login_id=rejoice999, customer_id=2761225
+- id=13 스타쇼핑몰 스스(starvision0914@gmail.com) → naver_ad_login_id=rejoice666, customer_id=3790215
+(예전엔 rejoice888=스타쇼핑몰 AI였는데 지금은 rejoice888=유진코리아몰 CPC로 바뀜 — ad-account 번호도 다름. 위 2026-07-06 매핑은 stale.)
+**구글시트**: 3계정 모두 지마켓과 같은 CPC 스프레드시트([[project_11st_gsheet_upload]]의 CPC_KEY)에 계정별(store_name) 워크시트로 정상 업로드됨. 워크시트명은 login_id가 아니라 store_name(예: "유진코리아몰", "아이리스.", "스타쇼핑몰 스스"). 코드: `crawlers/naver_daily_gsheet.py`.
+**How to apply**: "OO 계정 광고비가 시트에 있냐"는 질문엔 login_id/customer_id로 DB부터 확인하고, 시트에서는 store_name으로 찾을 것(login_id로 검색하면 안 나옴).
 
 ## 2026-07-07 갱신: 시간별 크론 신설 + 1개월 백필
 - 기존엔 광고비가 하루 1회(01:00, `cron_smartstore.sh`)만 수집돼 "실시간이 안 된다"는 지적 받음. `cron_smartstore_adcost_hourly.sh` 신설, **11:10/15:10/17:10/22:10**에 `crawl_smartstore_adcost`만 가볍게 실행(상품/판매통계 재크롤 없음). 11번가(11,15시 정각)·지마켓(11,15,17,22시 정각)과 겹치지 않도록 **10분 오프셋**.

@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import {
-  getOverview, getMallProfit, getMallProfitProducts,
+  PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Legend,
+} from 'recharts';
+import {
+  getOverview, getMallProfit, getMallProfitProducts, getOverviewDaily,
   getOverviewExpense, addOverviewExpense, updateOverviewExpense, deleteOverviewExpense,
   type OverviewResponse, type MallProfitResponse, type OverviewParams, type MallProductRow, type OverviewExpenseItem,
+  type OverviewDailyResponse,
 } from '../../api/overview';
 import { formatKRW } from '../../utils/format';
 import DashboardPage from '../Dashboard/DashboardPage';
@@ -20,6 +24,11 @@ function ydayKST(): string {
 function daysAgoKST(n: number): string {
   const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
   d.setDate(d.getDate() - n);
+  return d.toLocaleDateString('en-CA');
+}
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + days);
   return d.toLocaleDateString('en-CA');
 }
 
@@ -218,6 +227,8 @@ export default function OverviewDashboard() {
       </div>
 
       {err && <div style={{ color: '#dc2626', padding: 12, background: '#fef2f2', borderRadius: 12, marginBottom: 16, border: '1px solid #fecaca' }}>{err}</div>}
+
+      <DailyTrendCard />
 
       {/* ===== 종합 순수익 히어로 (공통 고정비 마이너스 반영) ===== */}
       {pt && (
@@ -443,6 +454,83 @@ export default function OverviewDashboard() {
           onClose={() => setExpenseModalCat(null)}
           onChanged={loadExpenses}
         />
+      )}
+    </div>
+  );
+}
+
+// ── 일자별 매출·순수익 추이 (기간 선택, 최대 한 달) ──
+const DAILY_MAX_SPAN = 30; // date_to - date_from 최대 30일(포함 31일)
+function DailyTrendCard() {
+  const [from, setFrom] = useState(firstDayOfMonthKST());
+  const [to, setTo] = useState(todayKST());
+  const [data, setData] = useState<OverviewDailyResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const onFromChange = (v: string) => {
+    setFrom(v);
+    if (addDays(v, DAILY_MAX_SPAN) < to) setTo(addDays(v, DAILY_MAX_SPAN));
+  };
+  const onToChange = (v: string) => {
+    setTo(v);
+    if (addDays(v, -DAILY_MAX_SPAN) > from) setFrom(addDays(v, -DAILY_MAX_SPAN));
+  };
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    getOverviewDaily({ date_from: from, date_to: to })
+      .then(r => { if (alive) setData(r); })
+      .catch(() => {})
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [from, to]);
+
+  const chartData = useMemo(
+    () => (data?.rows || []).map(r => ({ date: r.date.slice(5), 매출: r.revenue, 순수익: r.net_profit, 광고비: r.ad_cost })),
+    [data]
+  );
+
+  return (
+    <div style={{ ...CARD, padding: 18, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 16, fontWeight: 800 }}>📈 일자별 매출·순수익·광고비 추이</span>
+        <span style={{ fontSize: 12, color: '#9ca3af' }}>최대 한 달</span>
+        <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', marginLeft: 'auto' }}>
+          <input type="date" value={from} max={to} onChange={e => onFromChange(e.target.value)}
+            style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+          <span style={{ color: '#9ca3af' }}>~</span>
+          <input type="date" value={to} min={from} max={todayKST()} onChange={e => onToChange(e.target.value)}
+            style={{ padding: '4px 8px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13 }} />
+        </span>
+      </div>
+
+      {data && (
+        <div style={{ display: 'flex', gap: 20, margin: '6px 2px 10px', fontSize: 12.5, flexWrap: 'wrap' }}>
+          <span style={{ color: '#6b7280' }}>합계 매출 <b style={{ color: '#0891b2' }}>{formatKRW(data.totals.revenue)}원</b></span>
+          <span style={{ color: '#6b7280' }}>합계 순수익 <b style={{ color: data.totals.net_profit >= 0 ? '#16a34a' : '#dc2626' }}>
+            {data.totals.net_profit >= 0 ? '+' : ''}{formatKRW(data.totals.net_profit)}원</b></span>
+          <span style={{ color: '#6b7280' }}>합계 광고비 <b style={{ color: '#f59e0b' }}>{formatKRW(data.totals.ad_cost)}원</b></span>
+          <span style={{ color: '#6b7280' }}>주문 <b style={{ color: '#334155' }}>{formatKRW(data.totals.orders)}건</b></span>
+        </div>
+      )}
+
+      <ResponsiveContainer width="100%" height={280}>
+        <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+          <YAxis yAxisId="left" tickFormatter={v => formatKRW(Number(v))} tick={{ fontSize: 11 }} width={70} />
+          <YAxis yAxisId="right" orientation="right" tickFormatter={v => formatKRW(Number(v))} tick={{ fontSize: 11 }} width={70} />
+          <Tooltip formatter={(v: any, name: any) => [`${formatKRW(Number(v))}원`, name]} />
+          <Legend wrapperStyle={{ fontSize: 12 }} />
+          <Bar yAxisId="left" dataKey="매출" fill="#38bdf8" radius={[4, 4, 0, 0]} />
+          <Line yAxisId="right" type="monotone" dataKey="순수익" stroke="#16a34a" strokeWidth={2.5} dot={{ r: 3 }} />
+          <Line yAxisId="right" type="monotone" dataKey="광고비" stroke="#f59e0b" strokeWidth={2} dot={{ r: 2.5 }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+      {loading && <div style={{ textAlign: 'center', fontSize: 12, color: '#9ca3af', marginTop: 6 }}>불러오는 중…</div>}
+      {!loading && chartData.length === 0 && (
+        <div style={{ textAlign: 'center', fontSize: 12.5, color: '#9ca3af', marginTop: 6 }}>데이터가 없습니다</div>
       )}
     </div>
   );

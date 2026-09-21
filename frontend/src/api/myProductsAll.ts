@@ -59,6 +59,7 @@ export async function fetchAllMyProducts(
   needsCheckPct?: number,
 ): Promise<MyProductAllResponse> {
   const { data } = await api.get<MyProductAllResponse>('/cpc/my-products/', {
+    timeout: 25000,   // 목록 조회는 항상 짧아야 함 — 서버가 멈추면 무한 로딩 대신 25초 후 에러로 표시
     params: {
       page, per_page: perPage, status, search, sort, order,
       needs_check: needsCheck ? 1 : undefined,
@@ -78,6 +79,6 @@ export interface MyProductsStatusSummary {
 }
 
 export async function fetchMyProductsStatusSummary(): Promise<MyProductsStatusSummary> {
-  const { data } = await api.get<MyProductsStatusSummary>('/cpc/my-products/status-summary/');
+  const { data } = await api.get<MyProductsStatusSummary>('/cpc/my-products/status-summary/', { timeout: 25000 });
   return data;
 }

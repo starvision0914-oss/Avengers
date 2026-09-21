@@ -591,8 +591,46 @@ def _get_precheck_breakdown(driver, log):
         return empty
 
 
+_GRID_ROWS_JS = (
+    "return Array.from(document.querySelectorAll('.ag-center-cols-container [role=\"row\"]'))"
+    ".map(r => { const cells = r.querySelectorAll('[role=\"gridcell\"]'); const o = {};"
+    "cells.forEach(c => o[c.getAttribute('col-id')] = c.innerText.trim()); return o; });"
+)
+_CLICK_DOWNLOAD_ROW_JS = (
+    "var idx=arguments[0];"
+    "var rows=document.querySelectorAll('.ag-center-cols-container [role=\"row\"]');"
+    "if(rows.length<=idx) return false;"
+    "var btn=rows[idx].querySelector('[col-id=\"downloadUrl\"] button');"
+    "if(!btn) return false; btn.click(); return true;"
+)
+
+
+def _get_grid_rows(driver):
+    """대량엑셀 파일 목록(AG-Grid) 행을 [{fileName,fileStatus,requestDt,successDt,remainDt}, ...]로 반환.
+    (2026-09-21: 11번가가 이 화면을 <a href> 목록에서 AG-Grid(버튼식 다운로드)로 개편함.)"""
+    try:
+        return driver.execute_script(_GRID_ROWS_JS) or []
+    except Exception:
+        return []
+
+
+def _click_download_row(driver, idx):
+    try:
+        return bool(driver.execute_script(_CLICK_DOWNLOAD_ROW_JS, idx))
+    except Exception:
+        return False
+
+
 def _excel_download_today(driver, account, log):
-    """대량엑셀 생성요청 → 오늘자 '파일 생성 완료' 대기 → 다운로드. 파일경로 반환."""
+    """대량엑셀 목록에 오늘자 '파일 생성 완료' 행이 이미 있으면 재생성 없이 바로 받고,
+    없으면 새로 생성요청 후 완료를 기다려 다운로드한다. 파일경로 반환.
+
+    2026-09-21: 11번가가 파일 목록 화면을 <a href> 링크 나열 방식에서 AG-Grid(버튼 클릭식
+    다운로드)로 개편 — 예전 코드는 `#popup-body-grid a`를 찾아 href의 날짜문자열로 매칭했는데
+    새 화면엔 <a> 자체가 없어(버튼) 항상 빈 값→매번 타임아웃. 이 때문에 매 계정마다
+    "다운로드 전 기존 데이터 삭제"만 되고 새로 못 채워져 활성 51계정 전체가 0건이 되는
+    사고로 이어짐(사용자 신고로 발견). 그리드 행(파일명/진행상태/요청일시/다운로드버튼)
+    구조 기준으로 재작성 + 이미 완료된 오늘자 파일이 있으면 재요청하지 않도록 개선."""
     sn = _detect_seller_no(driver, log)
     if not sn:
         raise Exception('sellerNo 탐지 실패 (TP쿠키 M_N 없음)')
@@ -625,43 +663,52 @@ def _excel_download_today(driver, account, log):
     except Exception:
         pass
 
-    # 파일명(쿼리스트링 앞부분)의 날짜가 오늘/어제(자정 경계 대비)인 다운로드 링크를 폴링
-    # 주의: S3 서명 URL의 X-Amz-Date 에 걸리지 않도록 '?' 앞 파일명만 검사
     import datetime as _dt
     _now = _dt.datetime.now()
-    valid_dates = [_now.strftime('%Y%m%d'), (_now - _dt.timedelta(days=1)).strftime('%Y%m%d')]
-    # 파일명에 valid_dates 중 하나가 들어간 첫 링크 반환
-    find_js = (
-        "var ds=arguments[0];var ls=document.querySelectorAll('#popup-body-grid a');"
-        "for(var i=0;i<ls.length;i++){var h=ls[i].href||'';"
-        "var fn=h.split('?')[0].split('/').pop();"
-        "for(var j=0;j<ds.length;j++){if(fn.indexOf(ds[j])>=0)return h;}}return '';")
-    click_js = (
-        "var ds=arguments[0];var ls=document.querySelectorAll('#popup-body-grid a');"
-        "for(var i=0;i<ls.length;i++){var h=ls[i].href||'';"
-        "var fn=h.split('?')[0].split('/').pop();"
-        "for(var j=0;j<ds.length;j++){if(fn.indexOf(ds[j])>=0){ls[i].click();return;}}}")
+    valid_dates = [_now.strftime('%Y-%m-%d'), (_now - _dt.timedelta(days=1)).strftime('%Y-%m-%d')]
 
-    # 생성요청 → 폴링 → 다운로드 → 날짜검증 을 최대 2회.
-    # 11번가가 옛 생성본을 먼저 주거나(파일 오늘자 아님) 생성이 느릴 때(타임아웃)
-    # 생성요청을 다시 눌러 강제 재생성한다. (대형 카탈로그 생성 지연 대비)
+    def _download_row(idx, tag):
+        if not _click_download_row(driver, idx):
+            return None
+        _accept_alert(driver, 5, tag)
+        for _ in range(90):
+            files = [f for f in dl_dir.glob('*') if not f.name.endswith('.crdownload')]
+            if files:
+                return max(files, key=lambda f: f.stat().st_mtime)
+            time.sleep(1)
+        return None
+
+    # 1) 오늘/어제자 완료 파일이 이미 목록에 있으면 재생성 요청 없이 바로 다운로드
+    #    (목록은 요청시각 내림차순 — 위에서부터 찾으면 가장 최근 완료본)
+    rows = _get_grid_rows(driver)
+    for i, r in enumerate(rows):
+        if r.get('fileStatus') == '파일 생성 완료' and any(r.get('requestDt', '').startswith(d) for d in valid_dates):
+            log(f"기존 완료파일 발견(요청 {r.get('requestDt')}) — 재생성 없이 다운로드")
+            fp = _download_row(i, 'dl-existing')
+            if fp:
+                log(f'다운로드: {fp.name} ({fp.stat().st_size}b)')
+                return fp
+            log('기존 파일 다운로드 실패 — 새로 생성요청으로 진행')
+            break
+
+    # 2) 없으면 새로 생성요청 → 그리드 갱신 폴링(맨 위 행이 완료되고 방금 요청한 것인지
+    #    요청시각으로 확인) → 다운로드. 최대 2회(대형 카탈로그 생성 지연 대비).
     last_err = None
     for gen_attempt in range(1, 3):
-        # 옛 파일/이전 시도 잔재 제거 (newest 매칭이 옛 파일을 잡지 않도록)
         for f in dl_dir.glob('*'):
             try:
                 f.unlink()
             except Exception:
                 pass
 
-        # 생성요청
         btn = WebDriverWait(driver, 20).until(
             EC.element_to_be_clickable((By.XPATH, BTN_GEN_XPATH)))
         driver.execute_script("arguments[0].click();", btn)
         atxt = _accept_alert(driver, 15, f'gen{gen_attempt}')
         log(f'파일생성요청({gen_attempt}/2): {atxt}')
+        req_time = _dt.datetime.now()
 
-        href = ''
+        done = False
         for i in range(GEN_POLL_ROUNDS):
             time.sleep(GEN_POLL_INTERVAL)
             _accept_alert(driver, 2)
@@ -671,37 +718,24 @@ def _excel_download_today(driver, account, log):
             except Exception:
                 pass
             _accept_alert(driver, 2)
-            try:
-                href = driver.execute_script(find_js, valid_dates)
-            except Exception:
-                href = ''
-            if href:
-                log(f'오늘자 파일 생성완료 링크 확인 ({(i+1)*GEN_POLL_INTERVAL}s)')
-                break
-        if not href:
-            last_err = '오늘자 파일 생성완료 미확인 (타임아웃)'
+            rows = _get_grid_rows(driver)
+            if rows and rows[0].get('fileStatus') == '파일 생성 완료':
+                try:
+                    rdt = _dt.datetime.strptime(rows[0]['requestDt'], '%Y-%m-%d %H:%M:%S')
+                    if abs((rdt - req_time).total_seconds()) < 120:
+                        done = True
+                        break
+                except Exception:
+                    pass
+        if not done:
+            last_err = '생성완료 미확인 (타임아웃)'
             log(f'{last_err}' + (' — 강제 재생성' if gen_attempt < 2 else ''))
             continue
 
-        # 오늘/어제 파일명이 든 링크만 정확히 클릭 (옛 파일/서명날짜 오매칭 방지)
-        driver.execute_script(click_js, valid_dates)
-        _accept_alert(driver, 5, 'dl')
-        fp = None
-        for _ in range(90):
-            files = [f for f in dl_dir.glob('*') if not f.name.endswith('.crdownload')]
-            if files:
-                fp = max(files, key=lambda f: f.stat().st_mtime)
-                break
-            time.sleep(1)
+        log('생성완료 확인 — 다운로드 시도')
+        fp = _download_row(0, f'dl{gen_attempt}')
         if not fp:
             last_err = '다운로드 실패 (파일 없음)'
-            log(f'{last_err}' + (' — 강제 재생성' if gen_attempt < 2 else ''))
-            continue
-
-        # 생성일자 검증 (오늘/어제 허용 — 자정 경계)
-        fm = re.search(r'_(\d{8})\d{6}', fp.name)
-        if fm and fm.group(1) not in valid_dates:
-            last_err = f'다운로드 파일이 오늘자 아님 ({fm.group(1)})'
             log(f'{last_err}' + (' — 강제 재생성' if gen_attempt < 2 else ''))
             continue
 

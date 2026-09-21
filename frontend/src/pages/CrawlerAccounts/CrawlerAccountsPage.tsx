@@ -28,7 +28,7 @@ export default function CrawlerAccountsPage() {
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
-  const [form, setForm] = useState({ platform: '11st', login_id: '', password_enc: '', seller_name: '', cost_type: 'sellerpoint' });
+  const [form, setForm] = useState({ platform: '11st', login_id: '', password_enc: '', seller_name: '', cost_type: 'sellerpoint', api_key: '' });
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [showPw, setShowPw] = useState(false);
 
@@ -68,7 +68,7 @@ export default function CrawlerAccountsPage() {
       await api.post('/cpc/crawler/accounts/', form);
       toast.success('계정 추가 완료');
       setShowAdd(false);
-      setForm({ platform: '11st', login_id: '', password_enc: '', seller_name: '', cost_type: 'sellerpoint' });
+      setForm({ platform: '11st', login_id: '', password_enc: '', seller_name: '', cost_type: 'sellerpoint', api_key: '' });
       load();
     } catch (e: any) {
       toast.error('추가 실패: ' + (e?.response?.data?.login_id?.[0] || e.message));
@@ -413,6 +413,13 @@ export default function CrawlerAccountsPage() {
                   <option value="sellercash">셀러캐시</option>
                 </select>
               </div>
+              {form.platform === '11st' && (
+                <div>
+                  <label className={`text-xs ${text2} block mb-1`}>11번가 API키 (선택)</label>
+                  <input value={form.api_key} onChange={e => setForm({ ...form, api_key: e.target.value })}
+                    className={`w-full border rounded-lg px-3 py-2 text-sm font-mono ${input}`} placeholder="11st OpenAPI key" />
+                </div>
+              )}
             </div>
             <div className="px-5 py-3 border-t flex justify-end gap-2" style={{ borderColor: dark ? '#2a2b35' : '#e5e7eb' }}>
               <button onClick={() => setShowAdd(false)} className={`px-4 py-2 rounded-lg text-sm ${dark ? 'bg-[#2a2b35] text-gray-300' : 'bg-gray-200 text-gray-700'}`}>취소</button>

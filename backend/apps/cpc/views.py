@@ -752,10 +752,11 @@ class ElevenSummaryView(views.APIView):
                     prev_crawl_map[sid].append(log['created_at'])
             _es_cache.set('eleven_prev_crawl_map_v1', prev_crawl_map, 90)
 
-        # 표시 대상: 활성 11번가 계정 전체 (api 없는 대기계정도 로스터에 표시)
+        # 표시 대상: 11번가 계정 전체 (비활성/정지 포함 — 프론트 "빈계정숨기기"로 활성만 걸러봄,
+        # 2026-09-21 사용자 요청으로 is_active 필터 제거해 모든 아이디를 로스터에 표시)
         accounts = list(
             CrawlerAccount.objects.filter(
-                platform='11st', is_active=True
+                platform='11st'
             ).order_by('display_order', 'login_id')
         )
 
@@ -874,6 +875,7 @@ class ElevenSummaryView(views.APIView):
             seller = {
                 'seller_id': sid,
                 'seller_alias': acct.seller_name or sid,
+                'is_active': acct.is_active,
                 'cpc_spend': cpc,
                 'cpc_pure': cpc_pure,
                 'fee_payment': fee_payment,
@@ -6850,6 +6852,95 @@ class AllMallProfitView(views.APIView):
         tot['gross_margin'] = round(tot['gross_profit'] / rev * 100, 1) if rev else 0
         return Response({'month': f'{y}-{m:02d}', 'date_from': str(ms), 'date_to': str(me),
                          'rows': rows, 'totals': tot})
+
+
+class OverviewDailyView(views.APIView):
+    """/overview 일자별 매출·순수익 추이. ?date_from=&date_to= (최대 31일, 초과 시 date_from을 당겨서 잘라냄).
+    전체 쇼핑몰 합산: 매출/매출이익=SalesRecord, 광고비=AllMallProfitView와 동일 소스(지마켓·옥션=거래내역,
+    11번가=거래내역 CPC차감, 스마트스토어=SmartStoreAdCost)를 날짜별로 집계해 순수익(매출이익-광고비) 산출."""
+    MAX_DAYS = 31
+
+    def get(self, request):
+        from datetime import date as dt_date, datetime as dt_dt, timedelta as dt_td
+        import pytz as _pytz
+        from apps.sales.models import SalesRecord
+        from apps.cpc.models import GmarketCostHistory, ElevenCostHistory, CrawlerAccount as _CrAcct, GmarketManualCost as _GMC
+        from apps.smartstore.models import SmartStoreAdCost as _SSAdCost
+
+        today = dt_date.today()
+        df = request.query_params.get('date_from')
+        dtp = request.query_params.get('date_to')
+        try:
+            me = dt_dt.strptime(dtp, '%Y-%m-%d').date() if dtp else today
+        except ValueError:
+            me = today
+        try:
+            ms = dt_dt.strptime(df, '%Y-%m-%d').date() if df else me - dt_td(days=29)
+        except ValueError:
+            ms = me - dt_td(days=29)
+        if ms > me:
+            ms, me = me, ms
+        if (me - ms).days >= self.MAX_DAYS:
+            ms = me - dt_td(days=self.MAX_DAYS - 1)
+
+        # 1) 매출/매출이익 — 날짜별 합계
+        by_date = {}
+        for r in (SalesRecord.objects.filter(order_date__gte=ms, order_date__lte=me)
+                  .values('order_date').annotate(rev=Sum('total_price'), gp=Sum('net_profit'), n=Count('id'))):
+            by_date[r['order_date']] = {'revenue': r['rev'] or 0, 'gross_profit': r['gp'] or 0, 'orders': r['n']}
+
+        # 2) 광고비 — 날짜별 합계 (AllMallProfitView와 동일 소스/제외조건)
+        _visible_gmkt_ids = list(_CrAcct.objects.filter(
+            platform='gmarket', is_active=True, hide_from_dashboard=False
+        ).values_list('login_id', flat=True))
+        ad_by_date = {}
+        for r in (GmarketCostHistory.objects
+                  .filter(use_date__gte=ms, use_date__lte=me,
+                          transaction_type__in=['CPC', 'AI매출업'],
+                          seller_id__in=_visible_gmkt_ids)
+                  .exclude(comment__icontains='판매예치금')
+                  .exclude(use_type='적립')
+                  .values('use_date').annotate(a=Sum('amount'))):
+            ad_by_date[r['use_date']] = ad_by_date.get(r['use_date'], 0) + abs(r['a'] or 0)
+
+        for r in (_GMC.objects.filter(
+                  seller_id__in=_visible_gmkt_ids, use_date__gte=ms, use_date__lte=me)
+                  .values('use_date').annotate(a=Sum('amount'))):
+            ad_by_date[r['use_date']] = ad_by_date.get(r['use_date'], 0) + abs(r['a'] or 0)
+
+        # MySQL 타임존 테이블 미적재 상태라 TruncDate/CONVERT_TZ는 전부 NULL을 반환함(사일런트
+        # 실패) — [[feedback_timezone_pitfalls]]. DB에서 자르지 말고 aware datetime으로만
+        # 필터링한 뒤 파이썬에서 KST로 변환해 날짜별로 직접 집계.
+        _kst = _pytz.timezone('Asia/Seoul')
+        for dtm, amt in (ElevenCostHistory.objects
+                  .filter(transaction_datetime__gte=_kst.localize(dt_dt.combine(ms, dt_dt.min.time())),
+                          transaction_datetime__lt=_kst.localize(dt_dt.combine(me, dt_dt.min.time()) + dt_td(days=1)),
+                          transaction_type='CPC', amount__lt=0)
+                  .values_list('transaction_datetime', 'amount')):
+            d = dtm.astimezone(_kst).date()
+            ad_by_date[d] = ad_by_date.get(d, 0) + abs(amt)
+
+        for r in (_SSAdCost.objects.filter(date__gte=ms, date__lte=me)
+                  .values('date').annotate(a=Sum('cost'))):
+            ad_by_date[r['date']] = ad_by_date.get(r['date'], 0) + (r['a'] or 0)
+
+        # 3) 날짜별 행 구성 (빈 날짜도 0으로 채워 그래프 공백 없게)
+        rows = []
+        tot = {'revenue': 0, 'gross_profit': 0, 'ad_cost': 0, 'net_profit': 0, 'orders': 0}
+        d = ms
+        while d <= me:
+            b = by_date.get(d, {'revenue': 0, 'gross_profit': 0, 'orders': 0})
+            ad_cost = ad_by_date.get(d, 0)
+            net = b['gross_profit'] - ad_cost
+            rows.append({
+                'date': str(d), 'revenue': b['revenue'], 'gross_profit': b['gross_profit'],
+                'ad_cost': ad_cost, 'net_profit': net, 'orders': b['orders'],
+            })
+            tot['revenue'] += b['revenue']; tot['gross_profit'] += b['gross_profit']
+            tot['ad_cost'] += ad_cost; tot['net_profit'] += net; tot['orders'] += b['orders']
+            d += dt_td(days=1)
+
+        return Response({'date_from': str(ms), 'date_to': str(me), 'rows': rows, 'totals': tot})
 
 
 class MallProfitProductsView(views.APIView):

@@ -181,7 +181,7 @@ export default function St11Dashboard() {
 
   const mobileFiltered = summary
     ? mobileHideEmpty
-      ? summary.sellers.filter(s => s.cpc_spend > 0 || s.charge > 0 || (s.products || 0) > 0)
+      ? summary.sellers.filter(s => s.is_active !== false)
       : summary.sellers
     : [];
 
