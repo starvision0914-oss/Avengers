@@ -4,6 +4,11 @@
 # 08:10 강제선점이 아직 실행 중이던 08:00 작업을 그대로 죽여버리는 충돌이 반복됨(2026-09-16 발견) —
 # 하나의 크론으로 합쳐 순차실행함으로써 서로 죽일 여지 자체를 없앰.
 cd /home/rejoice888/Avengers/backend
+SKIP_DATE=$(cat /tmp/avengers_gmarket_ad_on_skip 2>/dev/null)
+if [ -n "$SKIP_DATE" ] && [ "$SKIP_DATE" = "$(date +%F)" ]; then
+    echo "$(date) 오늘($SKIP_DATE) 광고ON 스킵설정 — 종료" >> /tmp/cron_gmarket_ad_on_skip.log
+    exit 0
+fi
 export PATH="/home/rejoice888/.local/bin:$PATH"
 LOG=/tmp/cron_cpc2.log
 

@@ -76,6 +76,7 @@ def get_page_buttons(driver):
 
 def process_product_list(driver, targets, execute, stats):
     """현재 '상품 목록' 화면에서 페이지를 돌며 매칭 상품을 OFF.
+    targets=None이면 '운영중' 상태인 모든 행이 대상(전체 OFF 모드).
     stats['done'](전역 처리완료 상품번호)로 중복 카운트/클릭 방지.
     한 페이지 스캔에 '새 상품번호'가 없으면 페이지 끝으로 보고 종료."""
     seen=set()      # 이 그룹에서 본 상품번호
@@ -88,8 +89,11 @@ def process_product_list(driver, targets, execute, stats):
         if page>1 and not new:
             break  # 새 상품 없음 → 마지막 페이지 반복 → 종료
         seen.update(pnos)
-        # 아직 처리 안 한 매칭만
-        match=[r for r in rows if r['pno'] in targets and r['pno'] not in stats['done']]
+        # 아직 처리 안 한 매칭만 (targets=None이면 '운영중'인 행 전체)
+        if targets is None:
+            match=[r for r in rows if r.get('status') == '운영중' and r['pno'] not in stats['done']]
+        else:
+            match=[r for r in rows if r['pno'] in targets and r['pno'] not in stats['done']]
         if match:
             log(f"      매칭 {len(match)}개: {[r['pno'] for r in match][:6]}{'…' if len(match)>6 else ''}")
             if execute:
@@ -117,28 +121,36 @@ def process_product_list(driver, targets, execute, stats):
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument('--eid', required=True)
-    ap.add_argument('--codes', required=True, help='상품번호 파일(텍스트/CSV)')
+    ap.add_argument('--codes', help='상품번호 파일(텍스트/CSV) — --all과 배타적')
+    ap.add_argument('--all', action='store_true', help='운영중인 모든 상품(캠페인 전체) OFF — --codes 없이 사용')
     ap.add_argument('--csv-col', type=int, default=1, help='CSV일때 상품번호 컬럼(0base)')
     ap.add_argument('--execute', action='store_true', help='실제 OFF 실행(미지정시 드라이런)')
     a=ap.parse_args()
-    # 대상 상품번호 로드 (해당 eid 행만)
-    targets=set()
-    import csv as _csv
-    with open(a.codes, encoding='utf-8-sig') as f:
-        if a.codes.endswith('.csv'):
-            rd=_csv.reader(f); next(rd, None)
-            for row in rd:
-                if len(row)>a.csv_col and (not row[0] or row[0]==a.eid):
-                    m=re.match(r'\d{10}', str(row[a.csv_col]).strip())
-                    if m: targets.add(m.group(0))
-        else:
-            for line in f:
-                for tok in re.split(r'[,\s]+', line.strip()):
-                    if re.fullmatch(r'\d{10}', tok): targets.add(tok)
+    if not a.all and not a.codes:
+        log('--codes 또는 --all 중 하나는 필수'); return
+    targets=None
+    if not a.all:
+        # 대상 상품번호 로드 (해당 eid 행만)
+        targets=set()
+        import csv as _csv
+        with open(a.codes, encoding='utf-8-sig') as f:
+            if a.codes.endswith('.csv'):
+                rd=_csv.reader(f); next(rd, None)
+                for row in rd:
+                    if len(row)>a.csv_col and (not row[0] or row[0]==a.eid):
+                        m=re.match(r'\d{10}', str(row[a.csv_col]).strip())
+                        if m: targets.add(m.group(0))
+            else:
+                for line in f:
+                    for tok in re.split(r'[,\s]+', line.strip()):
+                        if re.fullmatch(r'\d{10}', tok): targets.add(tok)
     mode='실제OFF' if a.execute else '드라이런(찾기만)'
-    log(f"[{a.eid}] 대상 상품번호 {len(targets)}개 / 모드={mode}")
-    if not targets: log('대상 없음'); return
-    ok, reason = guard.preflight('광고OFF')
+    if targets is None:
+        log(f"[{a.eid}] 대상: 운영중인 상품 전체 / 모드={mode}")
+    else:
+        log(f"[{a.eid}] 대상 상품번호 {len(targets)}개 / 모드={mode}")
+        if not targets: log('대상 없음'); return
+    ok, reason = guard.preflight('광고OFF', wait=True, wait_timeout=3600)
     if not ok: log(f'⏭️ 건너뜀 — {reason}'); return
     pw={x.login_id:x.password_enc for x in CrawlerAccount.objects.filter(platform='11st')}.get(a.eid,'')
     stats={'matched':0,'off':0,'done':set()}
