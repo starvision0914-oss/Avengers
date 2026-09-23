@@ -367,7 +367,11 @@ export default function GmarketDashboard() {
         )}
       </div>
 
-      {costModal && <CostModal seller={costModal.seller} type={costModal.type} from={from} to={to} onClose={() => setCostModal(null)} />}
+      {costModal && (
+        <CostModal seller={costModal.seller} type={costModal.type}
+          market={market === 'combined' ? undefined : market}
+          from={from} to={to} onClose={() => setCostModal(null)} />
+      )}
     </div>
   );
 }
@@ -448,19 +452,20 @@ function ManualCostSection({ seller, onChanged, from, to }: { seller: string; on
   );
 }
 
-function CostModal({ seller, type, from, to, onClose }: { seller: string; type?: string; from: string; to: string; onClose: () => void }) {
+function CostModal({ seller, type, market, from, to, onClose }: { seller: string; type?: string; market?: 'gmarket' | 'auction'; from: string; to: string; onClose: () => void }) {
   const [d, setD] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const load = useCallback(() => {
     setLoading(true);
-    api.get('/cpc/gmarket/ad-daily/', { params: { seller_id: seller, date_from: from, date_to: to } })
+    api.get('/cpc/gmarket/ad-daily/', { params: { seller_id: seller, date_from: from, date_to: to, market } })
       .then(r => setD(r.data)).catch(() => setD(null)).finally(() => setLoading(false));
-  }, [seller, from, to]);
+  }, [seller, from, to, market]);
   useEffect(() => { load(); }, [load]);
 
   const rows = type ? (d?.rows || []).filter((x: any) => x.transaction_type === type) : (d?.rows || []);
   const filteredTotal = rows.reduce((s: number, x: any) => s + x.amount, 0);
-  const typeLabel = type ? ` · ${type}` : '';
+  const marketLabel = market === 'gmarket' ? ' (지마켓)' : market === 'auction' ? ' (옥션)' : '';
+  const typeLabel = (type ? ` · ${type}` : '') + marketLabel;
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>

@@ -42,6 +42,7 @@ export async function getSt11Summary(
     fulfillment: s.fulfillment || '',
     shipping: s.shipping || '',
     inquiry: s.inquiry || '',
+    ai_campaign: s.ai_campaign || '',
     office_collected_at: s.office_collected_at || null,
     sales: s.sales || 0,
     cost: s.cost || 0,

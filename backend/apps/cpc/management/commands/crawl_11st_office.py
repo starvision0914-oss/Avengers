@@ -43,6 +43,7 @@ XPATHS = {
     'fulfillment':  '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[1]/div[2]/span[1]',
     'shipping':     '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[2]/div[2]/span[1]',
     'inquiry':      '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[3]/div[2]/span[1]',
+    'ai_campaign':  '//*[@id="soContent"]/div[2]/div/div[1]/div/div/div[2]/button',
 }
 DRAFT_MENU_PARENT = '//*[@id="app"]/div/div[2]/div/div[1]/div/ul/li[2]/button'
 DRAFT_MENU_ITEM = '//*[@id="app"]/div/div[2]/div/div[1]/div/ul/li[2]/ul/li[10]/a'
@@ -97,11 +98,13 @@ def _collect_one(driver, account):
         'cash', 'point', 'ad_balance', 'product_limit', 'products', 'banned',
         'available', 'overdue', 'undelivered', 'draft',
     )}
-    data['fulfillment'] = data['shipping'] = data['inquiry'] = ''
+    data['fulfillment'] = data['shipping'] = data['inquiry'] = data['ai_campaign'] = ''
 
     # 메인 페이지 이동 (이미 로그인된 상태)
     driver.get('https://soffice.11st.co.kr/view/main')
     time.sleep(3)
+
+    data['ai_campaign'] = _get_text(driver, XPATHS['ai_campaign'])[:50]
 
     # 스크롤 70% 아래로
     driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.7);")
@@ -298,7 +301,8 @@ class Command(BaseCommand):
                          f'limit={data["product_limit"]:,} sale={data["products"]:,} '
                          f'avail={data["available"]:,} draft={data["draft"]} '
                          f'overdue={data["overdue"]} undeliv={data["undelivered"]} '
-                         f'/ {data["fulfillment"]}/{data["shipping"]}/{data["inquiry"]}')
+                         f'/ {data["fulfillment"]}/{data["shipping"]}/{data["inquiry"]} '
+                         f'/ ai캠페인={data["ai_campaign"]}')
                     acct.last_crawled_at = timezone.now()
                     acct.save(update_fields=['last_crawled_at'])
                 except Exception as e:

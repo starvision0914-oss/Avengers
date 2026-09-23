@@ -31,6 +31,9 @@ for (var i = 0; i < rows.length; i++) {
     var name = links.length ? links[0].textContent.trim() : nameCell.textContent.trim();
     if (isAi && name.indexOf('AI\\n') === 0) name = name.substring(3).trim();
     if (isAi && name.indexOf('AI ') === 0) name = name.substring(3).trim();
+    // 2026-09-23: 화면개편으로 'AI' 배지 span이 사라진 경우가 있어, 이름 자체가
+    // 'AI추천_'/'AI검색_'로 시작하면 배지 없이도 AI캠페인으로 인식(폴백).
+    if (!isAi && /^AI(추천|검색)_/.test(name)) isAi = true;
     var onoffCell = cells[2];
     var dots = onoffCell.querySelectorAll("div[class*='css-']");
     var onoff = false;
@@ -55,7 +58,7 @@ var m = body.match(/캠페인 일 예산\\s*\\n?\\s*([\\d,]+)원/);
 if (m) result.daily_budget = parseInt(m[1].replace(/,/g, ''));
 m = body.match(/목표광고수익률\\s*\\n?\\s*([\\d,]+)%/);
 if (m) result.target_roas = parseInt(m[1].replace(/,/g, ''));
-m = body.match(/노출기간\\s*\\n?\\s*(.+)/);
+m = body.match(/노출기간\\s*\\n?\\s*(.{1,50}?)(?:\\s{2,}|$)/);
 if (m) result.exposure_period = m[1].trim();
 return result;
 """
@@ -147,14 +150,29 @@ def _do_login(driver, login_id, password):
 
 
 def _navigate_to_campaigns(driver):
+    """좌측 메뉴 포커스클릭 → 광고관리(자동 펼침) → 전체캠페인 클릭으로 캠페인 목록 진입.
+    2026-09-23: 로그인 직후 대시보드에 뜨는 '잠시 후 다시 시도해주세요' 안내 모달이
+    메뉴 클릭 전에 계속 남아있어 정정 필요. 또한 예전엔 '광고관리'가 바로 클릭 가능한
+    링크였는데 지금은 펼침 전용 섹션 라벨이 되고 실제 이동은 그 아래 '전체캠페인'을
+    눌러야 함(URL이 안 바뀌어 매번 타임아웃 → '캠페인 페이지 진입 실패'로 이어지던 원인)."""
     try:
+        _dismiss_popups(driver)
         focus = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.XPATH,
                 "//span[contains(@class,'MuiListItemText-primary') and contains(text(),'포커스클릭')]"))
         )
         driver.execute_script("arguments[0].click();", focus)
         time.sleep(1)
-        items = driver.find_elements(By.XPATH, "//span[text()='광고관리']")
+        _dismiss_popups(driver)
+        # '포커스클릭' 하위 '광고관리'를 먼저 눌러 펼쳐야 그 아래 '전체캠페인'이 렌더링됨
+        # (한 번에 안 눌러도 '광고관리' 자체는 링크가 아니라 펼침 토글일 뿐이라 URL은 안 바뀜).
+        for item in driver.find_elements(By.XPATH, "//span[text()='광고관리']"):
+            if item.is_displayed():
+                driver.execute_script("arguments[0].click();", item)
+                break
+        time.sleep(1)
+        _dismiss_popups(driver)
+        items = driver.find_elements(By.XPATH, "//span[text()='전체캠페인']")
         for item in items:
             if item.is_displayed():
                 driver.execute_script("arguments[0].click();", item)
@@ -213,7 +231,7 @@ def _collect_campaigns(driver, login_id, log_fn=None):
                                 if detail:
                                     if detail.get('daily_budget'): data['daily_budget'] = detail['daily_budget']
                                     if detail.get('target_roas'): data['target_roas'] = detail['target_roas']
-                                    if detail.get('exposure_period'): data['exposure_period'] = detail['exposure_period']
+                                    if detail.get('exposure_period'): data['exposure_period'] = detail['exposure_period'][:100]
                                 driver.back()
                                 time.sleep(2)
                             break

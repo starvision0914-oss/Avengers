@@ -938,6 +938,7 @@ class ElevenSummaryView(views.APIView):
                 seller['fulfillment'] = ofs.fulfillment
                 seller['shipping'] = ofs.shipping
                 seller['inquiry'] = ofs.inquiry
+                seller['ai_campaign'] = ofs.ai_campaign
                 seller['office_collected_at'] = ofs.collected_at.isoformat() if ofs.collected_at else None
 
             # 상품수/판매금지 — 나의상품·셀러오피스 중 더 최근에 실제로 수집된 쪽을 사용
@@ -4962,6 +4963,12 @@ class GmarketAdDailyView(views.APIView):
         dt = request.query_params.get('date_to')
         d1 = datetime.strptime(dt, '%Y-%m-%d').date() if _re.match(r'^\d{4}-\d{2}-\d{2}$', dt or '') else timezone.localdate()
         d0 = datetime.strptime(df, '%Y-%m-%d').date() if _re.match(r'^\d{4}-\d{2}-\d{2}$', df or '') else (d1 - timedelta(days=30))
+        # market('gmarket'/'auction') 미지정 또는 'combined'면 두 마켓 합산(하위호환).
+        # GmarketDashboardView와 동일한 탭 개념 — 대시보드에서 옥션 탭 셀을 눌렀는데
+        # 이 모달만 필터가 없어 지마켓 거래까지 섞여 나오던 버그 수정(2026-09-23 사용자 지적).
+        market = request.query_params.get('market') or None
+        if market not in ('gmarket', 'auction'):
+            market = None
         TYPE_KEY = {'CPC': 'cpc', 'AI매출업': 'ai', '서버비용': 'server'}
         qs = (GmarketCostHistory.objects
               .filter(use_date__gte=d0, use_date__lte=d1,
@@ -4969,6 +4976,8 @@ class GmarketAdDailyView(views.APIView):
               .exclude(comment__icontains='판매예치금'))
         if sid:
             qs = qs.filter(seller_id=sid)
+        if market:
+            qs = qs.filter(market=market)
         rows = []
         for r in qs.values('traded_at', 'use_date', 'transaction_type', 'use_type', 'comment', 'amount', 'seq', 'market').order_by('-use_date', '-traded_at'):
             ta = r['traded_at']
@@ -4995,7 +5004,9 @@ class GmarketAdDailyView(views.APIView):
         # 빠져 있어서 "입력은 되는데 광고비에 안 잡힌다"는 오판을 낳았음(2026-09-09 사용자 지적).
         # 대시보드 목록(GmarketDashboardView)의 광고비합계엔 이미 포함돼 있었지만, 그 셀을 눌러
         # 여는 이 상세모달만 별도 API(CPC/AI/서버비용만 합산)를 써서 누락됐던 것 — 여기도 합산.
-        manual_qs = GmarketManualCost.objects.filter(use_date__gte=d0, use_date__lte=d1)
+        # 수동비용(바이럴 등)은 market 구분이 없는 필드라 옥션 탭에서는 0으로 둔다
+        # (GmarketDashboardView와 동일 규칙 — 안 그러면 지마켓+옥션 두 탭에 전액이 이중집계됨).
+        manual_qs = GmarketManualCost.objects.filter(use_date__gte=d0, use_date__lte=d1) if market != 'auction' else GmarketManualCost.objects.none()
         if sid:
             manual_qs = manual_qs.filter(seller_id=sid)
         manual_total = 0

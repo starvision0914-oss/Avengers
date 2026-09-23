@@ -1029,6 +1029,7 @@ class ElevenSellerOfficeStat(models.Model):
     fulfillment = models.CharField(max_length=50, blank=True, default='')
     shipping = models.CharField(max_length=50, blank=True, default='')
     inquiry = models.CharField(max_length=50, blank=True, default='')
+    ai_campaign = models.CharField(max_length=50, blank=True, default='')
     error = models.TextField(blank=True, default='')
     collected_at = models.DateTimeField(auto_now_add=True, db_index=True)
 

@@ -310,6 +310,7 @@ _OFFICE_XPATHS = {
     'fulfillment':  '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[1]/div[2]/span[1]',
     'shipping':     '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[2]/div[2]/span[1]',
     'inquiry':      '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[3]/div[2]/span[1]',
+    'ai_campaign':  '//*[@id="soContent"]/div[2]/div/div[1]/div/div/div[2]/button',
     # 퍼센트 (전체 li 텍스트에서 정규식 추출 — span 구조 변동 대비)
     'fulfillment_li': '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[1]',
     'shipping_li':    '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[2]',
@@ -357,7 +358,7 @@ def _collect_office(driver, login_id):
         'cash', 'point', 'ad_balance', 'product_limit', 'products', 'banned',
         'available', 'overdue', 'undelivered', 'draft',
     )}
-    data['fulfillment'] = data['shipping'] = data['inquiry'] = ''
+    data['fulfillment'] = data['shipping'] = data['inquiry'] = data['ai_campaign'] = ''
 
     driver.get('https://soffice.11st.co.kr/view/main')
     # 컨테이너 로드 1회 확인(최대 10s) — 이후 항목 조회는 짧은 대기로 충분(헛대기 방지)
@@ -368,6 +369,11 @@ def _collect_office(driver, login_id):
     except Exception:
         pass
     time.sleep(1.5)
+
+    try:
+        data['ai_campaign'] = _get_text(driver, _OFFICE_XPATHS['ai_campaign'], timeout=3)[:50]
+    except Exception:
+        pass
 
     cash_txt = _office_val(driver, '셀러캐시')
     point_txt = _office_val(driver, '셀러포인트')
@@ -1309,7 +1315,7 @@ def run_all_accounts(log_fn=None, account_filter=None, force=False, start_date=N
                     office_data = _collect_office(driver, login_id)
                     from apps.cpc.models import ElevenSellerOfficeStat
                     ElevenSellerOfficeStat.objects.create(account=account, **office_data)
-                    log(f'오피스: 캐시={office_data["cash"]:,} 포인트={office_data["point"]:,} 상품={office_data["products"]:,}')
+                    log(f'오피스: 캐시={office_data["cash"]:,} 포인트={office_data["point"]:,} 상품={office_data["products"]:,} AI캠페인="{office_data.get("ai_campaign","")}"')
                     office_ok = True
                 except Exception as oe:
                     log(f'오피스 수집 실패 (광고비는 계속): {oe}')

@@ -32,6 +32,7 @@ export interface St11SellerRow {
   fulfillment?: string;
   shipping?: string;
   inquiry?: string;
+  ai_campaign?: string;
   office_collected_at?: string | null;
   // 매출/구매가/순수익 (매출데이터 기준)
   sales?: number;

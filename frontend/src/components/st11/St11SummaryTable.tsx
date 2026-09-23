@@ -38,7 +38,7 @@ function OfficeBadge({ value }: { value?: string }) {
 const OFFICE_RANK: Record<string, number> = { '우수': 4, '양호': 3, '주의': 2, '경고': 1, '미평가': 0 };
 function officeRank(v?: string): number { return v ? (OFFICE_RANK[v.split(' ')[0]] ?? -1) : -1; }
 
-type SortKey = 'seller_alias' | 'grade' | 'cash' | 'point' | 'cpc_spend' | 'fee_payment' | 'charge' | 'balance' | 'products' | 'available' | 'banned' | 'tx_count' | 'ship' | 'prod' | 'cs' | 'sales' | 'cost' | 'margin_rate' | 'net_margin_rate' | 'server_fee' | 'reward' | 'net_profit' | 'time';
+type SortKey = 'seller_alias' | 'grade' | 'cash' | 'point' | 'cpc_spend' | 'charge' | 'balance' | 'products' | 'available' | 'banned' | 'tx_count' | 'ship' | 'prod' | 'cs' | 'sales' | 'cost' | 'margin_rate' | 'net_margin_rate' | 'server_fee' | 'reward' | 'net_profit' | 'time' | 'ai_campaign';
 
 // 구매마진율 = (매출 − 구매가) / 매출 × 100 (매출 대비 구매가 빼고 남는 비율)
 function marginRate(s: St11SellerRow): number { return (s.sales || 0) > 0 ? ((s.sales! - (s.cost || 0)) / s.sales!) * 100 : 0; }
@@ -52,7 +52,6 @@ function getVal(s: St11SellerRow, key: SortKey): number | string {
     case 'cash': return s.cash ?? 0;
     case 'point': return s.point ?? 0;
     case 'cpc_spend': return s.cpc_spend ?? 0;
-    case 'fee_payment': return s.fee_payment ?? 0;
     case 'sales': return s.sales ?? 0;
     case 'cost': return s.cost ?? 0;
     case 'margin_rate': return marginRate(s);
@@ -70,6 +69,7 @@ function getVal(s: St11SellerRow, key: SortKey): number | string {
     case 'ship': return officeRank(s.fulfillment);
     case 'prod': return officeRank(s.shipping);
     case 'cs': return officeRank(s.inquiry);
+    case 'ai_campaign': return s.ai_campaign || '';
     default: return 0;
   }
 }
@@ -77,26 +77,26 @@ function getVal(s: St11SellerRow, key: SortKey): number | string {
 interface ColDef { key: string; label: string; sortKey?: SortKey; align: 'left' | 'center' | 'right'; initWidth: number; minWidth: number; }
 
 const INIT_COLS: ColDef[] = [
-  { key: '#', label: '#', align: 'center', initWidth: 32, minWidth: 28 },
-  { key: 'seller', label: '셀러', sortKey: 'seller_alias', align: 'left', initWidth: 200, minWidth: 100 },
-  { key: 'grade', label: '등급', sortKey: 'grade', align: 'center', initWidth: 60, minWidth: 48 },
-  { key: 'cash', label: '캐시', sortKey: 'cash', align: 'right', initWidth: 90, minWidth: 50 },
-  { key: 'point', label: '포인트', sortKey: 'point', align: 'right', initWidth: 82, minWidth: 50 },
-  { key: 'cpc', label: '광고비', sortKey: 'cpc_spend', align: 'right', initWidth: 110, minWidth: 60 },
-  { key: 'fee', label: '수수료결제', sortKey: 'fee_payment', align: 'right', initWidth: 100, minWidth: 60 },
-  { key: 'sales', label: '매출', sortKey: 'sales', align: 'right', initWidth: 100, minWidth: 60 },
-  { key: 'cost', label: '구매가', sortKey: 'cost', align: 'right', initWidth: 96, minWidth: 60 },
-  { key: 'margin_rate', label: '구매마진율', sortKey: 'margin_rate', align: 'right', initWidth: 88, minWidth: 56 },
-  { key: 'net_profit', label: '순수익', sortKey: 'net_profit', align: 'right', initWidth: 100, minWidth: 60 },
-  { key: 'net_margin_rate', label: '순수익마진율', sortKey: 'net_margin_rate', align: 'right', initWidth: 96, minWidth: 60 },
-  { key: 'charge', label: '충전/차감', sortKey: 'charge', align: 'right', initWidth: 140, minWidth: 80 },
-  { key: 'products', label: '상품', sortKey: 'products', align: 'right', initWidth: 98, minWidth: 50 },
-  { key: 'banned', label: '판매금지', sortKey: 'banned', align: 'right', initWidth: 70, minWidth: 48 },
-  { key: 'available', label: '등록', sortKey: 'available', align: 'right', initWidth: 52, minWidth: 36 },
-  { key: 'ship', label: '이행', sortKey: 'ship', align: 'center', initWidth: 78, minWidth: 48 },
-  { key: 'prod', label: '배송', sortKey: 'prod', align: 'center', initWidth: 78, minWidth: 48 },
-  { key: 'cs', label: 'CS', sortKey: 'cs', align: 'center', initWidth: 78, minWidth: 48 },
-  { key: 'time', label: '인증(로그인)', sortKey: 'time', align: 'left', initWidth: 110, minWidth: 64 },
+  { key: '#', label: '#', align: 'center', initWidth: 28, minWidth: 24 },
+  { key: 'seller', label: '셀러', sortKey: 'seller_alias', align: 'left', initWidth: 168, minWidth: 90 },
+  { key: 'grade', label: '등급', sortKey: 'grade', align: 'center', initWidth: 52, minWidth: 44 },
+  { key: 'cash', label: '캐시', sortKey: 'cash', align: 'right', initWidth: 74, minWidth: 44 },
+  { key: 'point', label: '포인트', sortKey: 'point', align: 'right', initWidth: 68, minWidth: 44 },
+  { key: 'cpc', label: '광고비', sortKey: 'cpc_spend', align: 'right', initWidth: 92, minWidth: 54 },
+  { key: 'sales', label: '매출', sortKey: 'sales', align: 'right', initWidth: 84, minWidth: 52 },
+  { key: 'cost', label: '구매가', sortKey: 'cost', align: 'right', initWidth: 80, minWidth: 52 },
+  { key: 'margin_rate', label: '구매마진율', sortKey: 'margin_rate', align: 'right', initWidth: 72, minWidth: 48 },
+  { key: 'net_profit', label: '순수익', sortKey: 'net_profit', align: 'right', initWidth: 84, minWidth: 52 },
+  { key: 'net_margin_rate', label: '순수익마진율', sortKey: 'net_margin_rate', align: 'right', initWidth: 80, minWidth: 48 },
+  { key: 'charge', label: '충전/차감', sortKey: 'charge', align: 'right', initWidth: 116, minWidth: 68 },
+  { key: 'products', label: '상품', sortKey: 'products', align: 'right', initWidth: 82, minWidth: 44 },
+  { key: 'banned', label: '판매금지', sortKey: 'banned', align: 'right', initWidth: 58, minWidth: 40 },
+  { key: 'available', label: '등록', sortKey: 'available', align: 'right', initWidth: 44, minWidth: 32 },
+  { key: 'ship', label: '이행', sortKey: 'ship', align: 'center', initWidth: 60, minWidth: 40 },
+  { key: 'prod', label: '배송', sortKey: 'prod', align: 'center', initWidth: 60, minWidth: 40 },
+  { key: 'cs', label: 'CS', sortKey: 'cs', align: 'center', initWidth: 60, minWidth: 40 },
+  { key: 'ai_campaign', label: 'AI캠페인', sortKey: 'ai_campaign', align: 'center', initWidth: 110, minWidth: 70 },
+  { key: 'time', label: '인증(로그인)', sortKey: 'time', align: 'left', initWidth: 96, minWidth: 60 },
 ];
 
 export default function St11SummaryTable({ sellers, totals, selectedSeller, onSelectSeller, onCostClick, blockedIds, onDismissBlocked, unmatched }: Props) {
@@ -180,8 +180,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'grade': return <GradeBadge grade={s.grade} />;
       case 'cash': return (s.cash || 0) !== 0 ? <span style={{ color: isLow ? '#dc2626' : '#0369a1', fontWeight: isLow ? 700 : 600 }}>{formatKRW(s.cash!)}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'point': return (s.point || 0) !== 0 ? <span style={{ color: isLow ? '#dc2626' : '#7c3aed', fontWeight: isLow ? 700 : 600 }}>{formatKRW(s.point!)}</span> : <span style={{ color: '#999' }}>-</span>;
-      case 'cpc': { const delta = (s as any).cpc_delta ?? 0; const fee = s.fee_payment || 0; const title = s.cpc_spend > 0 ? `CPC ${formatKRW(s.cpc_pure || 0)} · 수수료결제 ${formatKRW(fee)}` : undefined; return <><span style={{ color: s.cpc_spend > 0 ? '#e67700' : '#999', fontWeight: s.cpc_spend > 0 ? 700 : 400, cursor: 'pointer' }} title={title} onClick={e => { e.stopPropagation(); onCostClick(s.seller_id, s.seller_alias, 'cpc'); }}>{s.cpc_spend > 0 ? formatKRW(s.cpc_spend) : '-'}</span><span style={{ fontSize: 11, color: delta > 0 ? '#dc2626' : '#999', marginLeft: 3 }}>({delta > 0 ? '+' : ''}{formatKRW(delta)})</span></>; }
-      case 'fee': { const fee = s.fee_payment || 0; return fee > 0 ? <span style={{ color: '#b45309' }}>{formatKRW(fee)}</span> : <span style={{ color: '#999' }}>-</span>; }
+      case 'cpc': { const delta = (s as any).cpc_delta ?? 0; return <><span style={{ color: s.cpc_spend > 0 ? '#e67700' : '#999', fontWeight: s.cpc_spend > 0 ? 700 : 400, cursor: 'pointer' }} onClick={e => { e.stopPropagation(); onCostClick(s.seller_id, s.seller_alias, 'cpc'); }}>{s.cpc_spend > 0 ? formatKRW(s.cpc_spend) : '-'}</span><span style={{ fontSize: 11, color: delta > 0 ? '#dc2626' : '#999', marginLeft: 3 }}>({delta > 0 ? '+' : ''}{formatKRW(delta)})</span></>; }
       case 'sales': return (s.sales || 0) > 0 ? <span style={{ color: '#0369a1', fontWeight: 600 }} title={`매출 ${(s.sales_count || 0).toLocaleString()}건`}>{formatKRW(s.sales!)}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'cost': return (s.cost || 0) > 0 ? <span style={{ color: '#92400e' }}>{formatKRW(s.cost!)}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'margin_rate': { if ((s.sales || 0) <= 0) return <span style={{ color: '#999' }}>-</span>; const r = marginRate(s); return <span style={{ color: r > 0 ? '#0369a1' : '#dc2626', fontWeight: 600 }}>{r.toFixed(1)}%</span>; }
@@ -207,6 +206,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'ship': return <OfficeBadge value={s.fulfillment} />;
       case 'prod': return <OfficeBadge value={s.shipping} />;
       case 'cs': return <OfficeBadge value={s.inquiry} />;
+      case 'ai_campaign': return s.ai_campaign ? <span style={{ fontSize: 12, color: '#1a73e8', fontWeight: 600 }}>{s.ai_campaign}</span> : <span style={{ color: '#999' }}>-</span>;
       case 'time': { const t = s.cookie_saved_at || s.last_otp_at; const dt = t ? new Date(t) : null; if (!dt) return <span style={{ color: '#ccc' }}>-</span>; const hrs = (Date.now() - dt.getTime()) / 3600000; const otpTxt = s.last_otp_at ? new Date(s.last_otp_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '없음'; return <span title={`마지막 로그인(쿠키) ${Math.floor(hrs)}시간 전 · 매일 02시 자동 재인증(쿠키워밍). ${hrs > 24 ? '⚠️ 24h 초과 — 재인증 필요' : '정상'}\\n(참고) OTP 마지막 요구: ${otpTxt} — OTP는 11번가가 요구할 때만 떠서 오래돼도 정상`} style={{ fontSize: 12, color: hrs > 24 ? '#dc2626' : '#16a34a', fontWeight: 600 }}>{hrs > 24 ? '⚠️' : '🔑'}{dt.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>; }
       default: return null;
     }
@@ -217,8 +217,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       case 'seller': return `합계 ${filtered.length}개`;
       case 'cash': return <span style={{ color: '#0369a1' }}>{formatKRW(totals.cash)}</span>;
       case 'point': return <span style={{ color: '#7c3aed' }}>{formatKRW(totals.point)}</span>;
-      case 'cpc': return <span style={{ color: '#e67700' }} title={`CPC ${formatKRW(totals.cpc_pure || 0)} · 수수료결제 ${formatKRW(totals.fee_payment || 0)}`}>{formatKRW(totals.cpc_spend)}</span>;
-      case 'fee': return <span style={{ color: '#b45309' }}>{formatKRW(totals.fee_payment || 0)}</span>;
+      case 'cpc': return <span style={{ color: '#e67700' }}>{formatKRW(totals.cpc_spend)}</span>;
       case 'sales': return <span style={{ color: '#0369a1' }}>{formatKRW(totals.sales || 0)}</span>;
       case 'cost': return <span style={{ color: '#92400e' }}>{formatKRW(totals.cost || 0)}</span>;
       case 'margin_rate': { const ts = totals.sales || 0; if (ts <= 0) return '-'; const r = ((ts - (totals.cost || 0)) / ts) * 100; return <span style={{ color: r > 0 ? '#0369a1' : '#dc2626' }}>{r.toFixed(1)}%</span>; }
@@ -243,7 +242,6 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
       <div style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '8px 16px', background: '#fffbf0', borderBottom: '1px solid #e0e0e0', fontSize: 15 }}>
         <span>전체 <b>{sellers.length}</b></span>
         <span>총CPC <b style={{ color: '#e67700' }}>{formatKRW(totals.cpc_spend)}</b></span>
-        <span>총수수료결제 <b style={{ color: '#b45309' }}>{formatKRW(totals.fee_payment || 0)}</b></span>
         <span>총매출 <b style={{ color: '#0369a1' }}>{formatKRW(totals.sales || 0)}</b></span>
         <span>총순수익 <b style={{ color: (totals.net_profit || 0) >= 0 ? '#15803d' : '#dc2626' }}>{formatKRW(totals.net_profit || 0)}</b></span>
         <span>총충전 <b style={{ color: '#2e7d32' }}>{formatKRW(totals.charge)}</b></span>
@@ -267,7 +265,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
         <thead>
           <tr>
             {INIT_COLS.map((col, ci) => (
-              <th key={col.key} style={{ fontSize: 15, fontWeight: 700, color: '#111', borderBottom: '2px solid #ddd', padding: '5px 6px', whiteSpace: 'nowrap', textAlign: col.align as any, position: 'relative', ...stickyTh(ci) }}>
+              <th key={col.key} style={{ fontSize: 15, fontWeight: 700, color: '#111', borderBottom: '2px solid #ddd', padding: '4px 3px', whiteSpace: 'nowrap', textAlign: col.align as any, position: 'relative', ...stickyTh(ci) }}>
                 <span style={{ cursor: col.sortKey ? 'pointer' : 'default' }} onClick={() => col.sortKey && handleSort(col.sortKey)}>
                   {col.label}{col.sortKey ? arrow(col.sortKey) : ''}
                 </span>
@@ -289,7 +287,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
           {/* 합계 행 — 맨 위 */}
           <tr style={{ background: '#eef3ff', fontWeight: 700, fontSize: 15, borderBottom: '2px solid #cdd6f0' }}>
             {INIT_COLS.map((col, ci) => (
-              <td key={col.key} style={{ padding: '6px 6px', textAlign: col.align as any, whiteSpace: 'nowrap', ...stickyFt(ci) }}>{footerVal(col)}</td>
+              <td key={col.key} style={{ padding: '4px 3px', textAlign: col.align as any, whiteSpace: 'nowrap', ...stickyFt(ci) }}>{footerVal(col)}</td>
             ))}
           </tr>
           {filtered.map((s, i) => {
@@ -304,11 +302,14 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
                 style={{ background: bg, cursor: 'pointer' }}
                 onMouseEnter={e => { e.currentTarget.style.background = '#fff8f0'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = bg; }}>
-                {INIT_COLS.map((col, ci) => (
-                  <td key={col.key} style={{ fontSize: 15, padding: '4px 6px', borderBottom: '1px solid #eee', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: col.align as any, ...stickyTd(ci, bg) }}>
-                    {renderCell(s, col, i)}
-                  </td>
-                ))}
+                {INIT_COLS.map((col, ci) => {
+                  const wrap = col.key === 'ai_campaign';
+                  return (
+                    <td key={col.key} style={{ fontSize: 15, padding: '3px 3px', borderBottom: '1px solid #eee', whiteSpace: wrap ? 'normal' : 'nowrap', overflow: wrap ? 'visible' : 'hidden', textOverflow: wrap ? 'clip' : 'ellipsis', lineHeight: wrap ? 1.2 : undefined, textAlign: col.align as any, ...stickyTd(ci, bg) }}>
+                      {renderCell(s, col, i)}
+                    </td>
+                  );
+                })}
               </tr>
             );
           })}
@@ -323,7 +324,7 @@ export default function St11SummaryTable({ sellers, totals, selectedSeller, onSe
                 else if (col.key === 'cost') content = <span style={{ color: '#92400e' }}>{formatKRW(unmatched.cost)}</span>;
                 else if (col.key === 'net_profit') content = <span style={{ color: unmatched.net_profit >= 0 ? '#15803d' : '#dc2626', fontWeight: 700 }}>{formatKRW(unmatched.net_profit)}</span>;
                 return (
-                  <td key={col.key} style={{ fontSize: 15, padding: '4px 6px', borderBottom: '1px solid #eee', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: col.align as any, ...stickyTd(ci, '#fff7e6') }}>
+                  <td key={col.key} style={{ fontSize: 15, padding: '3px 3px', borderBottom: '1px solid #eee', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textAlign: col.align as any, ...stickyTd(ci, '#fff7e6') }}>
                     {content}
                   </td>
                 );

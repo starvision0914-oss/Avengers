@@ -46,12 +46,8 @@ export default function St11MobileCard({ seller: s, index, isSelected, onSelect,
       </div>
       <div className="flex items-center gap-3 text-[11px]">
         <span onClick={e => { e.stopPropagation(); onCostClick(s.seller_id, s.seller_alias); }}>
-          <span className="text-[#999]">CPC </span>
-          <span className={(s.cpc_pure || 0) > 0 ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}>{formatKRW(s.cpc_pure ?? s.cpc_spend)}</span>
-        </span>
-        <span>
-          <span className="text-[#999]">수수료 </span>
-          <span className={(s.fee_payment || 0) > 0 ? 'text-[#b45309] font-semibold' : 'text-[#ccc]'}>{formatKRW(s.fee_payment || 0)}</span>
+          <span className="text-[#999]">광고비 </span>
+          <span className={(s.cpc_spend || 0) > 0 ? 'text-[#e67700] font-semibold' : 'text-[#ccc]'}>{formatKRW(s.cpc_spend || 0)}</span>
         </span>
         <span>
           <span className="text-[#999]">충전 </span>
@@ -61,6 +57,9 @@ export default function St11MobileCard({ seller: s, index, isSelected, onSelect,
           {s.crawling_status === '정상' ? '정상' : s.crawling_status === '차단됨' ? '차단' : s.crawling_status || ''}
         </span>
       </div>
+      {s.ai_campaign && (
+        <div className="mt-1.5 text-[10.5px] text-[#1a73e8] font-semibold">AI캠페인 {s.ai_campaign}</div>
+      )}
     </div>
   );
 }
