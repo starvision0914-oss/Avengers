@@ -118,7 +118,30 @@ def _dismiss_popups(driver):
             pass
 
 
-def _do_login(driver, login_id, password):
+def _do_login(driver, account):
+    """광고센터 로그인. 2026-09-24: 광고센터 직접 로그인폼이 반복 접속으로 캡차에
+    걸려 100% 실패하게 됨 — 셀러오피스는 캡차 없이 정상이라, 셀러오피스 쿠키로 먼저
+    인증한 뒤 SSO 링크(auth.adoffice.11st.co.kr/sso/dashboard, 셀러오피스 메인페이지의
+    '알아서 해주는 AI캠페인 시작' 버튼 근처에서 발견)로 광고센터에 진입해 로그인폼 자체를
+    건너뛴다(캡차 우회 아님 — 이미 있는 정상 세션을 다른 진입점으로 쓰는 것). 셀러오피스
+    쿠키가 없거나 만료됐으면 기존 방식(광고센터 직접 로그인)으로 폴백."""
+    login_id = account.login_id
+    password = account.password_enc
+    try:
+        from . import eleven_crawler as _ec
+        cookie_ok = _ec._try_cookie_login(driver, account)
+    except Exception as e:
+        logger.warning(f'[11st-AI:{login_id}] 셀러오피스 쿠키 로그인 시도 오류: {e}')
+        cookie_ok = False
+    if cookie_ok:
+        driver.get('https://auth.adoffice.11st.co.kr/sso/dashboard')
+        time.sleep(4)
+        _dismiss_popups(driver)
+        url = driver.current_url
+        if 'adoffice.11st.co.kr' in url and 'login' not in url.lower():
+            return True
+        logger.warning(f'[11st-AI:{login_id}] SSO 진입 실패(url={url[:60]}) — 직접 로그인폼으로 폴백')
+
     driver.get(ADOFFICE_URL)
     time.sleep(3)
     _dismiss_popups(driver)
@@ -325,7 +348,7 @@ def run_all_accounts(log_fn=None, account_filter=None, scheduled=False):
         for attempt in range(1, MAX_CONNECT_ATTEMPTS + 1):
             try:
                 driver = _make_driver()
-                if _do_login(driver, acct.login_id, acct.password_enc):
+                if _do_login(driver, acct):
                     logged_in = True
                     break
                 raise Exception('로그인 실패')
