@@ -701,8 +701,10 @@ class ElevenSummaryView(views.APIView):
         )
         stats_map = {}
         for s in qs.values('seller_id').annotate(
-            cpc_total=Sum('amount', filter=models.Q(transaction_type='CPC')),
-            fee_payment_total=Sum('amount', filter=models.Q(transaction_type='CPC', raw_description__icontains='수수료결제')),
+            # amount<0(실제 차감)만 CPC로 집계 — 신규 광고주 웰컴포인트처럼 transaction_type='CPC'로
+            # 찍히지만 amount>0인 프로모션 지급건이 섞여 광고비가 왜곡되는 문제 수정(2026-09-26 사용자 지적).
+            cpc_total=Sum('amount', filter=models.Q(transaction_type='CPC', amount__lt=0)),
+            fee_payment_total=Sum('amount', filter=models.Q(transaction_type='CPC', amount__lt=0, raw_description__icontains='수수료결제')),
             charge_total=Sum('amount', filter=models.Q(transaction_type='CHARGE')),
             settle_total=Sum('amount', filter=models.Q(transaction_type='SETTLE')),
             server_fee_total=Sum('amount', filter=models.Q(transaction_type='OTHERS', raw_description__icontains='서버이용료')),
@@ -1383,7 +1385,9 @@ class AdDetailView(views.APIView):
             )
             kind = request.query_params.get('kind')
             if kind == 'cpc':
-                qs = qs.filter(transaction_type='CPC')
+                # amount<0(실제 차감)만 — 신규 광고주 웰컴포인트 등 amount>0 프로모션 지급건은
+                # transaction_type='CPC'로 찍혀도 실제 지출이 아니므로 제외(2026-09-26 사용자 지적).
+                qs = qs.filter(transaction_type='CPC', amount__lt=0)
             elif kind == 'settle':   # 충전/정산/프로모션
                 qs = qs.filter(transaction_type__in=['CHARGE', 'SETTLE', 'REWARD'])
             elif kind == 'server_fee':
