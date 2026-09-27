@@ -477,9 +477,12 @@ def collect_product_costs(driver, login_id, password, since_date, until_date, lo
             cost=cost, conv_amount=conv_amount, conv_count=int(r['전환수']), roas=roas,
         ))
 
+    # MySQL/MariaDB는 update_conflicts=True에 unique_fields를 같이 주면 "backend does not
+    # support..." 에러를 냄(PostgreSQL 전용 옵션) — 기존 UniqueConstraint(login_id,use_date,
+    # product_no)로 ON DUPLICATE KEY UPDATE가 동작하므로 unique_fields는 빼야 함(2026-09-19
+    # 도입 이후 8일간 25계정 전부 매일 조용히 실패하던 원인, 2026-09-27 사용자 지적으로 발견).
     GmarketNewAdProductCost.objects.bulk_create(
         objs, update_conflicts=True,
-        unique_fields=['login_id', 'use_date', 'product_no'],
         update_fields=['product_name', 'impressions', 'clicks', 'avg_click_cost',
                         'cost', 'conv_amount', 'conv_count', 'roas'],
         batch_size=1000,
