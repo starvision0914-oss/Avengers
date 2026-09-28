@@ -148,3 +148,4 @@
 - [실패보고시 해소여부까지](feedback_report_resolution_status.md) — 실패만 던지지 말고 재시도로 해소됐는지 확인해서 같이 보고
 - [스마트스토어 10계정 이용정지 보류](project_smartstore_10accounts_suspended_2026-09-18.md) — is_active=False, 재개는 사용자 지시 후만
 - [프론트 prod preview 재빌드 필수](feedback_frontend_prod_preview_rebuild.md) — 5173은 vite preview(dist), 코드수정후 rebuild_frontend.sh 필수
+- [11번가 오피스현황 일1회 크론](project_11st_office_daily_cron.md) — 비활성계정 0표시 원인, crawl_11st_office --all 09:30

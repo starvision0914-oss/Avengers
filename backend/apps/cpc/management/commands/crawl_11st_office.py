@@ -1,53 +1,32 @@
-"""11번가 셀러오피스 메인 페이지 크롤러 - 14항목 수집"""
-import os
+"""11번가 셀러오피스 메인 페이지 수집 — 셀러캐시/셀러포인트/상품수/AI캠페인 상태 (전계정 일 1회 크론용).
+
+2026-09-28 재작성: 예전엔 절대경로 XPath(개편으로 깨짐)로 값을 읽고 is_focused 계정만 대상이라
+비활성/비집중 계정(예: dlrmsgh7941 — 실제 셀러포인트 100,000P인데 8/21 이후 수집이 없어 0으로 표시)이
+옛값 그대로 묵었다. 이제 eleven_crawler._collect_office(라벨 기반)를 그대로 재사용하고 --all 로
+비활성 포함 전계정을 돈다. 쿠키 로그인 우선(OTP 최소화), 통합 전역락(preflight) 사용.
+
+AI캠페인 열(ai_campaign)은 메인페이지 배너 버튼 문구를 그대로 저장한다:
+  '알아서 해주는 AI캠페인 시작' / '1주 무료! 지금 광고 시작' / '지금 AI캠페인 ON으로 설정 변경' 등.
+"""
 import random
-import sys
 import time
 import traceback
 from datetime import datetime
 
-# 차단 회피 보수적 페이싱
-INTER_ACCOUNT_SLEEP = (30.0, 90.0)
-CIRCUIT_BREAKER_THRESHOLD = 5
-SKIP_RECENT_HOURS = 6
-MAX_CONNECT_ATTEMPTS = 3  # 계정당 접속 최대 3회 시도, 3회 실패 시 중지→다음 계정
-
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-
-# Avengers backend root
-BACKEND_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-sys.path.insert(0, BACKEND_ROOT)
 
 from crawlers.browser import create_driver, stop_display
-from crawlers.eleven_crawler import _do_login
+from crawlers import eleven_crawler as ec
 
 from apps.cpc.models import CrawlerAccount, ElevenSellerOfficeStat
 from apps.cpc import eleven_block_guard as guard
 
 LOG_PATH = '/tmp/cron_11st_office.log'
-LOCKFILE = '/tmp/avengers_crawl_chrome.lock'
-
-XPATHS = {
-    'cash':         '//*[@id="soContent"]/div[2]/div/div[4]/div[4]/div/div[2]/ul/li[1]/div[2]/a',
-    'point':        '//*[@id="soContent"]/div[2]/div/div[4]/div[4]/div/div[2]/ul/li[2]/div[2]/a',
-    'ad':           '//*[@id="soContent"]/div[2]/div/div[8]/div[2]/div/div[2]/div[2]/ul/li[1]/span[2]/a',
-    'product_limit':'//*[@id="soContent"]/div[2]/div/div[8]/div[1]/div/div[2]/ul/li[5]/div/span[2]/a',
-    'products':     '//*[@id="soContent"]/div[2]/div/div[8]/div[1]/div/div[2]/ul/li[1]/div/span[2]/a',
-    'banned':       '//*[@id="soContent"]/div[2]/div/div[8]/div[1]/div/div[2]/ul/li[2]/div/span[2]/a',
-    'overdue':      '//*[@id="soContent"]/div[2]/div/div[3]/div/div/div[2]/ul/li[3]/div[2]/a',
-    'undelivered':  '//*[@id="soContent"]/div[2]/div/div[3]/div/div/div[2]/ul/li[4]/div[2]/a',
-    'fulfillment':  '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[1]/div[2]/span[1]',
-    'shipping':     '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[2]/div[2]/span[1]',
-    'inquiry':      '//*[@id="soContent"]/div[2]/div/div[4]/div[1]/div/ul[1]/li[3]/div[2]/span[1]',
-    'ai_campaign':  '//*[@id="soContent"]/div[2]/div/div[1]/div/div/div[2]/button',
-}
-DRAFT_MENU_PARENT = '//*[@id="app"]/div/div[2]/div/div[1]/div/ul/li[2]/button'
-DRAFT_MENU_ITEM = '//*[@id="app"]/div/div[2]/div/div[1]/div/ul/li[2]/ul/li[10]/a'
-DRAFT_XPATH = '//*[@id="row0dataGrid"]/div[8]/div'
+INTER_ACCOUNT_SLEEP = (5.0, 10.0)   # 광고비 크롤과 동일 페이싱
+CIRCUIT_BREAKER_THRESHOLD = 5       # 연속 접속실패 5회 → 중단 + 글로벌 차단
+SKIP_RECENT_HOURS = 6
+MAX_CONNECT_ATTEMPTS = 3            # 계정당 접속 최대 3회, 실패 시 중지→다음 계정
 
 
 def _log(msg):
@@ -60,298 +39,130 @@ def _log(msg):
         pass
 
 
-def _parse_int(text):
-    if not text:
-        return 0
+def _safe_quit(d):
     try:
-        return int(''.join(c for c in str(text) if c.isdigit()))
+        d and d.quit()
     except Exception:
-        return 0
+        pass
 
 
-def _get_text(driver, xpath, timeout=7):
+def _new_driver(kill_existing=True):
+    d = create_driver(kill_existing=kill_existing)
     try:
-        el = WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.XPATH, xpath))
-        )
-        return (el.text or '').strip()
+        d.implicitly_wait(0)   # _get_text 가 명시 대기를 쓰므로 암묵대기 제거(헛대기 방지)
     except Exception:
-        return ''
-
-
-def _click(driver, xpath, timeout=10):
-    try:
-        el = WebDriverWait(driver, timeout).until(
-            EC.element_to_be_clickable((By.XPATH, xpath))
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        time.sleep(0.6)
-        el.click()
-        return True
-    except Exception:
-        return False
-
-
-def _collect_one(driver, account):
-    """한 계정에 대한 14개 항목 수집"""
-    data = {k: 0 for k in (
-        'cash', 'point', 'ad_balance', 'product_limit', 'products', 'banned',
-        'available', 'overdue', 'undelivered', 'draft',
-    )}
-    data['fulfillment'] = data['shipping'] = data['inquiry'] = data['ai_campaign'] = ''
-
-    # 메인 페이지 이동 (이미 로그인된 상태)
-    driver.get('https://soffice.11st.co.kr/view/main')
-    time.sleep(3)
-
-    data['ai_campaign'] = _get_text(driver, XPATHS['ai_campaign'])[:50]
-
-    # 스크롤 70% 아래로
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight * 0.7);")
-    time.sleep(1)
-
-    data['cash'] = _parse_int(_get_text(driver, XPATHS['cash']))
-    data['point'] = _parse_int(_get_text(driver, XPATHS['point']))
-    data['ad_balance'] = _parse_int(_get_text(driver, XPATHS['ad']))
-
-    # 맨 위로
-    driver.execute_script("window.scrollTo(0, 0);")
-    time.sleep(1)
-
-    data['product_limit'] = _parse_int(_get_text(driver, XPATHS['product_limit']))
-    data['products'] = _parse_int(_get_text(driver, XPATHS['products']))
-    data['banned'] = _parse_int(_get_text(driver, XPATHS['banned']))
-    data['available'] = max(data['product_limit'] - data['products'], 0)
-    data['overdue'] = _parse_int(_get_text(driver, XPATHS['overdue']))
-    data['undelivered'] = _parse_int(_get_text(driver, XPATHS['undelivered']))
-    data['fulfillment'] = _get_text(driver, XPATHS['fulfillment'])[:50]
-    data['shipping'] = _get_text(driver, XPATHS['shipping'])[:50]
-    data['inquiry'] = _get_text(driver, XPATHS['inquiry'])[:50]
-
-    # 가송장 (좌측 메뉴 → iframe)
-    try:
-        if _click(driver, DRAFT_MENU_PARENT, timeout=6):
-            time.sleep(0.5)
-            _click(driver, DRAFT_MENU_ITEM, timeout=6)
-            time.sleep(2)
-            iframe = WebDriverWait(driver, 8).until(
-                EC.presence_of_element_located((By.TAG_NAME, "iframe"))
-            )
-            driver.switch_to.frame(iframe)
-            data['draft'] = _parse_int(_get_text(driver, DRAFT_XPATH, timeout=6))
-            driver.switch_to.default_content()
-    except Exception as e:
-        _log(f'  [draft] 수집 실패: {e}')
-        try:
-            driver.switch_to.default_content()
-        except Exception:
-            pass
-
-    return data
+        pass
+    return d
 
 
 class Command(BaseCommand):
-    help = '11번가 셀러오피스 메인 페이지 14항목 수집 (잔액/상품/경고)'
+    help = '11번가 셀러오피스 현황(캐시/포인트/상품수/AI캠페인 상태) 수집'
 
     def add_arguments(self, parser):
+        parser.add_argument('--all', action='store_true', help='비활성 포함 전계정 (기본: 활성 계정만)')
         parser.add_argument('--account-id', type=int, default=None)
-        parser.add_argument('--all-focused', action='store_true')
-        parser.add_argument('--accounts', type=str, default='', help='comma-separated ids')
+        parser.add_argument('--accounts', type=str, default='', help='comma-separated login_id')
+        parser.add_argument('--force', action='store_true', help='최근 수집분도 재수집')
+        parser.add_argument('--scheduled', action='store_true', help='크론용: 다른 11번가 크롤이 락 잡고 있으면 대기')
 
     def handle(self, *args, **opts):
-        # chrome lock
-        if os.path.exists(LOCKFILE):
-            try:
-                with open(LOCKFILE) as f:
-                    pid = int((f.read() or '0').strip())
-                if pid:
-                    try:
-                        os.kill(pid, 0)
-                        _log(f'다른 크롤러 실행 중 (PID={pid}) — 스킵')
-                        return
-                    except OSError:
-                        pass
-            except Exception:
-                pass
-        with open(LOCKFILE, 'w') as f:
-            f.write(str(os.getpid()))
+        ok, reason = guard.preflight('오피스현황', wait=opts['scheduled'])
+        if not ok:
+            _log(f'⏭️ 건너뜀 — {reason}')
+            if opts['scheduled']:
+                guard.notify_problem('11번가오피스현황', f'예약 수집 미실행 — {reason}')
+            return
 
+        driver = None
         try:
-            # 글로벌 차단 락 확인
-            if guard.guard_and_skip('office crawler'):
-                _log('⛔ 11번가 글로벌 차단 모드 — office 크롤러 스킵')
-                return
-
-            qs = CrawlerAccount.objects.filter(platform='11st')
-            if opts.get('account_id'):
+            qs = CrawlerAccount.objects.filter(platform='11st').exclude(crawling_status='차단됨')
+            if opts['account_id']:
                 qs = qs.filter(id=opts['account_id'])
-            elif opts.get('accounts'):
-                ids = [int(x) for x in opts['accounts'].split(',') if x.strip()]
-                qs = qs.filter(id__in=ids)
-            elif opts.get('all_focused'):
-                qs = qs.filter(is_focused=True)
-            else:
-                qs = qs.filter(is_focused=True)
+            elif opts['accounts']:
+                qs = qs.filter(login_id__in=[x.strip() for x in opts['accounts'].split(',') if x.strip()])
+            elif not opts['all']:
+                qs = qs.filter(is_active=True)
+            accounts = list(qs.order_by('display_order', 'login_id'))
 
-            all_accounts = list(qs.order_by('display_order', 'login_id'))
-
-            # 신선도 필터 — 최근 SKIP_RECENT_HOURS 시간 내 정상 수집한 계정 스킵
-            # (단, --account-id 명시 시는 강제 실행)
-            skipped_recent = []
-            if not opts.get('account_id'):
-                # 가장 최근 성공(error='') 수집 시각으로 판단
+            explicit = bool(opts['account_id'] or opts['accounts'] or opts['force'])
+            if not explicit:
                 from django.db.models import Max
-                last_ok = {
-                    x['account_id']: x['last_ok']
-                    for x in ElevenSellerOfficeStat.objects
-                        .filter(error='')
-                        .values('account_id')
-                        .annotate(last_ok=Max('collected_at'))
-                }
-                accounts = []
-                for a in all_accounts:
-                    if guard.is_recently_synced(last_ok.get(a.id), hours=SKIP_RECENT_HOURS):
-                        skipped_recent.append(a.login_id)
-                    else:
-                        accounts.append(a)
-            else:
-                accounts = all_accounts
+                last_ok = {x['account_id']: x['m'] for x in ElevenSellerOfficeStat.objects
+                           .filter(error='').values('account_id').annotate(m=Max('collected_at'))}
+                accounts = [a for a in accounts
+                            if not guard.is_recently_synced(last_ok.get(a.id), hours=SKIP_RECENT_HOURS)]
 
             total = len(accounts)
-            _log(f'==== 11번가 셀러오피스 수집 시작 ({total}계정, 최근 {SKIP_RECENT_HOURS}h 스킵 {len(skipped_recent)}) ====')
-
-            driver = None
-            ok_count = 0
-            fail_count = 0
-            consecutive_block = 0
-            aborted_due_to_block = False
+            _log(f'==== 11번가 오피스현황 수집 시작 ({total}계정) ====')
+            ok_count = fail_count = consec_fail = 0
 
             for idx, acct in enumerate(accounts, 1):
-                # 매 계정 시작 전 글로벌 락 체크
                 if guard.guard_and_skip(f'office[{acct.login_id}]'):
-                    aborted_due_to_block = True
+                    _log('⛔ 글로벌 차단 모드 — 중단')
+                    break
+                if consec_fail >= CIRCUIT_BREAKER_THRESHOLD:
+                    guard.set_blocked(30, f'오피스수집 연속 {CIRCUIT_BREAKER_THRESHOLD}회 접속실패')
+                    _log('⛔ 연속 접속실패 — 글로벌 차단 설정, 중단')
                     break
 
-                if acct.crawling_status == '실패':
-                    _log(f'[{idx}/{total}] {acct.login_id} 실패 상태 - 건너뜀')
-                    continue
+                login_id = acct.login_id
+                _safe_quit(driver)
+                driver = _new_driver(kill_existing=(idx == 1))
 
-                # ── 접속(로그인) 단계: 최대 3회 시도. 3회 실패 시 중지→다음 계정 ──
                 logged_in = False
                 for attempt in range(1, MAX_CONNECT_ATTEMPTS + 1):
-                    if guard.guard_and_skip(f'office[{acct.login_id}] 접속'):
-                        aborted_due_to_block = True
-                        break
                     try:
-                        if driver is None:
-                            driver = create_driver()
-                        _log(f'[{idx}/{total}] {acct.login_id} ({acct.seller_name}) - 로그인 {attempt}/{MAX_CONNECT_ATTEMPTS}...')
-                        if _do_login(driver, acct.login_id, acct.password_enc or ''):
+                        if attempt == 1:
+                            ck = ec._try_cookie_login(driver, acct)
+                            if ck:
+                                logged_in = True
+                                break
+                        try:
+                            driver.get('about:blank')
+                            driver.delete_all_cookies()
+                        except Exception:
+                            pass
+                        _log(f'[{idx}/{total}] {login_id} ({acct.seller_name}) 로그인 {attempt}/{MAX_CONNECT_ATTEMPTS}')
+                        if ec._do_login(driver, login_id, acct.password_enc or ''):
                             logged_in = True
                             break
                         raise RuntimeError('로그인 실패')
                     except Exception as le:
                         _log(f'  접속 실패 {attempt}/{MAX_CONNECT_ATTEMPTS}: {str(le)[:120]}')
-                        if guard.is_block_signal(le):
-                            consecutive_block += 1
-                            _log(f'  차단신호 ({consecutive_block}/{CIRCUIT_BREAKER_THRESHOLD})')
-                            if consecutive_block >= CIRCUIT_BREAKER_THRESHOLD:
-                                guard.report_signal(le, source='office crawler')
-                                aborted_due_to_block = True
-                                _log('  ⛔ circuit breaker → 글로벌 락, 중단')
-                                break
-                        if 'invalid session id' in str(le).lower() or 'no such window' in str(le).lower():
-                            try: driver.quit()
-                            except Exception: pass
-                            driver = None
                         if attempt < MAX_CONNECT_ATTEMPTS:
                             time.sleep(random.uniform(2.0, 4.0))
 
-                if aborted_due_to_block:
-                    break
-
                 if not logged_in:
-                    # ── 접속 3회 실패 → 반드시 중지하고 다음 계정으로 ──
+                    consec_fail += 1
                     fail_count += 1
-                    acct.fail_count = (acct.fail_count or 0) + 1
-                    acct.save(update_fields=['fail_count'])
-                    acct.mark_connect_failed()
                     ElevenSellerOfficeStat.objects.create(
-                        account=acct,
-                        error=f'접속 {MAX_CONNECT_ATTEMPTS}회 실패 → 중지(다음 계정), 상태={acct.crawling_status}'[:1000])
-                    _log(f'  ⛔ 접속 {MAX_CONNECT_ATTEMPTS}회 실패 — 다음 계정 (상태={acct.crawling_status})')
+                        account=acct, error=f'접속 {MAX_CONNECT_ATTEMPTS}회 실패 → 중지(다음 계정)'[:1000])
+                    _log(f'  ⛔ 접속 {MAX_CONNECT_ATTEMPTS}회 실패 — 다음 계정')
+                else:
+                    consec_fail = 0
                     try:
-                        guard._send_telegram_alert(
-                            f'⚠️ [11번가 오피스 접속실패]\n계정: {acct.login_id} ({acct.seller_name})\n'
-                            f'접속 {MAX_CONNECT_ATTEMPTS}회 연속 실패 → 다음 계정. 상태: {acct.crawling_status}')
-                    except Exception:
-                        pass
-                    if idx < total:
-                        time.sleep(random.uniform(*INTER_ACCOUNT_SLEEP))
-                    continue
+                        ec._save_cookies(driver, acct)
+                        data = ec._collect_office(driver, login_id)
+                        ElevenSellerOfficeStat.objects.create(account=acct, **data)
+                        acct.last_crawled_at = timezone.now()
+                        acct.save(update_fields=['last_crawled_at'])
+                        ok_count += 1
+                        _log(f'  OK cash={data["cash"]:,} point={data["point"]:,} sale={data["products"]:,} '
+                             f'limit={data["product_limit"]:,} / AI캠페인="{data["ai_campaign"]}"')
+                    except Exception as e:
+                        fail_count += 1
+                        ElevenSellerOfficeStat.objects.create(
+                            account=acct, error=f'{e}\n{traceback.format_exc()[-1500:]}'[:5000])
+                        _log(f'  수집 FAIL: {str(e)[:150]}')
 
-                # ── 접속 성공 → 수집 ──
-                consecutive_block = 0
-                acct.reset_connect_fail()
-                try:
-                    data = _collect_one(driver, acct)
-                    ElevenSellerOfficeStat.objects.create(account=acct, **data)
-                    ok_count += 1
-                    _log(f'  OK cash={data["cash"]:,} point={data["point"]:,} ad={data["ad_balance"]:,} '
-                         f'limit={data["product_limit"]:,} sale={data["products"]:,} '
-                         f'avail={data["available"]:,} draft={data["draft"]} '
-                         f'overdue={data["overdue"]} undeliv={data["undelivered"]} '
-                         f'/ {data["fulfillment"]}/{data["shipping"]}/{data["inquiry"]} '
-                         f'/ ai캠페인={data["ai_campaign"]}')
-                    acct.last_crawled_at = timezone.now()
-                    acct.save(update_fields=['last_crawled_at'])
-                except Exception as e:
-                    fail_count += 1
-                    err = traceback.format_exc()[-1500:]
-                    _log(f'  수집 FAIL: {e}')
-                    ElevenSellerOfficeStat.objects.create(
-                        account=acct, error=f'{e}\n{err}'[:5000])
-                    try:
-                        guard._send_telegram_alert(
-                            f'⚠️ [11번가 오피스 수집오류]\n계정: {acct.login_id} ({acct.seller_name})\n{str(e)[:150]}')
-                    except Exception:
-                        pass
-
-                    # 차단 신호 — circuit breaker
-                    if guard.is_block_signal(e):
-                        consecutive_block += 1
-                        _log(f'  차단신호 ({consecutive_block}/{CIRCUIT_BREAKER_THRESHOLD})')
-                        if consecutive_block >= CIRCUIT_BREAKER_THRESHOLD:
-                            guard.report_signal(e, source='office crawler')
-                            aborted_due_to_block = True
-                            _log('  ⛔ circuit breaker → 글로벌 락, 중단')
-                            break
-
-                    # driver 죽은 경우 재생성
-                    if 'invalid session id' in str(e).lower() or 'no such window' in str(e).lower():
-                        try: driver.quit()
-                        except Exception: pass
-                        driver = None
-
-                # 다음 계정 전에 쿠키/세션 정리
-                try:
-                    driver.delete_all_cookies()
-                except Exception:
-                    pass
-
-                # 마지막 계정이 아니면 사람처럼 잠시 대기
                 if idx < total:
-                    wait = random.uniform(*INTER_ACCOUNT_SLEEP)
-                    _log(f'  → 다음 계정까지 {wait:.1f}s 대기')
-                    time.sleep(wait)
+                    time.sleep(random.uniform(*INTER_ACCOUNT_SLEEP))
 
-            if driver:
-                try: driver.quit()
-                except Exception: pass
-            stop_display()
-
-            suffix = ' (차단신호로 조기 중단)' if aborted_due_to_block else ''
-            _log(f'==== 완료: 성공 {ok_count} / 실패 {fail_count}{suffix} ====')
+            _log(f'==== 완료: 성공 {ok_count} / 실패 {fail_count} ====')
         finally:
-            try: os.unlink(LOCKFILE)
-            except Exception: pass
+            _safe_quit(driver)
+            try:
+                stop_display()
+            except Exception:
+                pass
+            guard.release_global_lock()

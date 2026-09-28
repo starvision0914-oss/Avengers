@@ -36,7 +36,7 @@ export default function St11Dashboard() {
   const [costLastAt, setCostLastAt] = useState<string>('');
   const [showAuthPanel, setShowAuthPanel] = useState(false);
   const [expiringPoints, setExpiringPoints] = useState<{
-    seller_id: string; seller_name: string; amount: number; remaining: number | null;
+    seller_id: string; seller_name: string; amount: number; remaining: number | null; balance?: number | null;
     valid_until: string; days_left: number; description: string;
   }[]>([]);
   const [authData, setAuthData] = useState<{
@@ -205,6 +205,7 @@ export default function St11Dashboard() {
               <span key={i} className={p.days_left <= 7 ? 'text-[#b91c1c] font-extrabold' : 'text-[#666]'}>
                 {p.seller_name}({p.seller_id}) · {p.valid_until}까지({p.days_left}일 남음) · 지급 {formatKRW(p.amount)}
                 {p.remaining != null ? ` · 남은잔액 ${formatKRW(p.remaining)}` : ''}
+                {p.balance != null ? ` (계정 현재잔액 ${formatKRW(p.balance)})` : ''}
               </span>
             ))}
           </div>

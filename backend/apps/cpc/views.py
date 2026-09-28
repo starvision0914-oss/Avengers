@@ -6580,7 +6580,8 @@ def _fifo_remaining_by_row_id(seller_id, cost_type):
 
 class ElevenPointExpiringView(views.APIView):
     """유효기간이 걸린 셀러포인트/캐시(광고포인트 등) 중 아직 안 지난 것 — 대시보드 상단 요약용.
-    남은금액은 계정 전체잔액이 아니라 그 건(포인트 지급)만 선입선출로 추적한 값(_fifo_remaining_by_row_id).
+    남은금액은 그 건(포인트 지급)만 선입선출로 추적한 추정값(_fifo_remaining_by_row_id)에
+    실제 현재잔액 상한을 씌운 값이고, 'balance'는 해당 풀(포인트/캐시)의 실제 현재잔액.
     만료임박순(가까운 날짜부터) 정렬.
     2026-09-12: 계정당 이력 4천~8천행을 매번 처음부터 FIFO 재계산해 3.8초 걸리던 것을 발견
     (11번가 대시보드 로딩지연의 주범) — 크롤 주기(시간 단위)보다 훨씬 짧은 3분 캐시로 해결."""
@@ -6606,11 +6607,31 @@ class ElevenPointExpiringView(views.APIView):
             if key not in remaining_map:
                 remaining_map[key] = _fifo_remaining_by_row_id(r.seller_id, r.cost_type)
 
+        # 선입선출 추정은 정산성 행(셀러미수금상환 등)이 잔액 흐름에 반영되는지 여부가 섞여 있어
+        # 실제 잔액보다 크게 나오는 경우가 있다(2026-09-28 rejoice44: 실잔액 0인데 26,004 표시).
+        # 그래서 실제 현재잔액(해당 풀 마지막 거래의 balance)을 기준값으로 삼아 상한을 씌운다:
+        #   ① 건별 남은금액 ≤ 현재잔액, ② 같은 풀의 만료건 남은금액 합 ≤ 현재잔액
+        #   (②는 오래된 것부터 소진된다는 가정에 따라 만료가 빠른 건부터 깎는다 — qs가 valid_until 오름차순).
+        balance_map = {}
+        for key in remaining_map:
+            last = (ElevenCostHistory.objects.filter(seller_id=key[0], cost_type=key[1])
+                    .order_by('-transaction_datetime', '-seq').values_list('balance', flat=True).first())
+            balance_map[key] = max(last or 0, 0)
+        capped = {}          # row.id -> 상한 적용된 남은금액
+        pool_left = dict(balance_map)
+        for r in reversed(qs):   # 만료 늦은 건부터 잔액을 배정(오래된 것부터 소진되므로)
+            key = (r.seller_id, r.cost_type)
+            est = min(remaining_map[key].get(r.id, 0), r.amount)
+            take = min(est, pool_left[key])
+            pool_left[key] -= take
+            capped[r.id] = take
+
         result = [{
             'seller_id': r.seller_id,
             'seller_name': names.get(r.seller_id, r.seller_id),
             'amount': r.amount,
-            'remaining': remaining_map[(r.seller_id, r.cost_type)].get(r.id, 0),
+            'remaining': capped[r.id],
+            'balance': balance_map[(r.seller_id, r.cost_type)],
             'valid_until': r.valid_until.isoformat(),
             'days_left': (r.valid_until - today).days,
             'description': r.raw_description,
