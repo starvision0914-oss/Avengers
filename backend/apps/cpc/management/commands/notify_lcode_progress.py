@@ -86,6 +86,27 @@ class Command(BaseCommand):
             checked = db_checked
             pct = round(checked / total * 100, 1) if total else 0
             done = pending == 0 and not running
+        # 실행 중일 땐 로그의 마지막 진행줄을 믿지 않는다 — 출력 버퍼링 때문에 직전(중단된) 실행의
+        # '225/2,162' 같은 줄이 남아 있어 새 실행의 진행률로 오표시됐음(2026-09-29 21:00 실측).
+        # 락파일의 시작시각 이후 실제 조회된 건수(DB)로 대체하고, 전체 대상은 실행 옵션에 따라 구한다.
+        run_line = None
+        if running:
+            try:
+                with open(LCODE_LOCKFILE, encoding='utf-8') as f:
+                    started = _tz.datetime.fromisoformat(f.read().strip().split('|')[2])
+                since = sum(1 for l, ts in rows.items() if ts >= started)
+                cmd_saved = ''
+                try:
+                    cmd_saved = open('/tmp/check_domemart_lcodes.cmdline', encoding='utf-8').read()
+                except FileNotFoundError:
+                    pass
+                if '--only-status' in cmd_saved:
+                    run_line = f"실행 중 · 이번 실행 {since:,}건 조회 (대상: 지정 상태만)"
+                else:
+                    pct2 = round(since / db_total * 100, 1) if db_total else 0
+                    run_line = f"실행 중 · 이번 실행 {since:,}/{db_total:,}건 ({pct2}%)"
+            except Exception:
+                run_line = None
         resumed = False
         if not running and not done:
             try:
@@ -117,9 +138,12 @@ class Command(BaseCommand):
             status_line = '⛔ 중지 감지 → 자동 재개함'
         else:
             status_line = '⛔ 중지됨(재개 실패)'
+        last_checked = max(rows.values()) if rows else None
+        last_txt = (_tz.localtime(last_checked).strftime('%m/%d %H:%M') if last_checked else '-')
         body = (
             f"🛒 [L코드 조회 진행상황]\n"
-            f"{status_line} · {checked:,}/{total:,}건 ({pct}%)\n"
+            f"{run_line or (status_line + f' · {checked:,}/{total:,}건 ({pct}%)')}\n"
+            f"마지막 조회 {last_txt} · 재점검 대기 {pending:,}건\n"
             f"판매중 {counts['in_stock']:,} · 품절 {counts['soldout']:,} · 미확인 {counts['not_found']:,}"
         )
         # watchdog(10분 주기)는 정상 실행 중이거나 이미 완료된 상태(더 할 일 없음)면 조용히 넘어가고,

@@ -940,7 +940,9 @@ class ElevenSummaryView(views.APIView):
                 seller['fulfillment'] = ofs.fulfillment
                 seller['shipping'] = ofs.shipping
                 seller['inquiry'] = ofs.inquiry
-                seller['ai_campaign'] = ofs.ai_campaign
+                # 표시 치환: '1주 무료' 배너만 '1주 무료', 그 외 배너 문구(시작/직접등록/ON설정)는 '사용완료'
+                _ai = (ofs.ai_campaign or '').strip()
+                seller['ai_campaign'] = '' if not _ai else ('1주 무료' if '1주 무료' in _ai else '사용완료')
                 seller['office_collected_at'] = ofs.collected_at.isoformat() if ofs.collected_at else None
 
             # 상품수/판매금지 — 나의상품·셀러오피스 중 더 최근에 실제로 수집된 쪽을 사용
@@ -4517,11 +4519,13 @@ class GmarketDashboardView(views.APIView):
         ).order_by('display_order', 'login_id'))
         # 옥션 뷰: 옥션에 없는 공유ESM 중복 서브아이디만 제외(나머지 계정은 유지).
         # 이 계정들은 옥션 상품이 복제돼 있을 뿐 옥션 거래·매출이 없음. 지마켓 계정 레코드는 보존(삭제 아님).
+        _prod_lid_map = {}   # 옥션 탭에서 치환된 아이디 → 상품이 저장된 원 지마켓 계정(예: rejoice7942 → rejoice666)
         if market == 'auction':
             # 옥션 = 지마켓 계정과 동일하되, 공유ESM 중복 서브아이디 5개만 제외하고
             # 1번(rejoice666) 자리를 rejoice7942로 교체(옥션 매출이 rejoice7942로 기록됨).
             _NO_AUCTION = {'rejoice223', 'rejoice224', 'rejoice235', 'rejoice236', 'starvisi'}
             _REPLACE = {'rejoice666': 'rejoice7942'}
+            _prod_lid_map = {new: old for old, new in _REPLACE.items()}
             _ord = {a.login_id: a.display_order for a in accts}
             accts = [a for a in accts
                      if a.login_id not in _NO_AUCTION and a.login_id not in _REPLACE]
@@ -4814,7 +4818,8 @@ class GmarketDashboardView(views.APIView):
             server = c['server']
             manual = c['manual']   # 광고센터 외부 수동비용(바이럴 등) — 지마켓 탭에만 귀속(옥션 탭은 0, 이중계산 방지)
             spend = cpc + ai + server + manual   # 광고비합계 = 현재 마켓(지마켓/옥션 토글)만 — 마켓별 완전 분리
-            pc = (prod_mkt.get((lid, 'gmarket'), 0) + prod_mkt.get((lid, 'auction'), 0)) if market == 'combined' else prod_mkt.get((lid, market), 0)
+            plid = _prod_lid_map.get(lid, lid)
+            pc = (prod_mkt.get((plid, 'gmarket'), 0) + prod_mkt.get((plid, 'auction'), 0)) if market == 'combined' else prod_mkt.get((plid, market), 0)
             sl = sales.get(lid) or {'revenue': 0, 'profit': 0, 'orders': 0}
             revenue = sl['revenue']; profit = sl['profit']
             buy_cost = revenue - profit   # 구매가 = 매출 - 순수익(11번가 대시보드와 동일한 역산 방식)
@@ -4828,9 +4833,9 @@ class GmarketDashboardView(views.APIView):
                 'newad_ai_spend': nad['ai'], 'newad_cpc_spend': nad['cpc'],
                 'auction_ai_spend': b.get('auction_ai_usage') or 0,  # 옥션 리마케팅(AI) 실시간 스냅샷(참고용)
                 'ad_count': c['cnt'], 'product_count': pc,
-                'gmarket_products': prod_mkt.get((lid, 'gmarket'), 0),
-                'auction_products': prod_mkt.get((lid, 'auction'), 0),
-                'max_item_count': max_items.get(lid),
+                'gmarket_products': prod_mkt.get((plid, 'gmarket'), 0),
+                'auction_products': prod_mkt.get((plid, 'auction'), 0),
+                'max_item_count': max_items.get(plid),
                 'revenue': revenue, 'cost': buy_cost, 'profit': profit, 'net_after_ad': net_after_ad,
                 'orders': sl['orders'],
                 'margin': round(net_after_ad * 100.0 / revenue, 1) if revenue else 0,  # 순수익(광고비 차감 후) 마진

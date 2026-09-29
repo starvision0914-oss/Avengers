@@ -38,6 +38,17 @@ class Command(BaseCommand):
 
         total = abs(qs.aggregate(s=Sum('amount'))['s'] or 0)
         nacc = qs.values('seller_id').distinct().count()
+        if plat == 'gmarket':
+            # 시간별 광고비 알림(notify_gmarket_adcost_hourly)과 같은 출처(광고센터 스냅샷 최신값)로 맞춘다.
+            # 예전엔 거래내역(CPC+AI매출업) 합이라 같은 시각 두 알림 숫자가 달랐음(19:23 실측 183,359 vs 197,659).
+            from django.db.models import Max
+            from apps.cpc.models import GmarketDepositSnapshot as Snap
+            s0 = kst.localize(datetime.datetime.combine(today, datetime.time.min))
+            ids = (Snap.objects.filter(collected_at__gte=s0).values('gmarket_id')
+                   .annotate(i=Max('id')).values_list('i', flat=True))
+            snaps = list(Snap.objects.filter(id__in=list(ids)))
+            total = sum(x.gmarket_cpc + x.auction_cpc + x.ai_usage for x in snaps)
+            nacc = sum(1 for x in snaps if (x.gmarket_cpc + x.auction_cpc + x.ai_usage) > 0)
 
         dur = ''
         if o['started']:
