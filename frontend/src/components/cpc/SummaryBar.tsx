@@ -19,13 +19,14 @@ interface Props {
   periodMode: PeriodMode;
   date: string;
   onPick: (preset: PeriodPreset) => void;
+  onMonthPick?: (date: string) => void;
   onExcelDownload?: () => void;
   onAiManage?: () => void;
   onCpc2Manage?: () => void;
   onSellerGrade?: () => void;
 }
 
-export default function SummaryBar({ totals, delta, lastCollected, tgMode, onTgModeChange, tgStatus, onManualSend, periodMode, date, onPick, onExcelDownload, onAiManage, onCpc2Manage, onSellerGrade }: Props) {
+export default function SummaryBar({ totals, delta, lastCollected, tgMode, onTgModeChange, tgStatus, onManualSend, periodMode, date, onPick, onMonthPick, onExcelDownload, onAiManage, onCpc2Manage, onSellerGrade }: Props) {
   const np = totals.net_profit;
   const isDaily = periodMode === 'daily';
   const [tgOpen, setTgOpen] = useState(false);
@@ -66,7 +67,7 @@ export default function SummaryBar({ totals, delta, lastCollected, tgMode, onTgM
           {onExcelDownload && (
             <button onClick={onExcelDownload} className="px-3 py-1 text-[11px] font-semibold bg-[#217346] text-white rounded hover:bg-[#1a5c38]">Excel</button>
           )}
-          <PeriodSelector mode={periodMode} date={date} onPick={onPick} />
+          <PeriodSelector mode={periodMode} date={date} onPick={onPick} onMonthPick={onMonthPick} />
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 md:px-5 py-2 md:py-2.5 text-[11px] md:text-[12px]">

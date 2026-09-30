@@ -709,6 +709,7 @@ class ElevenSummaryView(views.APIView):
             settle_total=Sum('amount', filter=models.Q(transaction_type='SETTLE')),
             server_fee_total=Sum('amount', filter=models.Q(transaction_type='OTHERS', raw_description__icontains='서버이용료')),
             reward_total=Sum('amount', filter=models.Q(transaction_type='REWARD')),
+            promo_total=Sum('amount', filter=models.Q(transaction_type='REWARD', raw_description__contains='매출 활성화 프로모션')),
             spend_total=Sum('amount', filter=models.Q(amount__lt=0)),
             total_count=Count('id'),
         ):
@@ -853,6 +854,7 @@ class ElevenSummaryView(views.APIView):
         total_cost = 0
         total_server_fee = 0
         total_reward = 0
+        total_promo = 0
         total_net_profit = 0
         last_collected_at = None
 
@@ -866,6 +868,7 @@ class ElevenSummaryView(views.APIView):
             settle = stat.get('settle_total') or 0
             server_fee = abs(stat.get('server_fee_total') or 0)   # 서버이용료(실비용)
             reward = stat.get('reward_total') or 0                # 프로모션 리워드(+)
+            promo = stat.get('promo_total') or 0                  # 광고 매출 활성화 프로모션 지원금(+) — 순수익에 플러스 반영(2026-09-30 사용자 지시)
             spend = abs(stat.get('spend_total') or 0)
             tx_count = stat.get('total_count') or 0
             is_cash = (acct.cost_type == 'sellercash')
@@ -905,19 +908,22 @@ class ElevenSummaryView(views.APIView):
             sales_rev = (srow['rev'] or 0) if srow else 0
             prod_profit = (srow['prof'] or 0) if srow else 0
             buy_cost = sales_rev - prod_profit   # 구매가 = 매출 - 상품순익
-            # 순수익 = 상품순익 - 광고비 - 서버이용료 (프로모션은 순수익 계산 제외, 표시만)
-            net = prod_profit - cpc - server_fee
+            # 순수익 = 상품순익 - 광고비 - 서버이용료 + 광고 매출 활성화 프로모션 지원금
+            # (그 외 리워드는 순수익 계산 제외, 표시만)
+            net = prod_profit - cpc - server_fee + promo
             seller['sales'] = sales_rev
             seller['cost'] = buy_cost
             seller['prod_profit'] = prod_profit
             seller['server_fee'] = server_fee
             seller['reward'] = reward
+            seller['promo'] = promo
             seller['net_profit'] = net
             seller['sales_count'] = (srow['cnt'] or 0) if srow else 0
             total_sales += sales_rev
             total_cost += buy_cost
             total_server_fee += server_fee
             total_reward += reward
+            total_promo += promo
             total_net_profit += net
 
             # 등급
@@ -1030,6 +1036,7 @@ class ElevenSummaryView(views.APIView):
                 'cost': total_cost,
                 'server_fee': total_server_fee,
                 'reward': total_reward,
+                'promo': total_promo,
                 'net_profit': total_net_profit,
             },
             'sellers': sellers,
@@ -1134,7 +1141,9 @@ class OverviewView(views.APIView):
         e_total, e_normal, e_failed = acct_stats('11st')
 
         g_ad = gt.get('ad_spend', 0) or 0                                  # G마켓 단독 = CPC+AI+서버(옥션 별도)
-        e_ad = et.get('cpc_spend', 0) or 0                                 # 11번가 = CPC
+        e_promo = et.get('promo', 0) or 0                                  # 광고 매출 활성화 프로모션 지원금(+, 순수익에 가산)
+        e_fee = et.get('fee_payment', 0) or 0                              # 수수료결제(광고비에 포함, 분리표시)
+        e_ad = et.get('cpc_spend', 0) or 0                                 # 11번가 = CPC(수수료결제 포함, 총광고비)
         g_bal = gt.get('balance', 0) or 0                                  # G마켓 예치금
         e_bal = et.get('point', 0) or 0                                    # 11번가 = 셀러포인트만 (캐시는 내 돈 아님 → 제외)
         # 순익 의미 통일: profit=상품순익(광고 전), net_after_ad=순수익(광고 후)
@@ -1144,7 +1153,7 @@ class OverviewView(views.APIView):
         e_sales = et.get('sales', 0) or 0                                  # 11번가 매출
         e_net = et.get('net_profit', 0) or 0                               # 11번가 순수익(이미 광고+서버 차감)
         # 11번가 상품순익(광고 전) = 순수익 + 광고비 + 서버이용료 → 지마켓과 동일 기준으로 환산
-        e_profit = e_net + (et.get('cpc_spend', 0) or 0) + (et.get('server_fee', 0) or 0)
+        e_profit = e_net + e_ad + (et.get('server_fee', 0) or 0) - e_promo   # 상품순익(광고 전) = 순수익 + 광고비 + 서버비 - 프로모션
 
         markets = [
             {'key': 'gmarket', 'label': 'G마켓', 'color': '#6cc24a',
@@ -1163,6 +1172,7 @@ class OverviewView(views.APIView):
              'last_collected': None},
             {'key': '11st', 'label': '11번가', 'color': '#ff5a2e',
              'ad_cost': e_ad, 'cpc': e_ad, 'ai': 0,
+             'fee_payment': e_fee, 'promo': e_promo,
              'balance': e_bal, 'cash': et.get('cash', 0) or 0, 'point': et.get('point', 0) or 0,
              'accounts': e_total, 'normal': e_normal, 'failed': e_failed,
              'sales': e_sales, 'profit': e_profit, 'net_after_ad': e_net,
@@ -1200,7 +1210,14 @@ class OverviewView(views.APIView):
         ss_settlement = ss.get('total_settlement', 0) or 0
         ss_orders = ss.get('total_orders', 0) or 0
         ss_ad = ss.get('total_ad_cost', 0) or 0
-        ss_net = ss_settlement - ss_ad
+        # 매출/이익은 SalesRecord 기준(쇼핑몰별 손익 카드와 동일). 예전엔 정산액을 이익으로 써서 구매원가가
+        # 빠진 채 순익이 부풀려졌음(2026-09-30 점검: 9월 기준 약 246만원 과대).
+        from apps.sales.models import SalesRecord as _SSR
+        _ssr = _SSR.objects.filter(platform='smartstore', order_date__gte=start_d, order_date__lte=end_d
+                                   ).aggregate(sales=Sum('total_price'), profit=Sum('net_profit'))
+        ss_sales = _ssr['sales'] or 0
+        ss_profit = _ssr['profit'] or 0
+        ss_net = ss_profit - ss_ad
         ss_bal = SSAccount.objects.filter(is_active=True).aggregate(
             b=_Sum('bizmoney_balance'))['b'] or 0                          # 스마트스토어 비즈머니(비즈월렛) 잔액
 
@@ -1209,7 +1226,7 @@ class OverviewView(views.APIView):
             'ad_cost': ss_ad, 'cpc': ss_cpc, 'ai': ss_ai,
             'balance': ss_bal,
             'accounts': ss_accounts, 'normal': ss_accounts, 'failed': 0,
-            'sales': ss_settlement, 'profit': ss_settlement, 'net_after_ad': ss_net,
+            'sales': ss_sales, 'profit': ss_profit, 'net_after_ad': ss_net,
             'orders': ss_orders, 'last_collected': None,
         })
 
@@ -1227,6 +1244,13 @@ class OverviewView(views.APIView):
         lt_sales, lt_profit, lt_orders = _sr_totals('lotteon')
         cp_accounts = _CPAccount.objects.filter(is_active=True).count()
         lt_accounts = _LTAccount.objects.filter(is_active=True).count()
+        # 롯데온·토스몰 광고비 — 예전엔 롯데온을 무조건 0으로 두고 토스몰은 종합에서 아예 빠져 있었음(2026-09-29 점검).
+        from apps.lotteon.models import LotteonAdCost as _LTAd
+        from apps.toss.models import TossAdCost as _TSAd, TossAccount as _TSAccount
+        lt_ad = _LTAd.objects.filter(date__gte=start_d, date__lte=end_d).aggregate(x=Sum('cost'))['x'] or 0
+        ts_ad = _TSAd.objects.filter(date__gte=start_d, date__lte=end_d).aggregate(x=Sum('exec_ad_cost'))['x'] or 0
+        ts_sales, ts_profit, ts_orders = _sr_totals('25.토스몰')
+        ts_accounts = _TSAccount.objects.filter(is_active=True).count()
 
         markets.append({
             'key': 'coupang', 'label': '쿠팡', 'color': '#ef4444',
@@ -1237,10 +1261,17 @@ class OverviewView(views.APIView):
         })
         markets.append({
             'key': 'lotteon', 'label': '롯데온', 'color': '#da291c',
-            'ad_cost': 0, 'cpc': 0, 'ai': 0, 'balance': 0,
+            'ad_cost': lt_ad, 'cpc': lt_ad, 'ai': 0, 'balance': 0,
             'accounts': lt_accounts, 'normal': lt_accounts, 'failed': 0,
-            'sales': lt_sales, 'profit': lt_profit, 'net_after_ad': lt_profit,
+            'sales': lt_sales, 'profit': lt_profit, 'net_after_ad': lt_profit - lt_ad,
             'orders': lt_orders, 'last_collected': None,
+        })
+        markets.append({
+            'key': 'toss', 'label': '토스몰', 'color': '#0064ff',
+            'ad_cost': ts_ad, 'cpc': ts_ad, 'ai': 0, 'balance': 0,
+            'accounts': ts_accounts, 'normal': ts_accounts, 'failed': 0,
+            'sales': ts_sales, 'profit': ts_profit, 'net_after_ad': ts_profit - ts_ad,
+            'orders': ts_orders, 'last_collected': None,
         })
 
         a_ad = gat.get('ad_spend', 0) or 0
@@ -1251,14 +1282,14 @@ class OverviewView(views.APIView):
         totals = {
             # 지마켓이 옥션과 분리되면서(2026-08-27) 그랜드토탈에 옥션분(a_*)을 빠뜨리면
             # '지마켓 단독'으로 줄어든 만큼 전체 합계가 실제보다 작게 나오는 버그가 생겨 여기 추가.
-            'ad_cost': g_ad + a_ad + e_ad + ss_ad,
+            'ad_cost': g_ad + a_ad + e_ad + ss_ad + lt_ad + ts_ad,
             'balance': g_bal + a_bal + e_bal + ss_bal,
-            'accounts': g_total + e_total + ss_accounts + cp_accounts + lt_accounts,
-            'normal': g_normal + e_normal + ss_accounts + cp_accounts + lt_accounts,
+            'accounts': g_total + e_total + ss_accounts + cp_accounts + lt_accounts + ts_accounts,
+            'normal': g_normal + e_normal + ss_accounts + cp_accounts + lt_accounts + ts_accounts,
             'failed': g_failed + e_failed,
-            'sales': g_sales + a_sales + e_sales + ss_settlement + cp_sales + lt_sales,
-            'profit': g_profit + a_profit + e_profit + ss_settlement + cp_profit + lt_profit,
-            'net_after_ad': g_net + a_net + e_net + ss_net + cp_profit + lt_profit,
+            'sales': g_sales + a_sales + e_sales + ss_sales + cp_sales + lt_sales + ts_sales,
+            'profit': g_profit + a_profit + e_profit + ss_profit + cp_profit + lt_profit + ts_profit,
+            'net_after_ad': g_net + a_net + e_net + ss_net + cp_profit + (lt_profit - lt_ad) + (ts_profit - ts_ad),
         }
 
         _resp_data = {
@@ -4435,6 +4466,13 @@ class GmarketCrawlStatusView(views.APIView):
         from apps.cpc import eleven_block_guard as guard
         from django.db.models import Max
         from datetime import timedelta
+        from django.core.cache import cache
+        # 무거운 집계(광고비 이력 전체 GROUP BY, 224만행)는 5분 캐시(재크롤 시작 시 무효화) — 화면이 5초마다 호출해 서버 일꾼을 붙잡던 문제(2026-09-30).
+        # running(진행중 여부)은 파일마커라 가벼워서 매번 실시간으로 읽는다.
+        _cached = cache.get('gm_crawl_status_v1')
+        if _cached is not None:
+            _busy = guard.adreport_busy_info('gmarket')
+            return Response(dict(_cached, running=bool(_busy), running_since=_busy['since'] if _busy else None))
         kst = timezone.get_current_timezone()
         masters = [a.login_id for a in CrawlerAccount.objects.filter(platform='gmarket', is_active=True)
                    if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
@@ -4463,9 +4501,11 @@ class GmarketCrawlStatusView(views.APIView):
                 for l in CrawlerLog.objects.filter(platform='gmarket', level='error', created_at__gte=since)
                 .order_by('-created_at')[:15]]
         busy = guard.adreport_busy_info('gmarket')
-        return Response({'total': len(masters), 'done': len(done),
-                         'failed': failed, 'errors': errs, 'running': bool(busy),
-                         'running_since': busy['since'] if busy else None})
+        _payload = {'total': len(masters), 'done': len(done),
+                    'failed': failed, 'errors': errs, 'running': bool(busy),
+                    'running_since': busy['since'] if busy else None}
+        cache.set('gm_crawl_status_v1', _payload, 300)
+        return Response(_payload)
 
 
 class GmarketRecrawlView(views.APIView):
@@ -4476,6 +4516,8 @@ class GmarketRecrawlView(views.APIView):
         with_keywords = bool(request.data.get('with_keywords', False))
         if not accounts:
             return Response({'error': '재크롤할 계정이 없습니다.'}, status=400)
+        from django.core.cache import cache as _cache
+        _cache.delete('gm_crawl_status_v1')
 
         def run():
             from crawlers.gmarket_ad_report_crawler import run as adrun
@@ -5174,14 +5216,18 @@ class LCodeCheckStartView(views.APIView):
         pid, busy = _crawl_lock_busy(LCODE_LOCKFILE)
         if busy:
             return Response({'status': 'busy', 'message': f'이미 조회 중입니다 (PID={pid}).'}, status=409)
-        script = ('cd /home/rejoice888/Avengers/backend && /usr/bin/python3 -u manage.py check_domemart_lcodes '
-                   '>> /tmp/check_domemart_lcodes.log 2>&1')
+        # only_status='soldout,not_found' 이면 그 상태의 기존 결과만 재조회(품절/미확인 재조사 버튼). 허용값만 통과.
+        only = ','.join(x for x in str(request.data.get('only_status') or '').split(',')
+                        if x.strip() in ('soldout', 'not_found', 'in_stock'))
+        opt = f' --only-status {only}' if only else ''
+        script = ('cd /home/rejoice888/Avengers/backend && /usr/bin/python3 -u manage.py check_domemart_lcodes'
+                   f'{opt} >> /tmp/check_domemart_lcodes.log 2>&1')
         try:
             subprocess.Popen(['bash', '-c', script], start_new_session=True,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception as e:
             return Response({'status': 'error', 'error': str(e)}, status=500)
-        return Response({'status': 'started', 'message': '도매마트 L코드 조회를 시작했습니다. 진행상황은 /tmp/check_domemart_lcodes.log 확인.'})
+        return Response({'status': 'started', 'message': ('도매마트 L코드 ' + ('품절/미확인 재조사를' if only else '조회를') + ' 시작했습니다. 진행상황은 /tmp/check_domemart_lcodes.log 확인.')})
 
 
 class LCodeCheckStopView(views.APIView):
@@ -6850,6 +6896,13 @@ class AllMallProfitView(views.APIView):
         st11_ad = abs(ElevenCostHistory.objects.filter(
             transaction_datetime__gte=_s, transaction_datetime__lt=_e,
             transaction_type='CPC', amount__lt=0).aggregate(s=Sum('amount'))['s'] or 0)
+        # 수수료결제(광고비에 포함) / 광고 매출 활성화 프로모션 지원금(순수익에 플러스) — 각각 분리 계산(2026-09-30 사용자 지시)
+        st11_promo = (ElevenCostHistory.objects.filter(
+            transaction_datetime__gte=_s, transaction_datetime__lt=_e, transaction_type='REWARD',
+            raw_description__contains='매출 활성화 프로모션').aggregate(s=Sum('amount'))['s'] or 0)
+        st11_fee = abs(ElevenCostHistory.objects.filter(
+            transaction_datetime__gte=_s, transaction_datetime__lt=_e, transaction_type='CPC', amount__lt=0,
+            raw_description__icontains='수수료결제').aggregate(s=Sum('amount'))['s'] or 0)
         # 스마트스토어 광고비 (SmartStoreAdCost)
         from apps.smartstore.models import SmartStoreAdCost as _SSAdCost
         _ss_ad = _SSAdCost.objects.filter(date__gte=ms, date__lte=me).aggregate(s=Sum('cost'))['s'] or 0
@@ -6859,8 +6912,13 @@ class AllMallProfitView(views.APIView):
         _manual_ad = abs(_GMC.objects.filter(
             seller_id__in=_visible_gmkt_ids, use_date__gte=ms, use_date__lte=me
         ).aggregate(s=Sum('amount'))['s'] or 0)
+        # 롯데온·토스몰 광고비 — OverviewView와 동일 소스(전에는 빠져 /overview 합계와 광고비가 어긋남)
+        from apps.lotteon.models import LotteonAdCost as _LTAd
+        from apps.toss.models import TossAdCost as _TSAd
+        _lt_ad = _LTAd.objects.filter(date__gte=ms, date__lte=me).aggregate(x=Sum('cost'))['x'] or 0
+        _ts_ad = _TSAd.objects.filter(date__gte=ms, date__lte=me).aggregate(x=Sum('exec_ad_cost'))['x'] or 0
         ad_map = {'gmarket': ad.get('gmarket', 0) + _manual_ad, 'auction': ad.get('auction', 0),
-                  '11st': st11_ad, 'smartstore': _ss_ad}
+                  '11st': st11_ad, 'smartstore': _ss_ad, 'lotteon': _lt_ad, '25.토스몰': _ts_ad}
 
         # 3) 플랫폼 행 구성
         LABELS = {'gmarket': '지마켓', 'auction': '옥션', '11st': '11번가',
@@ -6871,12 +6929,14 @@ class AllMallProfitView(views.APIView):
                'net_profit': 0, 'orders': 0, 'commission': 0}
         for p, b in base.items():
             ad_cost = ad_map.get(p, 0)
-            net = b['gross_profit'] - ad_cost
+            promo = st11_promo if p == '11st' else 0      # 광고 매출 활성화 프로모션 지원금(+)
+            net = b['gross_profit'] - ad_cost + promo
             rev = b['revenue']
             rows.append({
                 'platform': p, 'label': LABELS.get(p, p),
                 'revenue': rev, 'cost': b['cost'], 'commission': b['commission'],
                 'gross_profit': b['gross_profit'], 'ad_cost': ad_cost,
+                'fee_payment': st11_fee if p == '11st' else 0, 'promo': promo,
                 'net_profit': net, 'orders': b['orders'],
                 'net_margin': round(net / rev * 100, 1) if rev else 0,
                 'ad_ratio': round(ad_cost / rev * 100, 1) if rev else 0,
@@ -6965,6 +7025,25 @@ class OverviewDailyView(views.APIView):
                   .values('date').annotate(a=Sum('cost'))):
             ad_by_date[r['date']] = ad_by_date.get(r['date'], 0) + (r['a'] or 0)
 
+        # 롯데온·토스몰 광고비 — /overview 상단 합계와 일치시키기 위해 추가(2026-09-30: 차트 합계가
+        # 7월 7,062원(롯데온)/9월 19,584원(토스몰) 모자랐음).
+        from apps.lotteon.models import LotteonAdCost as _LTAd
+        from apps.toss.models import TossAdCost as _TSAd
+        for r in (_LTAd.objects.filter(date__gte=ms, date__lte=me).values('date').annotate(a=Sum('cost'))):
+            ad_by_date[r['date']] = ad_by_date.get(r['date'], 0) + (r['a'] or 0)
+        for r in (_TSAd.objects.filter(date__gte=ms, date__lte=me).values('date').annotate(a=Sum('exec_ad_cost'))):
+            ad_by_date[r['date']] = ad_by_date.get(r['date'], 0) + (r['a'] or 0)
+
+        # 광고 매출 활성화 프로모션 지원금(+) — 날짜별로 순수익에 가산(2026-09-30 사용자 지시)
+        promo_by_date = {}
+        for dtm, amt in (ElevenCostHistory.objects
+                         .filter(transaction_datetime__gte=_kst.localize(dt_dt.combine(ms, dt_dt.min.time())),
+                                 transaction_datetime__lt=_kst.localize(dt_dt.combine(me, dt_dt.min.time()) + dt_td(days=1)),
+                                 transaction_type='REWARD', raw_description__contains='매출 활성화 프로모션')
+                         .values_list('transaction_datetime', 'amount')):
+            _d = dtm.astimezone(_kst).date()
+            promo_by_date[_d] = promo_by_date.get(_d, 0) + (amt or 0)
+
         # 3) 날짜별 행 구성 (빈 날짜도 0으로 채워 그래프 공백 없게)
         rows = []
         tot = {'revenue': 0, 'gross_profit': 0, 'ad_cost': 0, 'net_profit': 0, 'orders': 0}
@@ -6972,10 +7051,11 @@ class OverviewDailyView(views.APIView):
         while d <= me:
             b = by_date.get(d, {'revenue': 0, 'gross_profit': 0, 'orders': 0})
             ad_cost = ad_by_date.get(d, 0)
-            net = b['gross_profit'] - ad_cost
+            promo = promo_by_date.get(d, 0)
+            net = b['gross_profit'] - ad_cost + promo
             rows.append({
                 'date': str(d), 'revenue': b['revenue'], 'gross_profit': b['gross_profit'],
-                'ad_cost': ad_cost, 'net_profit': net, 'orders': b['orders'],
+                'ad_cost': ad_cost, 'promo': promo, 'net_profit': net, 'orders': b['orders'],
             })
             tot['revenue'] += b['revenue']; tot['gross_profit'] += b['gross_profit']
             tot['ad_cost'] += ad_cost; tot['net_profit'] += net; tot['orders'] += b['orders']

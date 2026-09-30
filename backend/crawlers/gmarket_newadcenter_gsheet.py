@@ -36,4 +36,6 @@ def upload_gmarket_tab(driver, login_id, password, log_fn=None, spreadsheet=None
         return False
 
     ss = spreadsheet or gsheet_upload.open_spreadsheet(AI_KEY)
+    if not gsheet_upload.archive_if_new_month(ss, login_id, since.year, since.month, log=log):
+        return False
     return gsheet_upload.upload_rows(rows, login_id, ss, log=log)

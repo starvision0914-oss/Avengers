@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   RefreshCw, Settings, Package, ChevronLeft,
   ShoppingBag, Lock, BarChart3, Clock, TrendingUp, AlertTriangle, X, ChevronDown, ChevronRight,
-  Sparkles, Download,
+  Sparkles, Download, Monitor,
 } from 'lucide-react';
 import {
   getAccounts, getDashboard, getProductStats, getCleanViolations, getCleanViolationDetail,
@@ -76,6 +76,19 @@ export default function SmartStorePage() {
   const [crawlLogs, setCrawlLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [vncBusy, setVncBusy] = useState(false);
+  const openVncLogin = async () => {
+    setVncBusy(true);
+    try {
+      const r = await api.post('/smartstore/vnc-login/');
+      const host = window.location.hostname;
+      window.alert(`${r.data.message}${r.data.already_running ? ' (이미 실행 중)' : ''}\n\nVNC 프로그램으로 접속하세요\n주소: ${host}:${r.data.vnc_port}\n비밀번호: 없음\n\n로그인/캡차 완료 후 창은 닫지 마세요.`);
+    } catch (e: any) {
+      window.alert(`크롬 창 띄우기 실패: ${e?.response?.data?.message || e?.message || e}`);
+    } finally {
+      setVncBusy(false);
+    }
+  };
   const [cleanViolations, setCleanViolations] = useState<CleanViolationSummary[]>([]);
   const [cleanModal, setCleanModal] = useState<{ accountId: number; accountName: string } | null>(null);
   const [showPredicted, setShowPredicted] = useState(false);
@@ -257,6 +270,11 @@ export default function SmartStorePage() {
               title="상품명·검색태그·상품속성 최적화 AI 프롬프트 보기·복사">
               <Sparkles size={12} /> AI 프롬프트
             </button>
+            <button onClick={openVncLogin} disabled={vncBusy}
+              className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold border border-[#d0d0d0] text-[#555] rounded hover:text-[#03C75A] hover:border-[#03C75A] transition-colors"
+              title="서버에 네이버 로그인용 크롬 창을 띄우고 VNC 접속 주소를 안내합니다 (캡차 수동 로그인용)">
+              <Monitor size={12} /> {vncBusy ? '여는 중...' : 'VNC 로그인창'}
+            </button>
             <button onClick={() => setShowSettings(true)}
               className="flex items-center gap-1 px-2.5 py-1 text-[14px] font-semibold border border-[#d0d0d0] text-[#555] rounded hover:text-[#03C75A] hover:border-[#03C75A] transition-colors">
               <Settings size={12} /> 계정설정
@@ -266,7 +284,7 @@ export default function SmartStorePage() {
               style={{ background: loading ? '#aaa' : SS }}>
               <RefreshCw size={12} className={loading ? 'animate-spin' : ''} /> 새로고침
             </button>
-            <PeriodSelector mode={periodMode} date={date} onPick={pickPeriod} />
+            <PeriodSelector mode={periodMode} date={date} onPick={pickPeriod} onMonthPick={setDate} />
           </span>
         </div>
 

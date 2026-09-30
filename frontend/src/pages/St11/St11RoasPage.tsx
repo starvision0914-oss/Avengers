@@ -461,7 +461,7 @@ export default function St11RoasPage() {
                   onPrev={onPrev} onNext={onNext} onToday={() => setDate(todayStr())}
                   onDateChange={setDate} />}
           <button onClick={load} className="px-3 py-1 text-[11px] font-semibold bg-[#e67700] text-white rounded hover:bg-[#bf5600]">새로고침</button>
-          <PeriodSelector mode={periodMode} date={date} onPick={pickPeriod} />
+          <PeriodSelector mode={periodMode} date={date} onPick={pickPeriod} onMonthPick={setDate} />
         </div>
       </div>
 

@@ -277,7 +277,7 @@ export default function St11Dashboard() {
           <>
             <St11SummaryBar
               totals={summary.totals} delta={delta} lastCollected={lastCollected}
-              periodMode={periodMode} date={date} onPick={pickPeriod} onRefresh={refresh}
+              periodMode={periodMode} date={date} onPick={pickPeriod} onMonthPick={setDate} onRefresh={refresh}
             />
             <PlatformStatusBreakdown platform="11st" />
 
@@ -398,7 +398,7 @@ export default function St11Dashboard() {
           <>
             <St11SummaryBar
               totals={summary.totals} delta={delta} lastCollected={lastCollected}
-              periodMode={periodMode} date={date} onPick={pickPeriod} onRefresh={refresh}
+              periodMode={periodMode} date={date} onPick={pickPeriod} onMonthPick={setDate} onRefresh={refresh}
             />
             <div className="bg-white border border-[#e0e0e0] rounded p-3">
               <div className="flex items-center justify-between text-[11px] mb-1">

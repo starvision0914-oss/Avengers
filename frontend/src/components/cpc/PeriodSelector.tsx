@@ -17,9 +17,12 @@ interface Props {
   mode: PeriodMode;
   date: string;
   onPick: (preset: PeriodPreset) => void;
+  // 당월 모드에서 월을 직접 고르면 호출(YYYY-MM-DD). 당월(진행중)이면 오늘, 지난달이면 그 달 1일.
+  onMonthPick?: (date: string) => void;
 }
 
-export default function PeriodSelector({ mode, date, onPick }: Props) {
+export default function PeriodSelector({ mode, date, onPick, onMonthPick }: Props) {
+  const curYM = todayStr().slice(0, 7);
   const isActive = (key: PeriodPreset) => {
     if (key === 'today') return mode === 'daily' && date === todayStr();
     if (key === 'yesterday') return mode === 'daily' && date === yesterdayStr();
@@ -30,6 +33,7 @@ export default function PeriodSelector({ mode, date, onPick }: Props) {
   };
 
   return (
+    <span className="inline-flex items-center gap-1.5">
     <div className="inline-flex rounded overflow-hidden border border-[#d0d0d0] text-[11px]">
       {BUTTONS.map(o => (
         <button key={o.key} onClick={() => onPick(o.key)}
@@ -40,5 +44,15 @@ export default function PeriodSelector({ mode, date, onPick }: Props) {
         </button>
       ))}
     </div>
+    {mode === 'monthly' && onMonthPick && (
+      <input type="month" value={date.slice(0, 7)} max={curYM}
+        onChange={e => {
+          const ym = e.target.value;
+          if (!ym) return;
+          onMonthPick(ym === curYM ? todayStr() : `${ym}-01`);
+        }}
+        className="border border-[#d0d0d0] rounded px-1.5 py-[2px] text-[11px] text-[#333] bg-white" />
+    )}
+    </span>
   );
 }

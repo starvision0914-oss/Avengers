@@ -1586,6 +1586,45 @@ class CrawlStatusView(APIView):
         return Response(data)
 
 
+class VncLoginWindowView(APIView):
+    """서버 가상화면(:99)에 네이버 로그인용 크롬 창을 띄운다(캡차 등 수동 로그인용).
+    VNC(x11vnc :99 → 5905)로 접속해 사람이 직접 로그인. 이미 떠 있으면 재사용."""
+    permission_classes = [IsAuthenticated]
+    VNC_PORT = 5905
+    DEBUG_PORT = 9333
+    PROFILE = '/home/rejoice888/naver_cart_profile'
+    LOGIN_URL = 'https://nid.naver.com/nidlogin.login'
+
+    def _alive(self):
+        import requests
+        try:
+            return requests.get(f'http://127.0.0.1:{self.DEBUG_PORT}/json/version', timeout=2).ok
+        except Exception:
+            return False
+
+    def post(self, request):
+        import os
+        import subprocess
+        import time
+        already = self._alive()
+        if not already:
+            env = dict(os.environ, DISPLAY=':99')
+            cmd = (f'/usr/bin/google-chrome --no-sandbox --no-first-run --no-default-browser-check '
+                   f'--user-data-dir={self.PROFILE} --remote-debugging-port={self.DEBUG_PORT} '
+                   f'--window-position=0,0 --window-size=1400,900 --lang=ko-KR "{self.LOGIN_URL}"; true')
+            # bash 래퍼가 부모로 살아있어야 크롤러의 고아(PPID=1) chrome 정리에 안 걸림
+            subprocess.Popen(['bash', '-c', cmd], env=env, start_new_session=True,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(15):
+                time.sleep(1)
+                if self._alive():
+                    break
+        ok = self._alive()
+        return Response({'ok': ok, 'already_running': already, 'vnc_port': self.VNC_PORT,
+                         'message': '크롬 창이 떠 있습니다' if ok else '크롬 창을 띄우지 못했습니다'},
+                        status=200 if ok else 500)
+
+
 # ──── 클린위반 ────
 
 _CLEAN_ADVICE = {

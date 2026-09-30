@@ -609,6 +609,20 @@ export default function ElevenMyProductsPage() {
       setLCodeBusy(false);
     }
   };
+  const handleStartLCodeRecheck = async () => {
+    const n = (lCodeStatus?.soldout ?? 0) + (lCodeStatus?.not_found ?? 0);
+    if (!window.confirm(`도매마트에서 품절·미확인으로 저장된 L코드(약 ${fmt(n)}건)만 다시 조회할까요?`)) return;
+    setLCodeBusy(true);
+    try {
+      const r = await startLCodeCheck('soldout,not_found');
+      toast.success(r.message || '시작됨');
+      await loadLCodeStatus();
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || e.message);
+    } finally {
+      setLCodeBusy(false);
+    }
+  };
   const handleStopLCodeCheck = async () => {
     if (!window.confirm('실행 중인 L코드 조회를 중지할까요?')) return;
     setLCodeBusy(true);
@@ -1370,6 +1384,16 @@ export default function ElevenMyProductsPage() {
               ? `⛔ L코드 조회 중지 (${fmt(lCodeStatus.checked)}/${fmt(lCodeStatus.total)})`
               : `L코드 확인 시작${lCodeStatus ? ` (${fmt(lCodeStatus.checked)}/${fmt(lCodeStatus.total)})` : ''}`}
           </button>
+          {lCodeStatus && !lCodeStatus.running && (lCodeStatus.soldout + lCodeStatus.not_found) > 0 && (
+            <button
+              onClick={handleStartLCodeRecheck}
+              disabled={lCodeBusy}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold text-white bg-amber-700 hover:bg-amber-800 disabled:opacity-40"
+              title="도매마트에서 품절·미확인(상품 못 찾음)으로 저장된 L코드만 다시 조회합니다. 판매중 코드는 건드리지 않습니다."
+            >
+              🔁 L코드 품절/미확인 재조사 ({fmt(lCodeStatus.soldout + lCodeStatus.not_found)})
+            </button>
+          )}
           {lCodeStatus && lCodeStatus.checked > 0 && (
             <span className={`text-[11px] ${text3}`}>
               판매중 {fmt(lCodeStatus.in_stock)} · 품절 {fmt(lCodeStatus.soldout)} · 미확인코드 {fmt(lCodeStatus.not_found)}

@@ -106,6 +106,8 @@ export interface MallProfitRow {
   commission: number;
   gross_profit: number;
   ad_cost: number;
+  fee_payment?: number;
+  promo?: number;
   net_profit: number;
   orders: number;
   net_margin: number;

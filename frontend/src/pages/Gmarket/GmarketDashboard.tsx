@@ -101,7 +101,7 @@ export default function GmarketDashboard() {
   }, []);
   useEffect(() => {
     loadCstat();
-    const t = setInterval(loadCstat, 5000);
+    const t = setInterval(loadCstat, 30000);
     return () => clearInterval(t);
   }, [loadCstat]);
   const recrawlFailed = async () => {
@@ -179,7 +179,7 @@ export default function GmarketDashboard() {
           ) : (
             <DateNavigator date={date} onPrev={prevDate} onNext={nextDate} onToday={goToday} onDateChange={setDate} periodMode={mode} />
           )}
-          <PeriodSelector mode={mode} date={date} onPick={pickPeriod} />
+          <PeriodSelector mode={mode} date={date} onPick={pickPeriod} onMonthPick={setDate} />
           <button onClick={() => navigate('/myproduct')} className="px-2.5 py-1 bg-[#9333ea] text-white rounded font-semibold">상품목록</button>
           <button onClick={() => navigate('/gmarket-adgroup')} className="px-2.5 py-1 bg-[#e67700] text-white rounded font-semibold">광고그룹별</button>
           <button onClick={() => navigate('/gmarket-roas')} className="px-2.5 py-1 bg-[#2563eb] text-white rounded font-semibold">지마켓/옥션 상품 ROAS</button>

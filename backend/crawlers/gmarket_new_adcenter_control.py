@@ -587,6 +587,17 @@ def collect_product_keywords(driver, login_id, password, product_nos, since_date
                 counts[product_no] += 1
             except Exception as e:
                 log(f'행 저장 오류({product_no}): {e}')
+        # 같은 달(period_start) 안에서 기간종료일만 다른 이전 스냅샷을 정리 — 유일키에 period_end가
+        # 들어 있어 매일 새 행이 쌓이던 문제(2026-09-30 발견: 255행 중 고유 37건). 이번 실행에서
+        # 실제로 행이 들어온 상품만 정리해서, 조회 실패로 기존 데이터가 지워지는 일은 없게 한다.
+        try:
+            fresh = [p for p in batch if counts.get(p)]
+            if fresh:
+                GmarketNewAdKeyword.objects.filter(
+                    login_id=login_id, product_no__in=fresh, period_start=since_date
+                ).exclude(period_end=until_date).delete()
+        except Exception as e:
+            log(f'이전 스냅샷 정리 오류: {e}')
         time.sleep(1)
 
     matched = sum(1 for v in counts.values() if v > 0)
@@ -855,6 +866,16 @@ def run_control(action, source='manual', log_fn=None, account_filter=None):
         return []
 
     guard.clear_control_stop(LOCK_PLATFORM)
+    # 중지 버튼은 'gmarket' 플래그를 세우고 이 루프도 'gmarket'을 확인하는데, 시작 시 지우는 건
+    # LOCK_PLATFORM('gmarket_newad')뿐이라 다른 곳이 안 지운 묵은 중지 플래그가 남으면 다음 ON/OFF가
+    # 첫 계정에서 바로 멈출 수 있었다. 10분 넘은 묵은 플래그만 정리한다(방금 누른 중지는 유지).
+    try:
+        import time as _t
+        _fp = guard._stop_flag_path('gmarket')
+        if _fp.exists() and _t.time() - _fp.stat().st_mtime > 600:
+            guard.clear_control_stop('gmarket')
+    except Exception:
+        pass
     results, driver = [], None
     try:
         driver = create_driver()

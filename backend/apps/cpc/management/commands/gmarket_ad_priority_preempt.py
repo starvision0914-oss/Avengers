@@ -18,9 +18,18 @@ _NEVER_KILL_SUBSTRINGS = ('runserver', 'telegram_command_bot', 'sms_adb_poller',
                           'gmarket_ad_priority_preempt', 'gmarket_resume_preempted')
 
 
+# 신규광고센터(adcenter.esmplus.com) 제어·수집 — 구광고센터/ESM 락('gmarket')을 쓰지 않는 별도 락
+# 네임스페이스('gmarket_newad', 'gmarket_newad_product')라 선점할 이유가 없다. 이걸 죽이면 정시 OFF가
+# 끊겨 광고가 계속 나간다(2026-09-29 16:00:01 신규광고센터 OFF가 강제종료돼 광고비가 ~16:50까지 나감).
+_NEWAD_SEPARATE_LOCK_CMDS = ('crawl_gmarket_new_adcenter', 'collect_gmarket_newad_product_cost',
+                             'collect_gmarket_newad_keywords')
+
+
 def _is_gmarket_ad_cmd(cmdline):
     joined = ' '.join(cmdline)
     if any(s in joined for s in _NEVER_KILL_SUBSTRINGS):
+        return False
+    if any(s in joined for s in _NEWAD_SEPARATE_LOCK_CMDS):
         return False
     if 'manage.py' not in joined:
         return False

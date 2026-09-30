@@ -44,6 +44,71 @@ def open_spreadsheet(spreadsheet_key=None, creds_path=None):
     return gspread.authorize(creds).open_by_key(_key(spreadsheet_key))
 
 
+_MONTH_MARKER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.gsheet_month_marker.json')
+
+
+def _marker_key(spreadsheet, title):
+    return f'{getattr(spreadsheet, "id", "ss")}:{title}'
+
+
+def _read_marker():
+    import json
+    try:
+        with open(_MONTH_MARKER, encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _write_marker(m):
+    import json
+    tmp = _MONTH_MARKER + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(m, f, ensure_ascii=False, indent=0)
+    os.replace(tmp, _MONTH_MARKER)
+
+
+def archive_if_new_month(spreadsheet, title, year, month, log=print):
+    """월별 시트를 clear 후 덮어쓰는 업로더용 보호장치(2026-09-30).
+    upload_rows()는 워크시트를 clear()하고 새로 쓰므로, 달이 바뀐 첫 업로드에서 지난달 자료가 사라진다.
+    '마지막으로 올린 달'을 마커 파일에 기록해 두었다가, 다른 달 데이터를 올리려 할 때 기존 시트를
+    '{title}_{YYYYMM}' 탭으로 먼저 복제해 보관한다(셀 내용/날짜 형식에 의존하지 않음).
+    반환: True=업로드 진행해도 됨 / False=보관 실패 → 덮어쓰지 말 것.
+    마커가 없는 시트는 이번 달로 간주해 기록만 하고 통과(첫 등록)."""
+    if spreadsheet is None:
+        return True
+    cur = f'{int(year):04d}{int(month):02d}'
+    key = _marker_key(spreadsheet, title)
+    marker = _read_marker()
+    last = marker.get(key)
+    if last is None:
+        marker[key] = cur
+        _write_marker(marker)
+        return True
+    if last == cur:
+        return True
+    try:
+        import gspread
+        arch = f'{title}_{last}'
+        try:
+            spreadsheet.worksheet(arch)
+            log(f'[gsheet] {title}: 보관 탭 {arch} 이미 있음')
+        except gspread.exceptions.WorksheetNotFound:
+            try:
+                ws = spreadsheet.worksheet(title)
+            except gspread.exceptions.WorksheetNotFound:
+                ws = None
+            if ws is not None:
+                ws.duplicate(new_sheet_name=arch)
+                log(f'[gsheet] {title}: 지난달({last}) 시트를 {arch} 탭으로 보관')
+        marker[key] = cur
+        _write_marker(marker)
+        return True
+    except Exception as e:
+        log(f'[gsheet] {title}: 지난달 시트 보관 실패 — 덮어쓰기 중단: {str(e)[:140]}')
+        return False
+
+
 def upload_rows(rows, worksheet_title, spreadsheet, log=print):
     """행 리스트(list of list)를 계정 워크시트(이름=login_id)에 clear 후 A1부터 raw 업로드.
     실패해도 False 반환(예외 안 던짐 → 본수집 비차단)."""

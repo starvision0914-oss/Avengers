@@ -37,8 +37,10 @@ class Command(BaseCommand):
                 protected = protected_login_ids('gmarket') - {'dlwodb777'}
                 if protected:
                     qs = qs.exclude(login_id__in=protected)
-                accts = [a for a in qs.order_by('display_order', 'login_id')
-                         if not (a.gmarket_origin_id and a.gmarket_origin_id != a.login_id)]
+                # 공유ESM 서브(rejoice223/224/235/236/starvisi)도 신규광고센터에서는 별도 로그인·별도
+                # 리포트라 마스터와 따로 수집해야 한다(구광고센터와 다름). 예전에 서브를 제외하는
+                # 필터가 있어 9/18 이후 서브 5개의 상품별 광고비가 끊겼음(2026-09-30 발견·복구).
+                accts = list(qs.order_by('display_order', 'login_id'))
                 # 거래원장/옥션 수집(cron_gmarket_adcost_month.sh)이 앞에서부터(1번→) 도는 것과
                 # 겹치는 시간대가 있어도 같은 계정을 동시에 건드릴 확률을 낮추려고 뒤에서부터
                 # 처리(2026-09-18 사용자 요청).

@@ -256,8 +256,8 @@ export interface LCodeStatusSummary {
 }
 
 /** 도매마트 L코드 판매중/품절 조회 시작(백그라운드, 재개 가능 — 이미 확인된 건 건너뜀). */
-export async function startLCodeCheck(): Promise<{ status: string; message: string }> {
-  const { data } = await api.post('/cpc/my-products/l-codes/start/');
+export async function startLCodeCheck(onlyStatus?: string): Promise<{ status: string; message: string }> {
+  const { data } = await api.post('/cpc/my-products/l-codes/start/', onlyStatus ? { only_status: onlyStatus } : {});
   return data;
 }
 

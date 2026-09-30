@@ -225,6 +225,8 @@ def _upload_auction_tab(login_id, cost_type, ss, year, month, log_fn=None):
     예외를 밖으로 던지지 않음(본수집 비차단)."""
     try:
         data = _build_auction_matrix(login_id, cost_type, year, month)
+        if not gsheet_upload.archive_if_new_month(ss, f'{login_id}_옥션', year, month, log=lambda m: _log(log_fn, m)):
+            return {'ok': False, 'error': '지난달 시트 보관 실패'}
         ok = gsheet_upload.upload_rows(data, f'{login_id}_옥션', ss, log=lambda m: _log(log_fn, m))
         return {'ok': ok, 'rows': len(data) - 2}
     except Exception as e:
@@ -348,6 +350,9 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                         res['ai'] = {'ok': False, 'error': '신규광고센터 데이터없음'}
                         continue
                     if gsheet:
+                        if not gsheet_upload.archive_if_new_month(ss, login_id, _since.year, _since.month, log=lambda m: _log(log_fn, m)):
+                            res['ai'] = {'ok': False, 'error': '지난달 시트 보관 실패'}
+                            continue
                         ok = gsheet_upload.upload_rows(data, login_id, ss, log=lambda m: _log(log_fn, m))
                         res['ai'] = {'ok': ok, 'rows': len(data) - 1}
                     else:
@@ -383,6 +388,9 @@ def run_for_account(login_id, log_fn=None, gsheet=True, year=None, month=None,
                     except Exception as _e:
                         _log(log_fn, f'  [{login_id}/{ad_type}] 신규광고센터 합산 오류 {str(_e)[:80]}')
                 if gsheet:
+                    if not gsheet_upload.archive_if_new_month(ss, login_id, year, month, log=lambda m: _log(log_fn, m)):
+                        res[ad_type] = {'ok': False, 'error': '지난달 시트 보관 실패'}
+                        continue
                     ok = gsheet_upload.upload_rows(data, login_id, ss, log=lambda m: _log(log_fn, m))
                     res[ad_type] = {'ok': ok, 'rows': len(data) - 2}
                     if ad_type == 'cpc':

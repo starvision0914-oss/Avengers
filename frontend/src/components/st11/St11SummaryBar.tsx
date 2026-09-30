@@ -10,10 +10,11 @@ interface Props {
   periodMode: PeriodMode;
   date: string;
   onPick: (preset: PeriodPreset) => void;
+  onMonthPick?: (date: string) => void;
   onRefresh?: () => void;
 }
 
-export default function St11SummaryBar({ totals, delta, lastCollected, periodMode, date, onPick, onRefresh }: Props) {
+export default function St11SummaryBar({ totals, delta, lastCollected, periodMode, date, onPick, onMonthPick, onRefresh }: Props) {
   const isDaily = periodMode === 'daily';
 
   return (
@@ -74,7 +75,7 @@ export default function St11SummaryBar({ totals, delta, lastCollected, periodMod
           {onRefresh && (
             <button onClick={onRefresh} className="px-3 py-1 text-[11px] font-semibold bg-[#e67700] text-white rounded hover:bg-[#bf5600]">새로고침</button>
           )}
-          <PeriodSelector mode={periodMode} date={date} onPick={onPick} />
+          <PeriodSelector mode={periodMode} date={date} onPick={onPick} onMonthPick={onMonthPick} />
         </span>
       </div>
     </div>

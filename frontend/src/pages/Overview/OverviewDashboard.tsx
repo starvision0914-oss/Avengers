@@ -104,6 +104,17 @@ export default function OverviewDashboard() {
   const [period, setPeriod] = useState<PeriodKey>(initialPeriod);
   const [cFrom, setCFrom] = useState(firstDayOfMonthKST());
   const [cTo, setCTo] = useState(todayKST());
+  // 당월 버튼을 누르면 월 선택 가능 — 지난달을 고르면 그 달 1일~말일 범위로 조회(custom과 동일 경로)
+  const curYM = todayKST().slice(0, 7);
+  const [pickedYM, setPickedYM] = useState(curYM);
+  const eff = useMemo(() => {
+    if (period === 'mtd' && pickedYM !== curYM) {
+      const [y, m] = pickedYM.split('-').map(Number);
+      const last = new Date(y, m, 0).getDate();
+      return { p: 'custom' as PeriodKey, f: `${pickedYM}-01`, t: `${pickedYM}-${String(last).padStart(2, '0')}` };
+    }
+    return { p: period, f: cFrom, t: cTo };
+  }, [period, pickedYM, curYM, cFrom, cTo]);
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [profit, setProfit] = useState<MallProfitResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -116,9 +127,9 @@ export default function OverviewDashboard() {
   const [expenseItems, setExpenseItems] = useState<OverviewExpenseItem[]>([]);
   const [expenseModalCat, setExpenseModalCat] = useState<string | null>(null);
   const loadExpenses = useCallback(() => {
-    const { date_from, date_to } = periodToMallProfitParam(period, cFrom, cTo);
+    const { date_from, date_to } = periodToMallProfitParam(eff.p, eff.f, eff.t);
     getOverviewExpense({ date_from, date_to }).then(r => setExpenseItems(r.items)).catch(() => {});
-  }, [period, cFrom, cTo]);
+  }, [eff]);
   useEffect(() => { loadExpenses(); }, [loadExpenses]);
   const EXPENSE_CATEGORIES = [
     { key: '인건비', emoji: '🧑‍💼', color: '#4f46e5', grad: 'linear-gradient(135deg,#818cf8,#4f46e5)' },
@@ -126,12 +137,12 @@ export default function OverviewDashboard() {
   ];
 
   const ovParams = useMemo<OverviewParams>(
-    () => periodToOverviewParam(period, cFrom, cTo),
-    [period, cFrom, cTo]
+    () => periodToOverviewParam(eff.p, eff.f, eff.t),
+    [eff]
   );
   const profitParams = useMemo(
-    () => periodToMallProfitParam(period, cFrom, cTo),
-    [period, cFrom, cTo]
+    () => periodToMallProfitParam(eff.p, eff.f, eff.t),
+    [eff]
   );
 
   const fetchData = useCallback(async (p: OverviewParams, pp: ReturnType<typeof periodToMallProfitParam>) => {
@@ -176,7 +187,7 @@ export default function OverviewDashboard() {
   );
 
   const winColor = (n: number) => (n >= 0 ? '#16a34a' : '#dc2626');
-  const pLabel = data ? periodLabel(period, data.date_from, data.date_to) : '';
+  const pLabel = data ? periodLabel(eff.p, data.date_from, data.date_to) : '';
 
   return (
     <div style={{ padding: '20px 20px 48px', maxWidth: 1240, margin: '0 auto', background: '#f6f7f9', minHeight: '100%' }}>
@@ -195,7 +206,7 @@ export default function OverviewDashboard() {
         {/* 기간 선택 */}
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {PERIODS.map(p => (
-            <button key={p.key} onClick={() => setPeriod(p.key)}
+            <button key={p.key} onClick={() => { setPeriod(p.key); if (p.key === 'mtd') setPickedYM(curYM); }}
               style={{
                 padding: '5px 14px', borderRadius: 999, cursor: 'pointer', fontSize: 13, fontWeight: 700,
                 border: period === p.key ? '1px solid #0ea5e9' : '1px solid #d1d5db',
@@ -205,6 +216,11 @@ export default function OverviewDashboard() {
           ))}
         </div>
 
+        {period === 'mtd' && (
+          <input type="month" value={pickedYM} max={curYM}
+            onChange={e => { if (e.target.value) setPickedYM(e.target.value); }}
+            style={{ padding: '4px 8px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, color: '#374151' }} />
+        )}
         {period === 'custom' && (
           <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
             <input type="date" value={cFrom} max={cTo} onChange={e => setCFrom(e.target.value)}
@@ -271,7 +287,7 @@ export default function OverviewDashboard() {
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 2px 12px', flexWrap: 'wrap' }}>
             <span style={{ fontSize: 16, fontWeight: 800 }}>💰 쇼핑몰별 손익</span>
-            <span style={{ fontSize: 12, color: '#9ca3af' }}>🧾 공통 고정비 {periodLabel(period, profitParams.date_from, profitParams.date_to)} (클릭하면 내역 추가/수정)</span>
+            <span style={{ fontSize: 12, color: '#9ca3af' }}>🧾 공통 고정비 {periodLabel(eff.p, profitParams.date_from, profitParams.date_to)} (클릭하면 내역 추가/수정)</span>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(238px, 1fr))', gap: 14, marginBottom: 26 }}>
@@ -304,6 +320,8 @@ export default function OverviewDashboard() {
                       <Row k="구매가" v={`${formatKRW(r.cost)}원`} vColor="#b45309" />
                       <Row k="매출이익" v={`${formatKRW(r.gross_profit)}원`} vColor="#0891b2" />
                       <Row k="광고비" v={r.has_ad_data ? `${formatKRW(r.ad_cost)}원${r.revenue > 0 ? ` · ${r.ad_ratio}%` : ''}` : '—'} vColor="#d97706" />
+                      {(r.fee_payment || 0) > 0 && <Row k="└ 수수료결제(광고비 포함)" v={`${formatKRW(r.fee_payment || 0)}원`} vColor="#d97706" />}
+                      {(r.promo || 0) > 0 && <Row k="프로모션 지원금(+)" v={`+${formatKRW(r.promo || 0)}원`} vColor="#16a34a" />}
                       <Row k="주문" v={`${formatKRW(r.orders)}건`} vColor="#94a3b8" />
                     </div>
                   </div>
@@ -330,7 +348,7 @@ export default function OverviewDashboard() {
                     <div style={{ fontSize: 25, fontWeight: 900, color: cat.color, letterSpacing: -0.5 }}>
                       +{formatKRW(amount)}<span style={{ fontSize: 14, fontWeight: 700 }}> 원</span>
                     </div>
-                    <div style={{ fontSize: 11.5, color: '#9ca3af', marginBottom: 10 }}>{periodLabel(period, profitParams.date_from, profitParams.date_to)} 합계 · 수기입력</div>
+                    <div style={{ fontSize: 11.5, color: '#9ca3af', marginBottom: 10 }}>{periodLabel(eff.p, profitParams.date_from, profitParams.date_to)} 합계 · 수기입력</div>
                     <div style={{ height: 6, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
                       <div style={{ width: `${barW}%`, height: '100%', background: cat.color }} />
                     </div>
@@ -413,7 +431,7 @@ export default function OverviewDashboard() {
           </div>
 
           <p style={{ fontSize: 11.5, color: '#9ca3af', marginTop: 16, lineHeight: 1.6 }}>
-            순수익 = 매출이익(매출−원가) − 광고비. 광고비 출처: 지마켓·옥션=거래내역, 11번가=상품ROAS(adoffice). 스마트스토어·쿠팡 등은 광고비 데이터 없음(—).
+            순수익 = 매출이익(매출−원가) − 광고비 + 프로모션 지원금(11번가 광고 매출 활성화 프로모션). 광고비 출처: 지마켓·옥션·11번가=거래내역(11번가는 수수료결제 포함). 스마트스토어·쿠팡 등은 광고비 데이터 없음(—).
           </p>
         </>
       )}

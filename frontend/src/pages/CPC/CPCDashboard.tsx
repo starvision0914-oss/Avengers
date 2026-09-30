@@ -130,7 +130,7 @@ export default function CPCDashboard() {
             <SummaryBar
               totals={summary.totals} delta={delta} lastCollected={lastCollected}
               tgMode={tgMode} onTgModeChange={setTgMode} tgStatus={tgStatus} onManualSend={manualSend}
-              periodMode={periodMode} date={date} onPick={pickPeriod}
+              periodMode={periodMode} date={date} onPick={pickPeriod} onMonthPick={setDate}
               onAiManage={() => setShowAiManage(true)}
               onSellerGrade={() => setShowSellerGrade(true)}
             />
@@ -171,7 +171,7 @@ export default function CPCDashboard() {
             <SummaryBar
               totals={summary.totals} delta={delta} lastCollected={lastCollected}
               tgMode={tgMode} onTgModeChange={setTgMode} tgStatus={tgStatus} onManualSend={manualSend}
-              periodMode={periodMode} date={date} onPick={pickPeriod}
+              periodMode={periodMode} date={date} onPick={pickPeriod} onMonthPick={setDate}
               onAiManage={() => setShowAiManage(true)}
               onSellerGrade={() => setShowSellerGrade(true)}
             />

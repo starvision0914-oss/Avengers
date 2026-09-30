@@ -15,3 +15,5 @@ metadata:
 
 **Why**: 사용자가 새 플랫폼(롯데온 등) 추가 시 이런 대시보드/집계 뷰들을 놓치기 쉬움.
 **How to apply**: 새 플랫폼을 SalesRecord/TaxVatMonthly에 연결할 때, `OverviewView`·`AllMallProfitView`·`MallProfitProductsView`처럼 플랫폼 목록을 하드코딩한 곳이 여러 군데 있으니 grep으로 전부 찾아 함께 갱신할 것.
+
+**2026-09-30 해소**: 위 "남은 차이(스마트스토어 정산 vs 매출)"는 해결됨. OverviewView 스마트스토어가 정산액을 profit으로 써서 구매원가가 빠져 순익이 ~246만원 과대였음 → SalesRecord(total_price/net_profit) 기준으로 변경. AllMallProfitView ad_map에 롯데온·토스몰('25.토스몰') 광고비 추가. 9월 기준 두 API 합계 전부 일치 확인(백업: 스크래치패드 views.py.bak). 스마트스토어 페이지 자체는 여전히 정산 기준일 수 있음.

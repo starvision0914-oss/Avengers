@@ -107,7 +107,7 @@ export default function CoupangDashboard() {
           ) : (
             <DateNavigator date={date} onPrev={prevDate} onNext={nextDate} onToday={goToday} onDateChange={setDate} periodMode={mode} />
           )}
-          <PeriodSelector mode={mode} date={date} onPick={pickPeriod} />
+          <PeriodSelector mode={mode} date={date} onPick={pickPeriod} onMonthPick={setDate} />
         </div>
       </div>
 
