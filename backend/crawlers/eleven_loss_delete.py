@@ -453,6 +453,16 @@ def run_delete(targets, mode='validate', eid_filter=None, log_fn=None):
         _log(log_fn, f'⏭️ 적자삭제 건너뜀 — {reason}')
         return {'ok': False, 'skipped': reason}
 
+    # 11번가 로그인은 계정마다 OTP가 필요 → 폰 문자앱이 죽어있으면 첫 계정에서 180초 낭비 후 전부 실패.
+    # 시작 전에 앱 하트비트를 확인해 죽어있으면 로그인 시도 없이 즉시 중단(2026-10-01 시험삭제 실패 교훈).
+    alive, age = guard.sms_app_status()
+    if not alive:
+        guard.release_global_lock()
+        reason = (f'폰 문자앱 하트비트 끊김(마지막 신호 {age // 60}분 전)' if age is not None
+                  else '폰 문자앱 하트비트 기록 없음') + ' — OTP 수신 불가'
+        _log(log_fn, f'⏭️ 적자삭제 중단 — {reason}')
+        return {'ok': False, 'skipped': reason}
+
     # 계정별 그룹화 (계정 정렬 + 계정 내 상품번호 정렬)
     grouped = {}
     for t in targets:

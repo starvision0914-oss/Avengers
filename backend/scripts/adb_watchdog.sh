@@ -5,6 +5,42 @@ LOG=/tmp/adb_watchdog.log
 LAST_IP_FILE=/tmp/adb_last_wifi_ip
 export ANDROID_SERIAL=""
 
+# ── 문자앱(smsApp) 하트비트 감시 — OTP 주경로(USB 무관). adb 상태와 별개로 매번 확인 ──
+# 끊기면 1시간에 1번 경보, 복구되면 1회 복구 알림 (2026-10-01: 앱이 1시간+ 죽었는데 무경보였던 문제)
+cd /home/rejoice888/Avengers/backend
+HB_AGE=$(/usr/bin/python3 -c "
+import os,django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings'); django.setup()
+from apps.cpc.models import SmsDeviceHeartbeat as H
+from django.utils import timezone
+h=H.objects.order_by('-last_seen_at').first()
+print(int((timezone.now()-h.last_seen_at).total_seconds()) if h else 999999)
+" 2>/dev/null)
+HB_AGE=${HB_AGE:-0}
+NOW_TS=$(date +%s)
+if [ "$HB_AGE" -gt 600 ]; then
+    LASTA=$(cat /tmp/smsapp_stale_alert 2>/dev/null || echo 0)
+    if [ $((NOW_TS - LASTA)) -gt 3600 ]; then
+        echo "$NOW_TS" > /tmp/smsapp_stale_alert
+        /usr/bin/python3 -c "
+import os,django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings'); django.setup()
+from apps.cpc import eleven_block_guard as g
+g._send_telegram_alert('🚨 [문자앱 끊김] 폰 smsApp 마지막 신호 ${HB_AGE}초($((HB_AGE/60))분) 전 — 11번가 로그인 OTP 수신 불가. 폰 전원·WiFi·앱 실행(절전/배터리 최적화 제외)을 확인하세요. (1시간마다 재알림)')
+" >/dev/null 2>&1
+        echo "$(date '+%F %T') 문자앱 하트비트 끊김 ${HB_AGE}s → 경보" >> $LOG
+    fi
+elif [ -f /tmp/smsapp_stale_alert ]; then
+    rm -f /tmp/smsapp_stale_alert
+    /usr/bin/python3 -c "
+import os,django
+os.environ.setdefault('DJANGO_SETTINGS_MODULE','config.settings'); django.setup()
+from apps.cpc import eleven_block_guard as g
+g._send_telegram_alert('✅ [문자앱 복구] 폰 smsApp 신호가 다시 들어옵니다 — OTP 수신 가능.')
+" >/dev/null 2>&1
+    echo "$(date '+%F %T') 문자앱 하트비트 복구 → 복구알림" >> $LOG
+fi
+
 dev=$(adb devices 2>/dev/null | grep -wE 'device' | grep -v 'List')
 if [ -n "$dev" ]; then
     # 연결 정상 — reverse 터널 보장 + 와이파이 IP:port면 재연결용으로 기억해둠

@@ -138,6 +138,24 @@ def _send_telegram_alert(message):
         logger.warning(f'텔레그램 알림 발송 실패: {e}')
 
 
+def sms_app_status(max_age=600):
+    """폰 문자앱(smsApp) 하트비트 신선도 → (alive, age_sec). OTP는 이 앱 푸시가 주경로(USB 무관)라
+    하트비트가 끊기면 11번가 로그인 OTP를 받을 수 없다."""
+    try:
+        import django
+        django.setup()
+        from django.utils import timezone
+        from apps.cpc.models import SmsDeviceHeartbeat
+        h = SmsDeviceHeartbeat.objects.order_by('-last_seen_at').first()
+        if not h:
+            return False, None
+        age = int((timezone.now() - h.last_seen_at).total_seconds())
+        return age < max_age, age
+    except Exception as e:
+        logger.warning(f'문자앱 하트비트 조회 실패: {e}')
+        return True, None   # 조회 자체 실패는 작업을 막지 않음(오탐 차단 방지)
+
+
 def set_blocked(minutes=DEFAULT_BLOCK_MINUTES, reason='', platform='11st'):
     """차단 상태 기록. 이미 더 긴 차단이 있으면 그것을 유지."""
     now = _now()
