@@ -4700,17 +4700,20 @@ class GmarketDashboardView(views.APIView):
                 snap_cpc = last.gmarket_cpc
                 snap_auct_combined = last.auction_cpc   # CPC+AI 합산(옥션)
                 snap_ai = last.ai_usage                 # 지마켓 AI만
+                # 지마켓 CPC+AI는 '합계'로 비교한다(2026-10-01): 거래원장은 신규광고센터 광고비 전체를
+                # 'AI매출업'으로 기록하고 스냅샷은 그중 CPC분을 'CPC'로 불러, 종류별로 따로 비교하면
+                # 같은 돈이 CPC·AI에 한 번씩 이중 계산됨(오늘 광고비 약 2배 표시 사고).
+                snap_gm_total = snap_cpc + snap_ai
                 for sub_lid in subs_by_master.get(lid, []):
                     stl = today_ledger.get(sub_lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0}
-                    snap_cpc = max(0, snap_cpc - stl['gmkt_cpc'])
+                    snap_gm_total = max(0, snap_gm_total - stl['gmkt_cpc'] - stl['ai'])
                     snap_auct_combined = max(0, snap_auct_combined - stl['auct_cpc'] - stl['auct_ai'])
-                    snap_ai = max(0, snap_ai - stl['ai'])
                 tl = today_ledger.get(lid) or {'gmkt_cpc': 0, 'auct_cpc': 0, 'ai': 0, 'auct_ai': 0}
                 c = cost[lid]
-                if snap_cpc > tl['gmkt_cpc']:
-                    c['gmkt_cpc'] += snap_cpc - tl['gmkt_cpc']
-                if snap_ai > tl['ai']:
-                    c['ai'] += snap_ai - tl['ai']
+                tl_gm_total = tl['gmkt_cpc'] + tl['ai']
+                if snap_gm_total > tl_gm_total:
+                    # 부족분(거래원장 미반영 당일 사용분)은 CPC에 더해 총액만 맞춘다 — CPC/AI 구분은 소스간 불일치
+                    c['gmkt_cpc'] += snap_gm_total - tl_gm_total
                 tl_auct_combined = tl['auct_cpc'] + tl['auct_ai']
                 if snap_auct_combined > tl_auct_combined:
                     # 옥션쪽은 CPC/AI 분리 불가 — 부족분을 auct_cpc에 몰아서라도 총액은 정확히 맞춘다
